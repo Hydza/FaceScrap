@@ -1,0 +1,12 @@
+{
+  "extensionName": {
+    "message": "FaceScrap",
+    "description": "Extension name"
+  },
+  "extensionDescription": {
+    "message": "Save the Facebook reels, stories and highlights you can watch, with one click."
+  },
+  "extensionActionTitle": {
+    "message": "Open FaceScrap"
+  }
+}

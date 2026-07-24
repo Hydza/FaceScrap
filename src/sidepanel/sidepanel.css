@@ -1,0 +1,1237 @@
+/* Bundled variable Manrope (400-800) — the panel's display face. It ships with
+   the extension because MV3's CSP forbids loading remote fonts, and the build
+   already copies src/sidepanel/fonts into dist. */
+@font-face {
+  font-family: "Manrope";
+  font-style: normal;
+  font-weight: 400 800;
+  font-display: swap;
+  src: url("fonts/manrope-latin.woff2") format("woff2");
+}
+
+:root {
+  color-scheme: dark;
+  --canvas: #0d0e11;
+  --surface: #15171b;
+  --line: #262a31;
+  --text: #f3f4f6;
+  --muted: #9ca3ac;
+  --accent: #1f6bff;
+  --accent-soft: #5b9bff;
+  --accent-grad: linear-gradient(180deg, #3a8bff, #2069f0);
+  --accent-wash: rgba(47, 125, 255, 0.14);
+  --live: #35d07f;
+  --live-text: #5fe0a0;
+  --live-wash: rgba(53, 208, 127, 0.12);
+  --live-line: rgba(53, 208, 127, 0.22);
+  --scroll-thumb: rgba(255, 255, 255, 0.14);
+  --scroll-thumb-hover: rgba(255, 255, 255, 0.24);
+  --danger: #f0868f;
+  --on-accent: #ffffff;
+  --mono: #5b9bff;
+  --faint: #6c727a;
+  --danger-wash: rgba(225, 85, 99, 0.14);
+  --danger-wash-strong: rgba(225, 85, 99, 0.24);
+  --danger-line: rgba(225, 85, 99, 0.4);
+  --control-line: rgba(255, 255, 255, 0.12);
+  --control-surface: #1e2127;
+  --input-deep: #0f1114;
+  --field: #1b1e23;
+  --track-off: #3a3f46;
+  --knob: #ffffff;
+  --select-hover: rgba(47, 125, 255, 0.16);
+  --select-chevron: url("icons/chevron.svg");
+  --picker-shadow: 0 16px 40px rgba(0, 0, 0, 0.5);
+  --media-overlay: rgba(10, 11, 12, 0.96);
+  --media-overlay-soft: rgba(10, 11, 12, 0.94);
+  --media-control: rgba(0, 0, 0, 0.55);
+  --media-control-soft: rgba(0, 0, 0, 0.3);
+  --media-surface: #15171b;
+  --media-text: #ffffff;
+  --media-muted: #c3c8ce;
+  --media-line: rgba(255, 255, 255, 0.25);
+  --media-accent: #1f6bff;
+  --media-on-accent: #ffffff;
+  --media-select-hover: rgba(47, 125, 255, 0.16);
+  --media-danger: #f0868f;
+  --play-surface: rgba(15, 17, 20, 0.55);
+  --play-line: rgba(255, 255, 255, 0.35);
+  --play-shadow: 0 8px 22px rgba(0, 0, 0, 0.35);
+  --r-lg: 16px;
+  --r-md: 14px;
+  --r-sm: 12px;
+  --r-pill: 999px;
+  --font: Manrope, "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, sans-serif;
+  --font-mono: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+  --media-wash: linear-gradient(160deg, #2a2f37, #14171c 60%);
+}
+
+:root[data-theme="light"] {
+  color-scheme: light;
+  --canvas: #eef0f3;
+  --surface: #ffffff;
+  --line: #e3e6ea;
+  --text: #16181c;
+  --muted: #59636e;
+  --accent: #1f6bff;
+  --accent-soft: #1f6bff;
+  --accent-grad: linear-gradient(180deg, #3a8bff, #2069f0);
+  --accent-wash: rgba(47, 125, 255, 0.12);
+  --live: #177a49;
+  --live-text: #177a49;
+  --live-wash: rgba(23, 122, 73, 0.1);
+  --live-line: rgba(23, 122, 73, 0.22);
+  --scroll-thumb: rgba(0, 0, 0, 0.14);
+  --scroll-thumb-hover: rgba(0, 0, 0, 0.24);
+  --danger: #cf3f4c;
+  --on-accent: #ffffff;
+  --mono: #1f6bff;
+  --faint: #59636e;
+  --danger-wash: rgba(207, 63, 76, 0.12);
+  --danger-wash-strong: rgba(207, 63, 76, 0.2);
+  --danger-line: rgba(207, 63, 76, 0.4);
+  --control-line: #8a8d91;
+  --control-surface: #eef1f4;
+  --input-deep: #f2f4f7;
+  --field: #ffffff;
+  --track-off: #c9ced4;
+  --knob: #ffffff;
+  --select-hover: rgba(47, 125, 255, 0.14);
+  --select-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%2359636e' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m7 9.5 5 5 5-5'/%3E%3C/svg%3E");
+  --picker-shadow: 0 12px 28px rgba(20, 28, 38, 0.18);
+}
+
+/* Before settings load, match the device so Auto/Light never flashes the dark
+   default. Once JS writes data-theme, the explicit preference wins this fallback. */
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme]) {
+    color-scheme: light;
+    --canvas: #eef0f3;
+    --surface: #ffffff;
+    --line: #e3e6ea;
+    --text: #16181c;
+    --muted: #59636e;
+    --accent: #1f6bff;
+    --accent-soft: #1f6bff;
+    --accent-grad: linear-gradient(180deg, #3a8bff, #2069f0);
+    --accent-wash: rgba(47, 125, 255, 0.12);
+    --live: #177a49;
+    --live-text: #177a49;
+    --live-wash: rgba(23, 122, 73, 0.1);
+    --live-line: rgba(23, 122, 73, 0.22);
+    --scroll-thumb: rgba(0, 0, 0, 0.14);
+    --scroll-thumb-hover: rgba(0, 0, 0, 0.24);
+    --danger: #cf3f4c;
+    --on-accent: #ffffff;
+    --mono: #1f6bff;
+    --faint: #59636e;
+    --danger-wash: rgba(207, 63, 76, 0.12);
+    --danger-wash-strong: rgba(207, 63, 76, 0.2);
+    --danger-line: rgba(207, 63, 76, 0.4);
+    --control-line: #8a8d91;
+    --control-surface: #eef1f4;
+    --input-deep: #f2f4f7;
+    --field: #ffffff;
+    --track-off: #c9ced4;
+    --knob: #ffffff;
+    --select-hover: rgba(47, 125, 255, 0.14);
+    --select-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%2359636e' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m7 9.5 5 5 5-5'/%3E%3C/svg%3E");
+    --picker-shadow: 0 12px 28px rgba(20, 28, 38, 0.18);
+  }
+}
+
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+
+/* Storage-backed language and theme preferences are asynchronous. Keep the
+   whole document transparent and out of paint until both preferences have
+   been applied; otherwise the body canvas can briefly show the device theme
+   before a saved manual Light/Dark preference wins. Layout still exists, so
+   startup measurements remain deterministic. */
+:root[data-boot="pending"],
+:root[data-boot="pending"] body { background: transparent; }
+:root[data-boot="pending"] body { visibility: hidden; }
+:root[data-boot="error"] #app > :not(#fatal) { display: none !important; }
+
+html { color-scheme: light dark; }
+
+html,
+body {
+  width: 100%;
+  min-width: 300px;
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+}
+
+body {
+  color: var(--text);
+  background: var(--canvas);
+  font-family: var(--font);
+  -webkit-font-smoothing: antialiased;
+}
+
+button,
+input,
+select { font: inherit; }
+
+button,
+select,
+summary,
+label { -webkit-tap-highlight-color: transparent; }
+
+.app {
+  width: 100%;
+  height: 100vh;
+  height: 100dvh;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--canvas);
+}
+
+.brand {
+  flex: none;
+  min-height: 56px;
+  padding: 12px 16px 8px;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+
+.brand-logo {
+  flex: none;
+  width: 32px;
+  height: 32px;
+  display: block;
+  line-height: 0;
+}
+
+.brand-logo svg { width: 32px; height: 32px; display: block; }
+.brand-text { min-width: 0; flex: 1; }
+.brand-text h1 { margin: 0; font-size: 15px; line-height: 19px; font-weight: 700; }
+.brand-tagline { display: none; }
+
+.brand-live {
+  flex: none;
+  min-height: 22px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  color: var(--text);
+  background: var(--surface);
+  border-radius: var(--r-pill);
+  font-size: 10px;
+  line-height: 14px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.live-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--live);
+  animation: live-pulse 1.8s ease-out infinite;
+}
+
+@keyframes live-pulse {
+  60% { box-shadow: 0 0 0 4px rgba(49, 162, 76, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(49, 162, 76, 0); }
+}
+
+.banner {
+  flex: none;
+  margin: 0 12px 8px;
+  padding: 8px 10px;
+  color: var(--text);
+  background: var(--danger-wash);
+  border: 1px solid var(--danger-line);
+  border-radius: var(--r-sm);
+  font-size: 11px;
+  line-height: 15px;
+}
+
+.banner-error { background: var(--danger-wash-strong); font-weight: 600; }
+
+.view {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.empty {
+  flex: 1;
+  min-height: 0;
+  margin: 0 12px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 24px;
+  text-align: center;
+  border-radius: var(--r-lg);
+  background: var(--surface);
+}
+
+.empty-mark {
+  width: 42px;
+  height: 42px;
+  margin-bottom: 5px;
+  background: var(--muted);
+  -webkit-mask: url("icons/nav-now.svg") center / 30px 30px no-repeat;
+  mask: url("icons/nav-now.svg") center / 30px 30px no-repeat;
+  opacity: 0.7;
+}
+
+.empty h2 { margin: 0; font-size: 17px; line-height: 22px; font-weight: 700; }
+.empty p { max-width: 260px; margin: 0; color: var(--muted); font-size: 12px; line-height: 17px; }
+
+.now {
+  flex: 1;
+  min-height: 0;
+  padding: 0 12px;
+  display: flex;
+}
+
+.preview {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  border-radius: var(--r-lg);
+  background: var(--media-wash);
+  isolation: isolate;
+}
+
+.preview > img:not(.thumb-bg),
+.card-thumb > img:not(.thumb-bg) {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+  z-index: 1;
+  object-fit: contain;
+  object-position: center;
+}
+
+.preview > img.media-fit-cover:not(.thumb-bg),
+.card-thumb > img.media-fit-cover:not(.thumb-bg) { object-fit: cover; }
+
+.preview > img.thumb-bg,
+.card-thumb > img.thumb-bg {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+  z-index: 0;
+  object-fit: cover;
+  object-position: center;
+  transform: scale(1.08);
+  filter: blur(14px) saturate(0.85) brightness(0.62);
+  opacity: 0.82;
+}
+
+.preview-chips {
+  position: absolute;
+  z-index: 4;
+  top: 12px;
+  left: 12px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* STORY / duration chips are rounded rectangles (7px), not pills, in the design. */
+.media-badge,
+.preview-dur {
+  min-height: 22px;
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 10px;
+  border-radius: 7px;
+  font-size: 11px;
+  line-height: 14px;
+  white-space: nowrap;
+}
+
+.media-badge {
+  color: var(--media-on-accent);
+  background: var(--media-accent);
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.preview-dur {
+  color: var(--media-text);
+  background: var(--media-control);
+  font-family: var(--font-mono);
+  font-weight: 700;
+}
+.preview-dur:empty { display: none; }
+
+.preview-play {
+  position: absolute;
+  z-index: 3;
+  top: var(--play-y, 50%);
+  left: 50%;
+  width: 60px;
+  height: 60px;
+  transform: translate(-50%, -50%);
+  display: none;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--play-line);
+  border-radius: 50%;
+  background: var(--play-surface);
+  box-shadow: var(--play-shadow);
+  -webkit-backdrop-filter: blur(10px) saturate(0.8);
+  backdrop-filter: blur(10px) saturate(0.8);
+}
+
+.preview.is-video .preview-play { display: flex; }
+.preview.play-obstructed .preview-play { visibility: hidden; }
+.preview-play::before {
+  content: "";
+  width: 22px;
+  height: 22px;
+  margin-left: 3px;
+  background: var(--media-text);
+  -webkit-mask: url("icons/play.svg") center / contain no-repeat;
+  mask: url("icons/play.svg") center / contain no-repeat;
+}
+
+/* Stacked below the media, on the panel canvas — so it reads with the panel
+   tokens, not the dark media ones. The chips and play control stay ON the
+   media and keep --media-* (see .preview-chips / .preview-dur / .preview-play). */
+.now-overlay {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  color: var(--text);
+}
+
+.now-identity { display: flex; flex-direction: column; gap: 2px; }
+.now-title { margin: 0; font-size: 17px; line-height: 22px; font-weight: 800; letter-spacing: -0.01em; }
+.now-sub { margin: 0; color: var(--muted); font-size: 12.5px; line-height: 16px; }
+
+.metrics { display: flex; align-items: center; gap: 14px; }
+.metric { min-width: 0; display: flex; align-items: baseline; gap: 4px; }
+.metric-label { color: var(--faint); font-size: 10.5px; line-height: 15px; white-space: nowrap; }
+.metric-value { overflow: hidden; font-size: 11.5px; line-height: 15px; font-weight: 700; text-overflow: ellipsis; white-space: nowrap; }
+
+/* Full-width resolution field, matching the download button below it, with the
+   "RESOLUTION" label on its own row above (not overlaying the value). */
+.quality {
+  display: flex;
+  width: 100%;
+  flex-direction: column;
+  gap: 7px;
+}
+.quality.is-single-option { width: 100%; }
+.quality-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 0 2px;
+}
+.quality-label {
+  color: var(--faint);
+  font-size: 10px;
+  line-height: 13px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+.quality-count {
+  color: var(--faint);
+  font-size: 11px;
+  line-height: 13px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.select-wrap { min-width: 0; }
+
+.select,
+.set-input {
+  min-width: 0;
+  height: 34px;
+  color: var(--text);
+  background-color: var(--canvas);
+  border: 1px solid var(--control-line);
+  border-radius: 8px;
+}
+
+.select {
+  padding: 0 30px 0 10px;
+  appearance: none;
+  background-image: var(--select-chevron);
+  background-repeat: no-repeat;
+  background-position: right 9px center;
+  background-size: 12px;
+  font-size: 11px;
+  line-height: 1;
+  font-weight: 600;
+}
+
+/* Chromium on Windows may paint the native popup with the OS light surface
+   even though the closed control uses our dark color scheme. Give every option
+   an explicit matching surface so its inherited light text remains readable.
+   This is also the fallback for Chromium versions before customizable selects. */
+.select option {
+  color: var(--text);
+  background-color: var(--surface);
+}
+
+/* Chrome/Edge 134+ exposes the native picker as a styleable popover. Keeping
+   the real select preserves its keyboard and screen-reader behavior while the
+   popup can finally share the same rounded geometry as the closed control. */
+@supports (appearance: base-select) {
+  .select,
+  .select::picker(select) {
+    appearance: base-select;
+  }
+
+  .select {
+    display: flex;
+    align-items: center;
+  }
+
+  /* The popup is a floating surface, so it stays a step rounder than its 9px
+     trigger. Keep this at --r-md or above: the visual QA fails the picker below
+     a 14px radius, and --r-sm is 12px. */
+  .select::picker(select) {
+    margin-top: 4px;
+    padding: 4px;
+    color: var(--text);
+    background: var(--surface);
+    border: 1px solid var(--accent);
+    border-radius: var(--r-md);
+    box-shadow: var(--picker-shadow);
+    overflow: hidden;
+  }
+
+  .select::picker-icon,
+  .select option::checkmark { display: none; }
+
+  .select option {
+    min-height: 34px;
+    padding: 9px 11px;
+    border-radius: 10px;
+  }
+
+  .select option:hover,
+  .select option:focus-visible { background: var(--select-hover); }
+
+  .select option:checked {
+    color: var(--on-accent);
+    background: var(--accent);
+    font-weight: 700;
+  }
+}
+
+/* Now Playing's resolution control is a taller, monospace field (design uses a
+   14px mono value inside a 12px-radius #1b1e23 button). */
+#now-qselect {
+  width: 100%;
+  height: 46px;
+  padding-right: 48px;
+  padding-left: 14px;
+  color: var(--text);
+  background-color: var(--field);
+  background-image: var(--select-chevron);
+  background-position: right 14px center;
+  border-color: var(--control-line);
+  border-radius: var(--r-sm);
+  font-family: var(--font-mono);
+  font-size: 14px;
+  font-weight: 600;
+}
+#now-qselect.is-single-option {
+  padding-right: 14px;
+  background-image: none;
+}
+#now-qselect:disabled {
+  color: var(--media-text);
+  opacity: 1;
+  cursor: default;
+  -webkit-text-fill-color: var(--media-text);
+}
+#now-qselect option {
+  color: var(--media-text);
+  background-color: var(--media-surface);
+}
+
+@supports (appearance: base-select) {
+  #now-qselect::picker(select) {
+    color: var(--media-text);
+    background: var(--media-surface);
+    border-color: var(--media-accent);
+  }
+  #now-qselect option:hover,
+  #now-qselect option:focus-visible { background: var(--media-select-hover); }
+  #now-qselect option:checked {
+    color: var(--media-on-accent);
+    background: var(--media-accent);
+  }
+}
+
+.now-overlay .btn-primary {
+  color: var(--media-on-accent);
+  background: var(--media-accent);
+}
+
+.btn-primary {
+  min-width: 0;
+  height: 48px;
+  padding: 0 14px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 9px;
+  color: var(--on-accent);
+  background: var(--accent);
+  border: 0;
+  border-radius: var(--r-sm);
+  font-size: 15px;
+  line-height: 1;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.btn-primary::before {
+  content: "";
+  flex: none;
+  width: 18px;
+  height: 18px;
+  background: currentColor;
+  -webkit-mask: url("icons/download.svg") center / contain no-repeat;
+  mask: url("icons/download.svg") center / contain no-repeat;
+}
+
+.btn-primary:disabled { opacity: 0.55; cursor: default; }
+
+.view-grid { padding-top: 12px; }
+.grid-head {
+  flex: none;
+  min-width: 0;
+  padding: 0 16px 8px;
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.grid-title { min-width: 0; flex: 1; }
+.grid-title-line { display: flex; align-items: baseline; gap: 8px; }
+.grid-title h2 { margin: 0; font-size: 20px; line-height: 25px; font-weight: 800; }
+.grid-title p { height: 0; margin: 0; overflow: hidden; }
+.grid-count { min-width: 0; overflow: hidden; color: var(--accent-soft); font-size: 12.5px; line-height: 16px; font-weight: 700; text-overflow: ellipsis; white-space: nowrap; }
+
+.picks-head {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--muted);
+  font-size: 0;
+}
+.picks-head > span { display: none; }
+.link-btn {
+  padding: 2px 0;
+  color: var(--muted);
+  background: transparent;
+  border: 0;
+  font-size: 11.5px;
+  line-height: 18px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.filters { flex: none; padding: 0 16px 14px; display: flex; gap: 8px; }
+.chip {
+  min-height: 26px;
+  padding: 8px 16px;
+  color: var(--muted);
+  background: var(--field);
+  border: 1px solid var(--control-line);
+  border-radius: var(--r-pill);
+  font-size: 12.5px;
+  line-height: 14px;
+  font-weight: 700;
+  cursor: pointer;
+}
+.chip[aria-pressed="true"] { color: var(--on-accent); background: var(--accent); border-color: transparent; font-weight: 700; }
+
+.grid {
+  flex: 1;
+  min-height: 0;
+  padding: 0 16px;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-auto-rows: minmax(205px, 1fr);
+  gap: 10px;
+  align-content: start;
+  overflow: hidden auto;
+}
+/* Chromium-only thin scrollbar. The standard scrollbar-width/color land in
+   Chrome 121; the extension supports 116+, so style the WebKit pseudo-element
+   (universal in Chromium) instead of the Safari/Firefox standard properties.
+   A transparent border + padding-box clip insets the thumb so it reads as a
+   floating capsule instead of a bar flush against the edge; --scroll-thumb
+   sits a step above --line so it stays visible on the dark canvas without
+   competing with real content. */
+.grid::-webkit-scrollbar { width: 10px; }
+.grid::-webkit-scrollbar-thumb {
+  border: 3px solid transparent;
+  border-radius: var(--r-pill);
+  background: var(--scroll-thumb);
+  background-clip: padding-box;
+}
+.grid::-webkit-scrollbar-thumb:hover { background: var(--scroll-thumb-hover); background-clip: padding-box; }
+.grid::-webkit-scrollbar-track { background: transparent; }
+.grid:empty { display: none; }
+.spacer { display: none; }
+
+.card {
+  position: relative;
+  min-width: 0;
+  min-height: 205px;
+  overflow: hidden;
+  border-radius: var(--r-md);
+  color: var(--media-text);
+  background: var(--media-surface);
+  isolation: isolate;
+  transition: transform 0.16s ease;
+}
+.card.is-live { outline: 2px solid var(--accent); outline-offset: -2px; }
+.card::after {
+  content: "";
+  position: absolute;
+  z-index: 1;
+  inset: auto 0 0;
+  height: 82px;
+  background: linear-gradient(transparent, var(--media-overlay-soft));
+  pointer-events: none;
+}
+
+.card-thumb {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  background: var(--media-wash);
+  isolation: isolate;
+}
+
+.kind-fallback {
+  width: 32px;
+  height: 32px;
+  background: var(--media-muted);
+  -webkit-mask: var(--kind-icon) center / contain no-repeat;
+  mask: var(--kind-icon) center / contain no-repeat;
+}
+
+.card-thumb.is-video::after {
+  content: "";
+  position: absolute;
+  z-index: 2;
+  top: var(--play-y, 50%);
+  left: 50%;
+  width: 38px;
+  height: 38px;
+  transform: translate(-50%, -50%);
+  border: 1px solid var(--play-line);
+  border-radius: 50%;
+  background-color: var(--play-surface);
+  background-image: url("icons/play.svg");
+  background-repeat: no-repeat;
+  background-position: center;
+  background-size: 15px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.24);
+  pointer-events: none;
+}
+.card-thumb.play-obstructed.is-video::after { visibility: hidden; }
+
+.pick,
+.card-dl {
+  position: absolute;
+  z-index: 4;
+  top: 8px;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border-radius: 50%;
+  cursor: pointer;
+}
+
+.pick {
+  left: 8px;
+  width: 22px;
+  height: 22px;
+  border: 2px solid var(--media-muted);
+  background: var(--media-control-soft);
+}
+.pick[aria-pressed="true"] {
+  background-color: var(--media-accent);
+  background-image: url("icons/check.svg");
+  background-repeat: no-repeat;
+  background-position: center;
+  background-size: 12px;
+  border-color: var(--media-accent);
+}
+.pick:disabled { opacity: 0.35; cursor: default; }
+
+.card-dl {
+  right: 8px;
+  border: 0;
+  background-color: var(--media-control);
+  -webkit-backdrop-filter: blur(6px);
+  backdrop-filter: blur(6px);
+}
+.card-dl::after {
+  content: "";
+  position: absolute;
+  inset: 6px;
+  background: var(--media-text);
+  -webkit-mask: url("icons/download.svg") center / contain no-repeat;
+  mask: url("icons/download.svg") center / contain no-repeat;
+}
+.card-dl:disabled { opacity: 0.45; cursor: default; }
+.card-dl.busy::after {
+  inset: 7px;
+  background: none;
+  border: 2px solid var(--media-muted);
+  border-top-color: var(--media-accent);
+  border-radius: 50%;
+  -webkit-mask: none;
+  mask: none;
+  animation: spin 0.7s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+.card-title,
+.card-meta {
+  position: absolute;
+  z-index: 3;
+  bottom: 8px;
+  margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.card-title { left: 10px; max-width: 42%; font-size: 12px; line-height: 15px; font-weight: 700; }
+.card-meta { right: 10px; max-width: 54%; color: var(--media-muted); font-size: 9.5px; line-height: 13px; text-align: right; }
+.card-meta .tag { color: var(--media-muted); }
+.card-meta .tag-fail { color: var(--media-danger); }
+
+/* Selection bar: a flat, full-width band above the tab bar (not a floating
+   pill), matching the design's bottom action strip. */
+.tray {
+  flex: none;
+  min-width: 0;
+  margin: 0;
+  padding: 10px 14px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  background: var(--surface);
+  border: 0;
+  border-top: 1px solid var(--line);
+  border-radius: 0;
+}
+.tray-text { min-width: 0; }
+.tray-count { margin: 0; font-size: 13px; line-height: 15px; font-weight: 700; white-space: nowrap; }
+.tray-meta { display: none; }
+.tray-btn { width: auto; height: 38px; padding: 0 18px; border-radius: 10px; font-size: 13px; white-space: nowrap; }
+.tray-btn::before { width: 15px; height: 15px; }
+
+.settings-sheet {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.settings-head {
+  flex: none;
+  min-height: 47px;
+  padding: 14px 16px 10px;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+.settings-title { min-width: 0; display: flex; align-items: baseline; gap: 8px; }
+.settings-title h2 { margin: 0; font-size: 20px; line-height: 25px; font-weight: 800; }
+.settings-autosave { margin: 0; color: var(--faint); font-size: 11.5px; line-height: 15px; font-weight: 600; }
+.settings-close { display: none; }
+
+.settings-body {
+  flex: 1;
+  min-height: 0;
+  padding: 0 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  overflow: hidden auto;
+}
+/* Hidden scrollbar via the Chromium pseudo-element (see .grid for why the
+   standard scrollbar-width is avoided). */
+.settings-body::-webkit-scrollbar { width: 0; height: 0; }
+.set-section { flex: none; }
+.set-card { padding: 4px 14px; background: var(--surface); border-radius: var(--r-md); }
+.set-label {
+  margin: 0;
+  padding: 9px 0 4px;
+  color: var(--accent);
+  font-size: 11px;
+  line-height: 14px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+.set-row {
+  min-width: 0;
+  min-height: 48px;
+  padding: 13px 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.set-row + .set-row { border-top: 1px solid var(--line); }
+.set-row.col { align-items: stretch; flex-direction: column; gap: 8px; }
+.set-copy { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.set-title { min-width: 0; font-size: 13.5px; line-height: 17px; font-weight: 600; }
+.set-hint { color: var(--faint); font-size: 11.5px; line-height: 15px; }
+.set-note { display: none; }
+.set-input { width: 100%; padding: 0 12px; font-size: 13px; }
+.set-input.mono { color: var(--mono); font-family: var(--font-mono); }
+/* Every control that can land on the right of a settings row is 32px tall, so a
+   column of mixed rows (select, number field, switch, button) reads as one
+   aligned edge. The switch is 26px on purpose — it centres inside the same row. */
+.set-number {
+  width: 74px;
+  height: 32px;
+  flex: 0 0 74px;
+  padding: 0 10px;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  line-height: 1;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+.set-row .select { width: auto; max-width: 168px; height: 32px; flex: 0 1 auto; }
+
+.btn-ghost {
+  min-height: 32px;
+  padding: 8px 16px;
+  color: var(--danger);
+  background: var(--danger-wash);
+  border: 1px solid var(--danger-line);
+  border-radius: 9px;
+  font-size: 12.5px;
+  line-height: 15px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+/* Geometry is driven by the wrapper: the track fills it via inset:0, and the
+   knob's inset (3px) plus its size (20px) must add back up to the track box, or
+   it sits off-centre. Travel = width - knob - 2*inset. Change one, change all. */
+.switch { position: relative; flex: none; width: 44px; height: 26px; }
+.switch input { position: absolute; inset: 0; width: 100%; height: 100%; margin: 0; opacity: 0; cursor: pointer; }
+.track { position: absolute; inset: 0; border-radius: var(--r-pill); background: var(--track-off); pointer-events: none; transition: background 0.14s ease; }
+.track::before { content: ""; position: absolute; top: 3px; left: 3px; width: 20px; height: 20px; border-radius: 50%; background: var(--knob); box-shadow: 0 1px 3px rgba(0, 0, 0, 0.45); transition: transform 0.14s ease; }
+.switch input:checked + .track { background: var(--accent); }
+.switch input:checked + .track::before { transform: translateX(18px); }
+
+.lang-toggle { flex: none; padding: 3px; display: flex; gap: 2px; background: var(--input-deep); border: 1px solid var(--control-line); border-radius: 9px; }
+.lang-toggle button { min-width: 40px; height: 26px; padding: 0 14px; color: var(--muted); background: transparent; border: 0; border-radius: 7px; font-size: 12.5px; font-weight: 700; cursor: pointer; }
+.lang-toggle button.is-active { color: var(--on-accent); background: var(--accent); }
+.lang-toggle.is-disabled { opacity: 0.45; pointer-events: none; }
+.lang-toggle button:disabled { cursor: default; }
+
+.diagnostics details { cursor: pointer; }
+.diagnostics pre { height: auto; min-height: 44px; margin: 0; padding: 8px; white-space: pre-wrap; }
+/* Centred rights notice with the version on its own line, as the design draws it. */
+.settings-footer { margin-top: 4px; padding: 2px 2px 12px; display: flex; flex-direction: column; align-items: center; gap: 3px; text-align: center; color: var(--faint); }
+.settings-rights,
+.settings-version { margin: 0; font-size: 11.5px; line-height: 17px; }
+.settings-version { flex: none; font-family: var(--font); font-weight: 700; opacity: 0.72; }
+
+.views {
+  flex: none;
+  min-height: 66px;
+  padding: 10px 12px 12px;
+  display: flex;
+  gap: 4px;
+  background: var(--canvas);
+  border-top: 1px solid var(--line);
+}
+.view-pill {
+  min-width: 0;
+  flex: 1 1 0;
+  padding: 7px 2px 6px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  color: var(--muted);
+  background: transparent;
+  border: 0;
+  border-radius: var(--r-sm);
+  font-size: 9px;
+  line-height: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: color 0.15s ease;
+}
+.view-pill[aria-pressed="true"],
+.app.is-settings .settings-nav { color: var(--accent); background: var(--surface); font-weight: 700; }
+.nav-icon { width: 21px; height: 21px; display: block; background: currentColor; -webkit-mask: var(--icon) center / contain no-repeat; mask: var(--icon) center / contain no-repeat; }
+.nav-now { --icon: url("icons/nav-now.svg"); }
+.nav-library { --icon: url("icons/nav-library.svg"); }
+.nav-saved { --icon: url("icons/nav-saved.svg"); }
+.nav-settings { --icon: url("icons/nav-settings.svg"); }
+
+/* The brand bar is persistent chrome in every view — only the view bodies swap. */
+.app.is-settings .view,
+.app.is-settings > .banner { display: none; }
+
+.app:not(.is-settings) .settings-sheet { display: none; }
+
+:where(button, input, select, summary):focus-visible {
+  outline: 2px solid var(--text);
+  outline-offset: 2px;
+}
+.select:focus-visible,
+.set-input:focus-visible { border-color: var(--accent); outline-color: var(--accent); }
+.switch input:focus-visible + .track { box-shadow: 0 0 0 2px var(--text); }
+
+@media (max-width: 335px) {
+  .brand { padding-right: 12px; padding-left: 12px; }
+  .now-overlay { padding-right: 12px; padding-left: 12px; }
+  .metrics { gap: 7px; }
+  .metric { gap: 2px; }
+  .metric-label { font-size: 9px; }
+  .grid { padding: 0 8px; gap: 6px; }
+  .view-pill { font-size: 9px; letter-spacing: 0.02em; }
+}
+
+@media (max-height: 650px) {
+  .brand { min-height: 48px; padding-top: 8px; }
+  .views { min-height: 58px; padding-top: 6px; padding-bottom: 8px; }
+  .now-overlay { gap: 7px; padding-bottom: 12px; }
+  #now-qselect { height: 32px; }
+  .btn-primary { height: 40px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after { scroll-behavior: auto !important; transition-duration: 0.01ms !important; animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; }
+}
+
+@media (forced-colors: active) {
+  .select,
+  .set-input,
+  .btn-primary,
+  .btn-ghost,
+  .view-pill[aria-pressed="true"],
+  .track { border: 1px solid ButtonText; }
+  .preview-play,
+  .card-thumb.is-video::after { -webkit-backdrop-filter: none; backdrop-filter: none; }
+}
+
+/* ─── Design pass ────────────────────────────────────────────────────────────
+   Component treatments layered on the token retheme. Kept at the end of the
+   file so it wins on order without editing the rules other tests pin. */
+
+/* Compact top bar: gradient mark + a live "capturing" pill, with the hairline
+   that separates it from the scrolling content, as in the design. */
+.brand {
+  min-height: 52px;
+  padding: 0 14px;
+  gap: 9px;
+  align-items: center;
+  border-bottom: 1px solid var(--line);
+}
+.brand-text h1 { white-space: nowrap; }
+.brand-logo {
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  background: linear-gradient(150deg, #3a8bff, #1f6bff);
+  box-shadow: 0 2px 8px rgba(47, 125, 255, 0.4);
+}
+.brand-logo svg { width: 16px; height: 16px; }
+.brand-text h1 { font-size: 15px; font-weight: 800; letter-spacing: -0.02em; }
+.brand-live {
+  gap: 6px;
+  padding: 5px 10px;
+  border-radius: var(--r-pill);
+  background: var(--live-wash);
+  border: 1px solid var(--live-line);
+  color: var(--live-text);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.live-dot { width: 6px; height: 6px; box-shadow: 0 0 8px var(--live); }
+
+/* Display voice: tight, heavy headings; accent uppercase section labels. */
+.empty h2,
+.grid-title h2,
+.now-title,
+#settings-title { font-weight: 800; letter-spacing: -0.02em; }
+.set-label {
+  color: var(--accent-soft);
+  font-size: 10.5px;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+/* Calm panels: flat surface with a hairline. */
+.set-card { background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-md); }
+
+/* Primary action becomes the gradient pill. */
+.btn-primary,
+.now-overlay .btn-primary {
+  background: var(--accent-grad);
+  color: #ffffff;
+  border-radius: 13px;
+  font-weight: 700;
+  box-shadow: 0 8px 22px rgba(47, 125, 255, 0.35);
+}
+.btn-primary:hover:not(:disabled) { filter: brightness(1.08); }
+.btn-primary:active:not(:disabled) { transform: translateY(1px); }
+
+/* Interaction states the design specifies (style-hover) for every clickable
+   surface: filter/colour nudges on chips and links, a lift on grid cards, and a
+   border highlight on the settings dropdowns — mapped onto theme tokens instead
+   of the mock's fixed dark-only colours, so they hold in both themes. */
+.chip:hover { filter: brightness(1.12); }
+.link-btn:hover { color: var(--accent-soft); }
+.btn-ghost:hover { background: var(--danger-wash-strong); }
+.card:hover { transform: translateY(-2px); }
+.card-dl:hover:not(:disabled) { background-color: var(--media-accent); }
+.view-pill:hover { color: var(--text); }
+.select:not(:disabled):hover { border-color: var(--accent); }
+
+/* Now Playing stacks: heading, media card, then its details on the panel canvas. */
+.now {
+  flex-direction: column;
+  gap: 12px;
+  padding: 0 12px 14px;
+  overflow: hidden auto;
+}
+
+/* Chromium-only thin scrollbar (see .grid): standard scrollbar-width only lands
+   in Chrome 121 and the extension supports 116+, so style the WebKit
+   pseudo-element and skip the flagged standard properties entirely. */
+.now::-webkit-scrollbar { width: 10px; }
+.now::-webkit-scrollbar-thumb {
+  border: 3px solid transparent;
+  border-radius: var(--r-pill);
+  background: var(--scroll-thumb);
+  background-clip: padding-box;
+}
+.now::-webkit-scrollbar-thumb:hover { background: var(--scroll-thumb-hover); background-clip: padding-box; }
+.now::-webkit-scrollbar-track { background: transparent; }
+
+/* The media wants a 10:16 story frame, but it must yield height to the details
+   below rather than push the download button past the fold. flex-shrink lets it
+   give up the difference; only under --min-height does the panel start to
+   scroll, so the common case has no scrollbar at all. */
+.preview { flex: 1 1 auto; min-height: 170px; aspect-ratio: 10 / 16; }
+
+/* Section heading for the view, matching the grid's title row. */
+.now-head {
+  flex: none;
+  min-width: 0;
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 0 2px;
+}
+.now-head h2 { margin: 0; font-size: 20px; line-height: 25px; font-weight: 800; letter-spacing: -0.02em; }
+.now-pieces {
+  flex: none;
+  color: var(--faint);
+  font-size: 12px;
+  line-height: 16px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+/* Metrics read as one bordered three-up stat card. */
+.metrics {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 0;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  overflow: hidden;
+}
+.metric { flex-direction: column; align-items: flex-start; gap: 5px; padding: 12px 14px; }
+.metric + .metric { border-left: 1px solid var(--line); }
+.metric-label { font-size: 10px; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase; }
+.metric-value { font-family: var(--font-mono); font-size: 14px; font-weight: 700; }
+
+/* Pill chips and the uppercase tab bar. (The switch is sized at its own rule —
+   wrapper, track and knob have to move together, so they stay in one place.) */
+.chip { border-radius: var(--r-pill); padding: 8px 16px; font-size: 12.5px; font-weight: 700; }
+.view-pill { gap: 5px; font-size: 9.5px; font-weight: 700; letter-spacing: 0.03em; text-transform: uppercase; }
+
+/* Section labels sit above their card, not inside it, and each section gets the
+   design's 20px breathing room before the next label. */
+.set-section { display: flex; flex-direction: column; margin-bottom: 20px; }
+.set-label { margin: 0 0 9px; padding: 0 0 0 2px; }
+
+/* The active tab is colour only — the design has no filled pill behind it. */
+.view-pill[aria-pressed="true"],
+.app.is-settings .settings-nav { background: none; }
+
+/* Closed dropdowns read one step lighter than the card; the text inputs sit on
+   the deepest surface, as the design draws them. */
+.select { background-color: var(--control-surface); }
+.set-input { background-color: var(--input-deep); }
+.select {
+  height: 32px;
+  padding: 0 30px 0 12px;
+  border-radius: 9px;
+  font-size: 12.5px;
+  font-weight: 700;
+}
+/* The filename template is the one accent-outlined field in the design. */
+#set-template { border-color: rgba(47, 125, 255, 0.55); border-radius: 10px; }
