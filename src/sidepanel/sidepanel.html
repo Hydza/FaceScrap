@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<html lang="en" data-boot="pending">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link rel="stylesheet" href="sidepanel.css" />
+    <title>FaceScrap</title>
+  </head>
+  <body>
+    <div id="app" class="app" data-view="now" inert aria-hidden="true" aria-busy="true">
+      <header class="brand">
+        <span class="brand-logo" aria-hidden="true">
+          <svg viewBox="0 0 32 32" role="img" fill="none" stroke="#ffffff" stroke-width="2.53" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="24" height="24" rx="5.33"/><circle cx="11.33" cy="11.33" r="2.13"/><path d="M28 20l-6.67-6.67L6.67 28"/></svg>
+        </span>
+        <div class="brand-text">
+          <h1>FaceScrap</h1>
+          <p class="brand-tagline" data-i18n="brandTagline">facebook memories, neatly saved</p>
+        </div>
+        <span id="now-live" class="brand-live" hidden><i class="live-dot" aria-hidden="true"></i><span data-i18n="statusCapturing">Capturing</span></span>
+      </header>
+
+      <p id="degraded" class="banner" hidden data-i18n="bannerDegraded">
+        This browser can't merge audio and video: HD saves as video only. Use Chrome or Edge to include audio.
+      </p>
+      <p id="fatal" class="banner banner-error" hidden></p>
+
+      <section id="view-now" class="view view-now">
+        <div id="now-empty" class="empty">
+          <span class="empty-mark" aria-hidden="true"></span>
+          <h2 data-i18n="nowEmptyTitle">Nothing playing</h2>
+          <p data-i18n="nowEmptyBody">Play a reel or story on this tab, or open your Library.</p>
+        </div>
+
+        <div id="now-content" class="now" hidden>
+          <div class="now-head">
+            <h2 data-i18n="nowStatus">Now playing</h2>
+            <span id="now-pieces" class="now-pieces"></span>
+          </div>
+
+          <div id="now-preview" class="preview">
+            <div class="preview-chips">
+              <span id="now-badge" class="media-badge"></span>
+              <span id="now-dur" class="preview-dur"></span>
+            </div>
+            <span class="preview-play" aria-hidden="true"></span>
+          </div>
+
+          <div class="now-overlay">
+            <div class="now-identity">
+              <h2 id="now-title" class="now-title"></h2>
+              <p id="now-sub" class="now-sub"></p>
+            </div>
+
+            <div class="metrics">
+              <div class="metric"><span class="metric-label" data-i18n="metaFormat">Format</span><span id="m-format" class="metric-value"></span></div>
+              <div id="m-duration-metric" class="metric"><span class="metric-label" data-i18n="metaDuration">Duration</span><span id="m-duration" class="metric-value"></span></div>
+              <div class="metric"><span class="metric-label" data-i18n="metaResolution">Resolution</span><span id="m-resolution" class="metric-value"></span></div>
+            </div>
+
+            <div id="now-quality" class="quality">
+              <div class="quality-head">
+                <span id="now-quality-label" class="quality-label" data-i18n="videoQuality">Video quality</span>
+                <span id="now-qcount" class="quality-count"></span>
+              </div>
+              <div class="select-wrap"><select id="now-qselect" class="select" aria-labelledby="now-quality-label"></select></div>
+            </div>
+
+            <button id="now-download" class="btn-primary" type="button"></button>
+          </div>
+        </div>
+      </section>
+
+      <section id="view-grid" class="view view-grid" hidden>
+        <div class="grid-head">
+          <div class="grid-title">
+            <div class="grid-title-line"><h2 id="grid-title"></h2><span id="grid-count" class="grid-count"></span></div>
+            <p id="grid-sub"></p>
+          </div>
+          <div id="picks-head" class="picks-head">
+            <span data-i18n="yourPicks">Your picks</span>
+            <button id="select-all" class="link-btn" type="button" data-i18n="selectAll">Select all</button>
+          </div>
+        </div>
+
+        <nav id="filters" class="filters" data-i18n-aria="ariaFilters" aria-label="Media filters">
+          <button class="chip" type="button" data-filter="all" aria-pressed="true" data-i18n="filterAll">All</button>
+          <button class="chip" type="button" data-filter="video" aria-pressed="false" data-i18n="filterVideos">Videos</button>
+          <button class="chip" type="button" data-filter="image" aria-pressed="false" data-i18n="filterImages">Images</button>
+        </nav>
+
+        <main id="list" class="grid" aria-live="polite"></main>
+        <div id="grid-empty" class="empty" hidden>
+          <span class="empty-mark" aria-hidden="true"></span>
+          <h2 id="grid-empty-title"></h2>
+          <p id="grid-empty-body"></p>
+        </div>
+        <div class="spacer"></div>
+        <div id="tray" class="tray" hidden>
+          <div class="tray-text"><p id="tray-count" class="tray-count"></p><p id="tray-meta" class="tray-meta"></p></div>
+          <button id="bulk-dl" class="btn-primary tray-btn" type="button"></button>
+        </div>
+      </section>
+
+      <div id="settings" class="settings-sheet" role="region" aria-labelledby="settings-title" hidden>
+        <div class="settings-head">
+          <div class="settings-title">
+            <h2 id="settings-title" data-i18n="settings">Settings</h2>
+            <p class="settings-autosave" data-i18n="settingsAutosave">Changes save automatically</p>
+          </div>
+          <button id="settings-close" class="settings-close" type="button" data-i18n-aria="titleCloseSettings" aria-label="Close"></button>
+        </div>
+
+        <div class="settings-body">
+          <section class="set-section">
+            <h3 class="set-label" data-i18n="settingsDownloads">Downloads</h3>
+            <div class="set-card">
+              <div class="set-row col"><span id="label-set-template" class="set-title" data-i18n="settingsTemplate">Filename</span><input id="set-template" class="set-input mono" type="text" spellcheck="false" autocomplete="off" maxlength="200" aria-labelledby="label-set-template" /></div>
+              <div class="set-row"><span id="label-set-subfolder" class="set-title" data-i18n="settingsSubfolder">Save in "FaceScrap/" subfolder</span><label class="switch"><input id="set-subfolder" type="checkbox" aria-labelledby="label-set-subfolder" /><span class="track"></span></label></div>
+              <div class="set-row"><span id="label-set-quality" class="set-title" data-i18n="settingsQuality">Default quality</span><select id="set-quality" class="select" aria-labelledby="label-set-quality"><option value="highest" data-i18n="qualityHighest">Highest</option><option value="lowest" data-i18n="qualityLowest">Lowest</option><option value="ask" data-i18n="qualityAsk">Ask</option></select></div>
+              <div class="set-row two"><span class="set-copy"><span id="label-set-direct" class="set-title" data-i18n="settingsDirect">Direct download</span><span class="set-hint" data-i18n="settingsDirectHint">May skip audio merge</span></span><label class="switch"><input id="set-direct" type="checkbox" aria-labelledby="label-set-direct" /><span class="track"></span></label></div>
+              <p class="set-note" data-i18n="settingsHdNote">HD video + audio merge automatically. Direct download may skip audio.</p>
+            </div>
+          </section>
+
+          <section class="set-section">
+            <h3 class="set-label" data-i18n="settingsPanel">Panel</h3>
+            <div class="set-card">
+              <div class="set-row"><span id="label-lang" class="set-title" data-i18n="settingsLanguage">Language</span><div id="lang" class="lang-toggle" role="group" aria-labelledby="label-lang"><button type="button" data-lang="en" class="is-active" aria-pressed="true">EN</button><button type="button" data-lang="es" aria-pressed="false">ES</button></div></div>
+              <div class="set-row"><span id="label-set-followlang" class="set-title" data-i18n="settingsFollowLang">Follow browser language</span><label class="switch"><input id="set-followlang" type="checkbox" aria-labelledby="label-set-followlang" /><span class="track"></span></label></div>
+              <div class="set-row two"><span class="set-copy"><span id="label-set-theme" class="set-title" data-i18n="settingsTheme">Theme</span><span id="hint-set-theme" class="set-hint" data-i18n="settingsThemeHint">Follows Facebook, then your device</span></span><select id="set-theme" class="select" aria-labelledby="label-set-theme" aria-describedby="hint-set-theme"><option value="auto" data-i18n="themeAuto">Auto</option><option value="light" data-i18n="themeLight">Light</option><option value="dark" data-i18n="themeDark">Dark</option></select></div>
+              <div class="set-row"><span id="label-set-order" class="set-title" data-i18n="settingsOrder">List order</span><select id="set-order" class="select" aria-labelledby="label-set-order"><option value="newest" data-i18n="orderNewest">Newest first</option><option value="oldest" data-i18n="orderOldest">Oldest first</option></select></div>
+            </div>
+          </section>
+
+          <section class="set-section">
+            <h3 class="set-label" data-i18n="settingsCapture">Capture</h3>
+            <div class="set-card">
+              <div class="set-row"><span id="label-set-videosonly" class="set-title" data-i18n="settingsVideosOnly">Videos only</span><label class="switch"><input id="set-videosonly" type="checkbox" aria-labelledby="label-set-videosonly" /><span class="track"></span></label></div>
+              <div class="set-row"><span id="label-set-minres" class="set-title" data-i18n="settingsMinRes">Minimum resolution</span><select id="set-minres" class="select" aria-labelledby="label-set-minres"><option value="0" data-i18n="resNone">No minimum</option><option value="360">360p</option><option value="480">480p</option><option value="720">720p</option><option value="1080">1080p</option></select></div>
+            </div>
+          </section>
+
+          <section class="set-section">
+            <h3 class="set-label" data-i18n="settingsSavedData">Saved data</h3>
+            <div class="set-card">
+              <div class="set-row two"><span class="set-copy"><span id="label-set-maxitems" class="set-title" data-i18n="settingsMaxItems">Max saved items</span><span id="hint-set-maxitems" class="set-hint"><span>0 = </span><span data-i18n="maxUnlimited">Unlimited</span></span></span><input id="set-maxitems" class="set-input set-number" type="text" inputmode="numeric" pattern="[0-9]*" maxlength="16" autocomplete="off" spellcheck="false" aria-labelledby="label-set-maxitems" aria-describedby="hint-set-maxitems" /></div>
+              <div class="set-row"><span id="label-set-confirmclear" class="set-title" data-i18n="settingsConfirmClear">Confirm before clearing</span><label class="switch"><input id="set-confirmclear" type="checkbox" aria-labelledby="label-set-confirmclear" /><span class="track"></span></label></div>
+              <div class="set-row two"><span class="set-copy"><span class="set-title" data-i18n="settingsClearList">Clear captured list</span><span class="set-hint" data-i18n="settingsClearHint">Library only · Saved stays</span></span><button id="clear" class="btn-ghost" type="button" data-i18n="clear">Clear</button></div>
+            </div>
+          </section>
+
+          <section class="set-section diagnostics">
+            <h3 class="set-label" data-i18n="settingsDiagnostics">Diagnostics</h3>
+            <div class="set-card">
+              <div class="set-row two"><span class="set-copy"><span id="label-set-diag" class="set-title" data-i18n="settingsDiagEnabled">Count discarded captures</span><span class="set-hint" data-i18n="settingsDiagHint">Reload Facebook to apply</span></span><label class="switch"><input id="set-diag" type="checkbox" aria-labelledby="label-set-diag" /><span class="track"></span></label></div>
+              <details id="diag-details" class="set-row col"><summary class="set-title" data-i18n="diagShow">Show counters</summary><pre id="diag-counters" class="set-input mono"></pre><button id="diag-reset" class="btn-ghost" type="button" data-i18n="diagReset">Reset counters</button></details>
+            </div>
+          </section>
+
+          <div class="settings-footer"><p class="settings-rights" data-i18n="settingsRights">Only download content you have the rights to.</p><p id="version" class="settings-version"></p></div>
+        </div>
+      </div>
+
+      <nav id="views" class="views" data-i18n-aria="ariaViews" aria-label="Views">
+        <button class="view-pill" type="button" data-view="now" aria-pressed="true"><span class="nav-icon nav-now" aria-hidden="true"></span><span data-i18n="viewNowPlaying">Now Playing</span></button>
+        <button class="view-pill" type="button" data-view="library" aria-pressed="false"><span class="nav-icon nav-library" aria-hidden="true"></span><span data-i18n="viewLibrary">Library</span></button>
+        <button class="view-pill" type="button" data-view="saved" aria-pressed="false"><span class="nav-icon nav-saved" aria-hidden="true"></span><span data-i18n="viewSaved">Saved</span></button>
+        <button id="settings-open" class="view-pill settings-nav" type="button" aria-controls="settings" aria-expanded="false" aria-pressed="false" data-i18n-title="titleSettings" data-i18n-aria="titleSettings" aria-label="Settings"><span class="nav-icon nav-settings" aria-hidden="true"></span><span data-i18n="settings">Settings</span></button>
+      </nav>
+    </div>
+    <script src="sidepanel.js"></script>
+  </body>
+</html>
