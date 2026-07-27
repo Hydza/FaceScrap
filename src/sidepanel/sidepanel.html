@@ -10,7 +10,11 @@
     <div id="app" class="app" data-view="now" inert aria-hidden="true" aria-busy="true">
       <header class="brand">
         <span class="brand-logo" aria-hidden="true">
-          <svg viewBox="0 0 32 32" role="img" fill="none" stroke="#ffffff" stroke-width="2.53" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="24" height="24" rx="5.33"/><circle cx="11.33" cy="11.33" r="2.13"/><path d="M28 20l-6.67-6.67L6.67 28"/></svg>
+          <!-- The brand mark lives in ONE file: icons/logo.svg, which the icon
+               generator also reads to build the toolbar PNGs. Do not inline a
+               copy of the glyph here — that duplication is what let the header
+               and the toolbar icon drift into two different logos. -->
+          <img src="icons/logo.svg" width="28" height="28" alt="" />
         </span>
         <div class="brand-text">
           <h1>FaceScrap</h1>
@@ -51,7 +55,7 @@
               <p id="now-sub" class="now-sub"></p>
             </div>
 
-            <div class="metrics">
+            <div id="metrics" class="metrics">
               <div class="metric"><span class="metric-label" data-i18n="metaFormat">Format</span><span id="m-format" class="metric-value"></span></div>
               <div id="m-duration-metric" class="metric"><span class="metric-label" data-i18n="metaDuration">Duration</span><span id="m-duration" class="metric-value"></span></div>
               <div class="metric"><span class="metric-label" data-i18n="metaResolution">Resolution</span><span id="m-resolution" class="metric-value"></span></div>
@@ -73,7 +77,7 @@
       <section id="view-grid" class="view view-grid" hidden>
         <div class="grid-head">
           <div class="grid-title">
-            <div class="grid-title-line"><h2 id="grid-title"></h2><span id="grid-count" class="grid-count"></span></div>
+            <div class="grid-title-line"><h2 id="grid-title"></h2><span id="grid-count" class="grid-count" role="status"></span></div>
             <p id="grid-sub"></p>
           </div>
           <div id="picks-head" class="picks-head">
@@ -88,7 +92,12 @@
           <button class="chip" type="button" data-filter="image" aria-pressed="false" data-i18n="filterImages">Images</button>
         </nav>
 
-        <main id="list" class="grid" aria-live="polite"></main>
+        <!-- Deliberately NOT a live region: doRender() replaces this container
+             wholesale, so aria-live here made a screen reader re-read every card
+             on any change — including a single card going busy and back during
+             one download. The count in #grid-count carries role="status"
+             instead: it changes only when the number of items does. -->
+        <main id="list" class="grid"></main>
         <div id="grid-empty" class="empty" hidden>
           <span class="empty-mark" aria-hidden="true"></span>
           <h2 id="grid-empty-title"></h2>

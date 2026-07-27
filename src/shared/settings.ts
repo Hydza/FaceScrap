@@ -327,8 +327,11 @@ export async function writeSettingOptimistically(
   hooks: OptimisticSettingWrite,
 ): Promise<Settings> {
   const next = { ...previous, ...patch };
-  await hooks.applyOptimistic?.(next);
+  // applyOptimistic is inside the try: it can reject too (it touches the DOM and,
+  // in the panel, storage), and outside the try that rejection escaped past the
+  // rollback — leaving the control showing a value that was never persisted.
   try {
+    await hooks.applyOptimistic?.(next);
     await hooks.save(patch);
   } catch (error) {
     await hooks.onRolledBack?.(previous);

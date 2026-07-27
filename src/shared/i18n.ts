@@ -14,7 +14,6 @@ export type MsgKey =
   | 'ariaFilters'
   // Now Playing.
   | 'nowStatus'
-  | 'nowLive'
   | 'statusCapturing'
   | 'nowEmptyTitle'
   | 'nowEmptyBody'
@@ -126,7 +125,19 @@ export type MsgKey =
   | 'sourcePage'
   | 'kindVideo'
   | 'kindImage'
-  | 'kindAudio';
+  | 'kindAudio'
+  // Download failure reasons. These reach the user as a card's `title` tooltip,
+  // so they are panel copy and belong here — unlike the console-only
+  // console.error text in content/, background/ and offscreen/.
+  | 'errNoAudioTrack'
+  | 'errMergeTimedOut'
+  | 'errMergeFailed'
+  | 'errDownloadFailed'
+  | 'errInvalidTab'
+  // Startup failure. Shown when the panel cannot boot at all, which is exactly
+  // when the user most needs to read it in their own language.
+  | 'fatalStartup'
+  | 'fatalStartupVersion';
 
 const MESSAGES: Record<Lang, Record<MsgKey, string>> = {
   en: {
@@ -137,7 +148,6 @@ const MESSAGES: Record<Lang, Record<MsgKey, string>> = {
     ariaViews: 'Views',
     ariaFilters: 'Media filters',
     nowStatus: 'Now playing',
-    nowLive: 'Live from Facebook',
     statusCapturing: 'Capturing',
     nowEmptyTitle: 'Nothing playing',
     nowEmptyBody: 'Play a reel or story on this tab, or open your Library.',
@@ -241,6 +251,14 @@ const MESSAGES: Record<Lang, Record<MsgKey, string>> = {
     kindVideo: 'Video',
     kindImage: 'Image',
     kindAudio: 'Audio',
+    errNoAudioTrack: 'No audio track.',
+    errMergeTimedOut: 'The merge timed out.',
+    errMergeFailed: 'Merge failed.',
+    errDownloadFailed: 'Download failed.',
+    errInvalidTab: 'Invalid tab.',
+    fatalStartup:
+      "FaceScrap couldn't start on this browser ({message}). It needs a Chromium browser with the storage, tabs and side-panel APIs — try Chrome or Edge.",
+    fatalStartupVersion: ' [v{version}]',
   },
   es: {
     brandTagline: 'recuerdos de facebook, bien guardados',
@@ -250,7 +268,6 @@ const MESSAGES: Record<Lang, Record<MsgKey, string>> = {
     ariaViews: 'Vistas',
     ariaFilters: 'Filtros de contenido',
     nowStatus: 'Reproduciendo ahora',
-    nowLive: 'En directo de Facebook',
     statusCapturing: 'Capturando',
     nowEmptyTitle: 'Nada reproduciéndose',
     nowEmptyBody: 'Reproduce un reel o historia en esta pestaña, o abre tu Biblioteca.',
@@ -303,7 +320,7 @@ const MESSAGES: Record<Lang, Record<MsgKey, string>> = {
     bannerDegraded:
       'Este navegador no puede unir audio y video: los HD se descargan solo con imagen. Usa Chrome o Edge para incluir el audio.',
     settings: 'Ajustes',
-    settingsAutosave: 'se guardan solos',
+    settingsAutosave: 'Los cambios se guardan solos',
     titleSettings: 'Configuración',
     titleCloseSettings: 'Cerrar configuración',
     settingsDownloads: 'Descargas',
@@ -354,6 +371,14 @@ const MESSAGES: Record<Lang, Record<MsgKey, string>> = {
     kindVideo: 'Video',
     kindImage: 'Imagen',
     kindAudio: 'Audio',
+    errNoAudioTrack: 'Sin pista de audio.',
+    errMergeTimedOut: 'La unión tardó demasiado.',
+    errMergeFailed: 'Falló la unión.',
+    errDownloadFailed: 'Falló la descarga.',
+    errInvalidTab: 'Pestaña no válida.',
+    fatalStartup:
+      'FaceScrap no pudo arrancar en este navegador ({message}). Necesita un navegador Chromium con las APIs de storage, tabs y panel lateral — prueba Chrome o Edge.',
+    fatalStartupVersion: ' [v{version}]',
   },
 };
 

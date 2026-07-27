@@ -605,7 +605,7 @@ chrome.runtime.onMessage.addListener((msg) => {
 
 async function startDashDownload(tid: number, item: MediaItem, receipt: SavedEntry): Promise<string | null> {
   const audioUrl = item.audioUrl;
-  if (audioUrl == null) return 'No audio track.'; // callers gate on audioUrl; narrow it for the typed message
+  if (audioUrl == null) return t('errNoAudioTrack'); // callers gate on audioUrl; narrow it for the typed message
   const filename = filenameFor(item);
   const saveAs = askOnSave();
   // Same fields, same shape as service-worker.ts's own dashDownloadKey(request)
@@ -626,7 +626,7 @@ async function startDashDownload(tid: number, item: MediaItem, receipt: SavedEnt
       } satisfies DownloadDashMsg),
       DASH_UI_IDLE_MS,
       DASH_UI_HARD_CAP_MS,
-      'The merge timed out.',
+      t('errMergeTimedOut'),
     );
     muxBeat = guarded.beat;
     pendingDashJobKey = key;
@@ -639,11 +639,11 @@ async function startDashDownload(tid: number, item: MediaItem, receipt: SavedEnt
       armDashJobHardCap = null;
       pendingDashJobKey = null;
     }
-    if (!r?.ok) throw new Error(r?.error || 'Merge failed.');
+    if (!r?.ok) throw new Error(r?.error || t('errMergeFailed'));
     return null;
   } catch (e: unknown) {
     console.error('[FaceScrap]', e);
-    return (e as Error)?.message || 'Merge failed.';
+    return (e as Error)?.message || t('errMergeFailed');
   }
 }
 
@@ -660,11 +660,11 @@ async function startDirectDownload(tid: number, item: MediaItem, receipt: SavedE
       saveAs: askOnSave(),
       receipt,
     } satisfies DownloadDirectMsg)) as DownloadDirectResponse | undefined;
-    if (!response?.ok) throw new Error(response?.error || 'Download failed.');
+    if (!response?.ok) throw new Error(response?.error || t('errDownloadFailed'));
     return null;
   } catch (e) {
     console.error('[FaceScrap]', e);
-    return (e as Error)?.message || 'Download failed.';
+    return (e as Error)?.message || t('errDownloadFailed');
   }
 }
 
@@ -693,7 +693,7 @@ async function downloadOne(
   item: MediaItem,
   receipt: SavedEntry,
 ): Promise<string | null> {
-  if (tid === undefined) return 'Invalid tab.';
+  if (tid === undefined) return t('errInvalidTab');
   return item.audioUrl != null
     ? startDashDownload(tid, item, receipt)
     : startDirectDownload(tid, item, receipt);
@@ -716,24 +716,35 @@ async function downloadCard(cardId: string, item: MediaItem): Promise<void> {
   const gen = resetGen(tid);
   cardBusy.add(bkey);
   failReason.delete(bkey);
-  await render(); // busy/failed are signature terms; render() sees them flip
-  const err = await downloadOne(tid, item, receipt);
-  const ok = err === null;
-  // Busy/failed are tab-namespaced, so this bookkeeping can never tag another
-  // tab's card (the old clear-on-switch model instead dropped it, leaving a
-  // phantom busy entry). The failure tag additionally checks the reset
-  // generation: a prune during the await (nav reset, Clear, tab close) means
-  // this failure belongs to wiped content and must not re-seed the tag it just
-  // removed. The repaint always targets the panel's VIEWED tab, not `tid`:
-  // render() reads module `tabId` itself, so a settle for a backgrounded tab
-  // still has to run it — offscreenBusyHere() is global, and a viewed grid's
-  // per-card buttons must unstick the moment it flips even though this
-  // bookkeeping lives under the download's own tab.
-  cardBusy.delete(bkey);
-  if (!ok && resetGen(tid) === gen) {
-    if (err) failReason.set(bkey, err);
+  // try/finally, matching runBulk: `render()` reaches an unguarded
+  // chrome.storage.session.get, so a dead extension context ('Extension context
+  // invalidated' — reachable in a long-lived panel, more so under
+  // load-unpacked) would throw straight past the cleanup below. Since
+  // offscreenBusyHere() is global, leaking one busy key disables EVERY download
+  // button in the panel until it is reopened, and pruneTabState deliberately
+  // never clears cardBusy.
+  try {
+    await render(); // busy/failed are signature terms; render() sees them flip
+    const err = await downloadOne(tid, item, receipt);
+    const ok = err === null;
+    // Busy/failed are tab-namespaced, so this bookkeeping can never tag another
+    // tab's card (the old clear-on-switch model instead dropped it, leaving a
+    // phantom busy entry). The failure tag additionally checks the reset
+    // generation: a prune during the await (nav reset, Clear, tab close) means
+    // this failure belongs to wiped content and must not re-seed the tag it just
+    // removed.
+    if (!ok && resetGen(tid) === gen) {
+      if (err) failReason.set(bkey, err);
+    }
+  } finally {
+    // The repaint always targets the panel's VIEWED tab, not `tid`: render()
+    // reads module `tabId` itself, so a settle for a backgrounded tab still has
+    // to run it — offscreenBusyHere() is global, and a viewed grid's per-card
+    // buttons must unstick the moment it flips even though this bookkeeping
+    // lives under the download's own tab.
+    cardBusy.delete(bkey);
+    await render();
   }
-  await render();
 }
 
 // ── Card model (Library / Saved grid) ────────────────────────────────────────
@@ -1272,6 +1283,10 @@ function paintNow(now: NowState | null): void {
 
   byId('m-format').textContent = fileExtensionFor(target).toUpperCase();
   byId('m-duration-metric').hidden = isImage;
+  // Hiding a cell does not remove its grid column, so the track count has to
+  // follow the visible cells or the card keeps an empty third and an off-centre
+  // divider on images.
+  byId('metrics').classList.toggle('is-two-up', isImage);
   byId('m-duration').textContent = isImage ? '' : now.durationSec != null ? formatDuration(now.durationSec) : '—';
 
   const dl = byId<HTMLButtonElement>('now-download');
@@ -1821,6 +1836,11 @@ async function doRender(): Promise<void> {
     byId('grid-empty-body').textContent = view === 'saved' ? t('savedEmptyBody') : t('libraryEmptyBody');
   }
 
+  // ponytail: full teardown/rebuild on every sig change, including a single
+  // card's busy bit flipping twice per download. Cheap at this list size, and no
+  // longer audible now that #list is not a live region (the count is). Upgrade
+  // path if it ever matters: paint busy/disabled per card in place, the way
+  // paintTray() already does for selection, and reconcile instead of replacing.
   const list = byId('list');
   list.textContent = '';
   for (const c of gridCards) list.appendChild(renderCard(c));
@@ -1893,10 +1913,12 @@ function showFatal(e: unknown): void {
   if (el) {
     el.hidden = false;
     const v = chrome.runtime?.getManifest?.().version;
+    // Localised, because a boot failure is when the message matters most. If the
+    // throw beat setLang() in init(), t()/fmt() fall back to English — still no
+    // worse than the hardcoded string this replaced.
     el.textContent =
-      `FaceScrap couldn't start on this browser (${(e as Error)?.message ?? String(e)}). ` +
-      `It needs a Chromium browser with the storage, tabs and side-panel APIs — try Chrome or Edge.` +
-      (v ? ` [v${v}]` : '');
+      fmt('fatalStartup', { message: (e as Error)?.message ?? String(e) }) +
+      (v ? fmt('fatalStartupVersion', { version: v }) : '');
   }
   console.error('[FaceScrap] init failed', e);
 }

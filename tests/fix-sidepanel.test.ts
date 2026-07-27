@@ -72,10 +72,16 @@ test('always repaints the viewed tab after a card download settles, even for a b
 
   assert.doesNotMatch(body, /if \(tid === tabId\)/, 'the repaint must no longer branch on the download\'s own tab');
   assert.doesNotMatch(body, /paintTray\(\)/, 'a bare paintTray() can no longer stand in for a full repaint here');
+  // The repaint has to be the last step AND unreachable-proof: it used to sit at
+  // the end of the body, where a rejection from the `await render()` above it (or
+  // from downloadOne) skipped both it and the cardBusy.delete. Because
+  // offscreenBusyHere() is global, one leaked busy key disables EVERY download
+  // button in the panel, and pruneTabState deliberately never clears cardBusy —
+  // so the release and the repaint must live in a finally.
   assert.match(
     body,
-    /\n  await render\(\);\n\}/,
-    'downloadCard must unconditionally render() as its last step',
+    /\n  \} finally \{[\s\S]*\n    cardBusy\.delete\(bkey\);\n    await render\(\);\n  \}\n\}/,
+    'downloadCard must release the busy key and render() from a finally, not from the tail of the happy path',
   );
 });
 

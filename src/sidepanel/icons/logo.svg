@@ -1,9 +1,14 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" fill="none">
-  <symbol id="mark" viewBox="0 0 32 32">
-    <rect width="32" height="32" rx="9" fill="#2D88FF"/>
-    <circle cx="21.5" cy="10.5" r="3.2" fill="#FFD466"/>
-    <path d="M11 12 L21 26 L2 26 Z" fill="#A8CBFA"/>
-    <path d="M20 16 L30 26 L12 26 Z" fill="#FFFFFF"/>
-  </symbol>
-  <use href="#mark"/>
+  <defs>
+    <linearGradient id="tile" x1="5.07" y1="-2.93" x2="26.93" y2="34.93">
+      <stop offset="0" stop-color="#3A8BFF"/>
+      <stop offset="1" stop-color="#1F6BFF"/>
+    </linearGradient>
+  </defs>
+  <rect width="32" height="32" rx="9" fill="url(#tile)"/>
+  <circle cx="11.94" cy="11.94" r="2.2" fill="#FFD466"/>
+  <g stroke="#FFFFFF" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" fill="none">
+    <rect x="5.56" y="5.56" width="20.88" height="20.88" rx="4.64"/>
+    <path d="M26.44 19.48 L20.64 13.68 L8.291 26.029"/>
+  </g>
 </svg>

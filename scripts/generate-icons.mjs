@@ -1,9 +1,12 @@
 // Generates real PNG icon files (16/48/128px) with zero dependencies.
 // A hand-rolled PNG encoder (RGBA) using Node's built-in zlib.
 //
-// Draws the FaceScrap 2b mark: a Facebook-blue rounded mosaic tile with a warm
-// sun and two landscape planes. Geometry and palette are parsed from the external
-// side-panel SVG, so the toolbar PNGs and the panel brand share one source.
+// Draws the FaceScrap mark: a rounded tile carrying the brand blue gradient, a
+// warm sun disc, and a white stroked photo frame with its mountain diagonal.
+// Every number and colour is parsed out of the side-panel SVG, which the panel
+// header renders directly — so the toolbar PNGs and the panel brand really do
+// come from one source, and this script fails loudly rather than silently
+// drifting if that SVG's shape changes.
 
 import { deflateSync } from 'node:zlib';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
@@ -78,22 +81,47 @@ function hexToRgb(hex) {
   return [(n >> 16) & 0xff, (n >> 8) & 0xff, n & 0xff];
 }
 
+// The tile's gradient axis. y1 is negative (the CSS gradient line overhangs the
+// box), so the number pattern has to accept a leading minus.
+const gradTag =
+  svg.match(/<linearGradient id="tile" x1="(-?[\d.]+)" y1="(-?[\d.]+)" x2="(-?[\d.]+)" y2="(-?[\d.]+)"/) ??
+  fail('tile gradient axis');
+const [gx1, gy1, gx2, gy2] = gradTag.slice(1, 5).map(Number);
+const stopFrom = svg.match(/<stop offset="0" stop-color="(#[0-9A-Fa-f]{6})"/) ?? fail('gradient start stop');
+const stopTo = svg.match(/<stop offset="1" stop-color="(#[0-9A-Fa-f]{6})"/) ?? fail('gradient end stop');
+const GRAD = { x1: gx1, y1: gy1, x2: gx2, y2: gy2, from: hexToRgb(stopFrom[1]), to: hexToRgb(stopTo[1]) };
+
 const tileTag =
-  svg.match(/<rect width="([\d.]+)" height="([\d.]+)" rx="([\d.]+)" fill="(#[0-9A-Fa-f]{6})"\s*\/>/) ??
+  svg.match(/<rect width="([\d.]+)" height="([\d.]+)" rx="([\d.]+)" fill="url\(#tile\)"\s*\/>/) ??
   fail('rounded tile rect');
 const [tileW, tileH, tileR] = tileTag.slice(1, 4).map(Number);
-const TILE_RECT = { cx: tileW / 2, cy: tileH / 2, hx: tileW / 2, hy: tileH / 2, r: tileR };
-const TILE = hexToRgb(tileTag[4]);
+const TILE = { cx: tileW / 2, cy: tileH / 2, hx: tileW / 2, hy: tileH / 2, r: tileR };
 
-// The sun.
-const sunTag = svg.match(/<circle cx="([\d.]+)" cy="([\d.]+)" r="([\d.]+)" fill="(#\w{6})"/) ?? fail('sun circle');
+// The sun is a filled disc, not a stroked ring: at 16px a ring's hole closes up
+// and the glyph reads as a smudge.
+const sunTag =
+  svg.match(/<circle cx="([\d.]+)" cy="([\d.]+)" r="([\d.]+)" fill="(#[0-9A-Fa-f]{6})"\s*\/>/) ?? fail('sun disc');
 const SUN = { cx: Number(sunTag[1]), cy: Number(sunTag[2]), r: Number(sunTag[3]), rgb: hexToRgb(sunTag[4]) };
 
-// Triangles, in document (paint) order: back plane, then white foreground plane.
-const TRI_RE = /<path d="M([\d.]+) ([\d.]+) L([\d.]+) ([\d.]+) L([\d.]+) ([\d.]+) Z" fill="(#\w{6})"/g;
-const tris = [...svg.matchAll(TRI_RE)].map((m) => ({ pts: m.slice(1, 7).map(Number), rgb: hexToRgb(m[7]) }));
-if (tris.length !== 2) fail(`two triangle paths (found ${tris.length})`);
-const [BACK_PLANE, FRONT_PLANE] = tris;
+// Everything inside the <g> shares one stroke colour and width.
+const strokeTag =
+  svg.match(/<g stroke="(#[0-9A-Fa-f]{6})" stroke-width="([\d.]+)"/) ?? fail('stroked group');
+const STROKE = { rgb: hexToRgb(strokeTag[1]), half: Number(strokeTag[2]) / 2 };
+
+const frameTag =
+  svg.match(/<rect x="([\d.]+)" y="([\d.]+)" width="([\d.]+)" height="([\d.]+)" rx="([\d.]+)"\s*\/>/) ??
+  fail('photo frame rect');
+const [fx, fy, fw, fh, fr] = frameTag.slice(1, 6).map(Number);
+const FRAME = { cx: fx + fw / 2, cy: fy + fh / 2, hx: fw / 2, hy: fh / 2, r: fr };
+
+// Absolute "M x y L x y L x y" only — a relative `l` would silently parse wrong.
+const pathTag =
+  svg.match(/<path d="M([\d.]+) ([\d.]+) L([\d.]+) ([\d.]+) L([\d.]+) ([\d.]+)"\s*\/>/) ?? fail('mountain polyline');
+const POLY = [
+  [Number(pathTag[1]), Number(pathTag[2])],
+  [Number(pathTag[3]), Number(pathTag[4])],
+  [Number(pathTag[5]), Number(pathTag[6])],
+];
 
 // Signed distance to a rounded rectangle centered at (cx,cy), half-size (hx,hy),
 // corner radius r. Negative inside.
@@ -103,23 +131,47 @@ function roundedRectSDF(px, py, cx, cy, hx, hy, r) {
   return dx > 0 && dy > 0 ? Math.hypot(dx, dy) - r : Math.max(dx, dy) - r;
 }
 
-// Barycentric-sign point-in-triangle test.
-function inTri(px, py, ax, ay, bx, by, cx, cy) {
-  const d1 = (px - bx) * (ay - by) - (ax - bx) * (py - by);
-  const d2 = (px - cx) * (by - cy) - (bx - cx) * (py - cy);
-  const d3 = (px - ax) * (cy - ay) - (cx - ax) * (py - ay);
-  const neg = d1 < 0 || d2 < 0 || d3 < 0;
-  const pos = d1 > 0 || d2 > 0 || d3 > 0;
-  return !(neg && pos);
+// Distance to one segment, with the projection parameter clamped to [0,1].
+function segmentDistance(px, py, ax, ay, bx, by) {
+  const abx = bx - ax;
+  const aby = by - ay;
+  const t = Math.max(0, Math.min(1, ((px - ax) * abx + (py - ay) * aby) / (abx * abx + aby * aby)));
+  return Math.hypot(px - (ax + t * abx), py - (ay + t * aby));
 }
 
-// The 2b mosaic mark on its 32×32 grid. Returns [r,g,b] or null.
+// Distance to the polyline. This is all the SVG's stroke-linecap/linejoin="round"
+// needs: clamping t to [0,1] rounds each segment's ends, so thresholding the
+// distance yields round caps, and taking the MINIMUM across segments rounds the
+// joint between them. No mitre geometry required.
+function polylineDistance(px, py, pts) {
+  let d = Infinity;
+  for (let i = 0; i < pts.length - 1; i++) {
+    d = Math.min(d, segmentDistance(px, py, pts[i][0], pts[i][1], pts[i + 1][0], pts[i + 1][1]));
+  }
+  return d;
+}
+
+// Project onto the gradient axis, clamp, and mix in sRGB — which is what a
+// browser does for a linear-gradient with no interpolation hint, so the PNG
+// matches the panel header rendering the same SVG.
+function gradientAt(u, v) {
+  const dx = GRAD.x2 - GRAD.x1;
+  const dy = GRAD.y2 - GRAD.y1;
+  const t = Math.max(0, Math.min(1, ((u - GRAD.x1) * dx + (v - GRAD.y1) * dy) / (dx * dx + dy * dy)));
+  return [
+    GRAD.from[0] + (GRAD.to[0] - GRAD.from[0]) * t,
+    GRAD.from[1] + (GRAD.to[1] - GRAD.from[1]) * t,
+    GRAD.from[2] + (GRAD.to[2] - GRAD.from[2]) * t,
+  ];
+}
+
+// The mark on its 32×32 grid, in paint order. Returns [r,g,b] or null outside.
 function markColor(u, v) {
-  if (roundedRectSDF(u, v, TILE_RECT.cx, TILE_RECT.cy, TILE_RECT.hx, TILE_RECT.hy, TILE_RECT.r) > 0) return null;
-  if (inTri(u, v, ...FRONT_PLANE.pts)) return FRONT_PLANE.rgb;
-  if (inTri(u, v, ...BACK_PLANE.pts)) return BACK_PLANE.rgb;
+  if (roundedRectSDF(u, v, TILE.cx, TILE.cy, TILE.hx, TILE.hy, TILE.r) > 0) return null;
+  const frameRing = Math.abs(roundedRectSDF(u, v, FRAME.cx, FRAME.cy, FRAME.hx, FRAME.hy, FRAME.r));
+  if (Math.min(frameRing, polylineDistance(u, v, POLY)) <= STROKE.half) return STROKE.rgb;
   if (Math.hypot(u - SUN.cx, v - SUN.cy) <= SUN.r) return SUN.rgb;
-  return TILE;
+  return gradientAt(u, v);
 }
 
 // Map a pixel to the 32-grid and sample the mark; transparent outside the card.
@@ -127,9 +179,17 @@ function sample(px, py, size) {
   return markColor((px / size) * 32, (py / size) * 32);
 }
 
-// 4×4 supersampling: the card corners and mountain edges need anti-aliasing.
+// 8×8 supersampling. 4×4 was enough for the old flat-filled mark, but the glyph's
+// stroke is ~1.1 units of 32 — at 16px that is barely half a pixel wide, and the
+// coarser grid left the thin diagonal visibly ragged.
+//
+// Averaging only the samples that landed on the mark, and taking coverage as the
+// alpha, is correct here: alpha is below 255 only along the tile's own rounded
+// edge, and every sample there is pure tile gradient. The glyph never sits over
+// transparency, so its white is always mixed against tile pixels, never against
+// an undefined background.
 function pixel(x, y, size) {
-  const SS = 4;
+  const SS = 8;
   let r = 0, g = 0, b = 0, hits = 0;
   for (let sy = 0; sy < SS; sy++) {
     for (let sx = 0; sx < SS; sx++) {

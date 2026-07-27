@@ -24,16 +24,18 @@
   --live-text: #5fe0a0;
   --live-wash: rgba(53, 208, 127, 0.12);
   --live-line: rgba(53, 208, 127, 0.22);
-  --scroll-thumb: rgba(255, 255, 255, 0.14);
-  --scroll-thumb-hover: rgba(255, 255, 255, 0.24);
   --danger: #f0868f;
   --on-accent: #ffffff;
   --mono: #5b9bff;
-  --faint: #6c727a;
+  /* 4.98:1 on --canvas, 4.63:1 on --surface. The old #6c727a sat at 3.98:1,
+     below AA for the 10.5-12.5px labels that use this token. */
+  --faint: #7c828a;
   --danger-wash: rgba(225, 85, 99, 0.14);
   --danger-wash-strong: rgba(225, 85, 99, 0.24);
   --danger-line: rgba(225, 85, 99, 0.4);
-  --control-line: rgba(255, 255, 255, 0.12);
+  /* 3.13:1 against --surface — the AA non-text minimum. At the old 0.12 alpha
+     this was 1.42:1 and the settings inputs read as bare text, not fields. */
+  --control-line: rgba(255, 255, 255, 0.34);
   --control-surface: #1e2127;
   --input-deep: #0f1114;
   --field: #1b1e23;
@@ -74,16 +76,18 @@
   --text: #16181c;
   --muted: #59636e;
   --accent: #1f6bff;
-  --accent-soft: #1f6bff;
+  /* Used as TEXT (.set-label section headings, .grid-count) on --canvas, where
+     --accent's own #1f6bff only reaches 3.99:1. This darker step is 4.81:1 there
+     and leaves --accent itself alone, so the primary button keeps its fill. */
+  --accent-soft: #1a5fe6;
   --accent-grad: linear-gradient(180deg, #3a8bff, #2069f0);
   --accent-wash: rgba(47, 125, 255, 0.12);
   --live: #177a49;
-  --live-text: #177a49;
+  /* 5.03:1 over --live-wash on --canvas; #177a49 was 4.12:1. */
+  --live-text: #146b40;
   --live-wash: rgba(23, 122, 73, 0.1);
   --live-line: rgba(23, 122, 73, 0.22);
-  --scroll-thumb: rgba(0, 0, 0, 0.14);
-  --scroll-thumb-hover: rgba(0, 0, 0, 0.24);
-  --danger: #cf3f4c;
+  --danger: #c2333f;
   --on-accent: #ffffff;
   --mono: #1f6bff;
   --faint: #59636e;
@@ -112,16 +116,14 @@
     --text: #16181c;
     --muted: #59636e;
     --accent: #1f6bff;
-    --accent-soft: #1f6bff;
+    --accent-soft: #1a5fe6;
     --accent-grad: linear-gradient(180deg, #3a8bff, #2069f0);
     --accent-wash: rgba(47, 125, 255, 0.12);
     --live: #177a49;
-    --live-text: #177a49;
+    --live-text: #146b40;
     --live-wash: rgba(23, 122, 73, 0.1);
     --live-line: rgba(23, 122, 73, 0.22);
-    --scroll-thumb: rgba(0, 0, 0, 0.14);
-    --scroll-thumb-hover: rgba(0, 0, 0, 0.24);
-    --danger: #cf3f4c;
+    --danger: #c2333f;
     --on-accent: #ffffff;
     --mono: #1f6bff;
     --faint: #59636e;
@@ -208,7 +210,7 @@ label { -webkit-tap-highlight-color: transparent; }
   line-height: 0;
 }
 
-.brand-logo svg { width: 32px; height: 32px; display: block; }
+.brand-logo img { width: 32px; height: 32px; display: block; }
 .brand-text { min-width: 0; flex: 1; }
 .brand-text h1 { margin: 0; font-size: 15px; line-height: 19px; font-weight: 700; }
 .brand-tagline { display: none; }
@@ -401,11 +403,14 @@ label { -webkit-tap-highlight-color: transparent; }
 
 .preview.is-video .preview-play { display: flex; }
 .preview.play-obstructed .preview-play { visibility: hidden; }
+/* No nudge margin: play.svg already carries its own optical centring (the
+   triangle's box sits at x 9-17 of a 24 viewBox), and `mask: center` centres it
+   again — the 3px that used to live here pushed it visibly off-centre, unlike
+   the grid thumbnails' ::after, which centres the same file with no margin. */
 .preview-play::before {
   content: "";
   width: 22px;
   height: 22px;
-  margin-left: 3px;
   background: var(--media-text);
   -webkit-mask: url("icons/play.svg") center / contain no-repeat;
   mask: url("icons/play.svg") center / contain no-repeat;
@@ -564,11 +569,15 @@ label { -webkit-tap-highlight-color: transparent; }
   padding-right: 14px;
   background-image: none;
 }
+/* --text, not --media-text: this control sits on --field (the panel canvas),
+   not on the media. --media-text is pinned to #ffffff for overlay chips, so
+   using it here rendered white-on-white in the light theme whenever a video
+   offered a single quality and the select went disabled. */
 #now-qselect:disabled {
-  color: var(--media-text);
+  color: var(--text);
   opacity: 1;
   cursor: default;
-  -webkit-text-fill-color: var(--media-text);
+  -webkit-text-fill-color: var(--text);
 }
 #now-qselect option {
   color: var(--media-text);
@@ -650,7 +659,8 @@ label { -webkit-tap-highlight-color: transparent; }
 }
 .picks-head > span { display: none; }
 .link-btn {
-  padding: 2px 0;
+  /* 3px + 18px line-height + 3px = the 24px WCAG 2.5.8 target minimum. */
+  padding: 3px 0;
   color: var(--muted);
   background: transparent;
   border: 0;
@@ -687,22 +697,27 @@ label { -webkit-tap-highlight-color: transparent; }
   align-content: start;
   overflow: hidden auto;
 }
-/* Chromium-only thin scrollbar. The standard scrollbar-width/color land in
-   Chrome 121; the extension supports 116+, so style the WebKit pseudo-element
-   (universal in Chromium) instead of the Safari/Firefox standard properties.
-   A transparent border + padding-box clip insets the thumb so it reads as a
-   floating capsule instead of a bar flush against the edge; --scroll-thumb
-   sits a step above --line so it stays visible on the dark canvas without
-   competing with real content. */
-.grid::-webkit-scrollbar { width: 10px; }
-.grid::-webkit-scrollbar-thumb {
-  border: 3px solid transparent;
-  border-radius: var(--r-pill);
-  background: var(--scroll-thumb);
-  background-clip: padding-box;
+/* One rule for every container that scrolls (.grid, .now, .settings-body): the
+   bar is never painted, on any surface, so it can't compete with content or
+   read differently from tab to tab. Scrolling itself is untouched — this only
+   styles pseudo-elements, never `overflow`, so wheel/touch/keyboard still work.
+   The standard scrollbar-width lands in Chrome 121 and this extension supports
+   116+, so ::-webkit-scrollbar is what does the real work across the supported
+   range; scrollbar-width rides along for the versions that honour it.
+   Zeroing the width also drops the ~10px of layout Chromium reserves for a
+   classic scrollbar, so .grid's right-hand column no longer narrows (and its
+   card titles no longer truncate) just because the list became scrollable. */
+.grid,
+.now,
+.settings-body {
+  scrollbar-width: none;
 }
-.grid::-webkit-scrollbar-thumb:hover { background: var(--scroll-thumb-hover); background-clip: padding-box; }
-.grid::-webkit-scrollbar-track { background: transparent; }
+.grid::-webkit-scrollbar,
+.now::-webkit-scrollbar,
+.settings-body::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+}
 .grid:empty { display: none; }
 .spacer { display: none; }
 
@@ -780,10 +795,11 @@ label { -webkit-tap-highlight-color: transparent; }
   cursor: pointer;
 }
 
+/* Keeps the 26px the shared block above sets, so the two corner controls share
+   one vertical centre (at 22px this circle rode 2px higher than .card-dl) and
+   the hit target clears the 24px WCAG 2.5.8 minimum. */
 .pick {
   left: 8px;
-  width: 22px;
-  height: 22px;
   border: 2px solid var(--media-muted);
   background: var(--media-control-soft);
 }
@@ -892,9 +908,6 @@ label { -webkit-tap-highlight-color: transparent; }
   gap: 0;
   overflow: hidden auto;
 }
-/* Hidden scrollbar via the Chromium pseudo-element (see .grid for why the
-   standard scrollbar-width is avoided). */
-.settings-body::-webkit-scrollbar { width: 0; height: 0; }
 .set-section { flex: none; }
 .set-card { padding: 4px 14px; background: var(--surface); border-radius: var(--r-md); }
 .set-label {
@@ -976,7 +989,7 @@ label { -webkit-tap-highlight-color: transparent; }
 .settings-footer { margin-top: 4px; padding: 2px 2px 12px; display: flex; flex-direction: column; align-items: center; gap: 3px; text-align: center; color: var(--faint); }
 .settings-rights,
 .settings-version { margin: 0; font-size: 11.5px; line-height: 17px; }
-.settings-version { flex: none; font-family: var(--font); font-weight: 700; opacity: 0.72; }
+.settings-version { flex: none; font-family: var(--font); font-weight: 700; }
 
 .views {
   flex: none;
@@ -1080,17 +1093,18 @@ label { -webkit-tap-highlight-color: transparent; }
   border-bottom: 1px solid var(--line);
 }
 .brand-text h1 { white-space: nowrap; }
+/* No gradient here any more: logo.svg carries the tile itself, so the CSS only
+   sizes it and keeps the glow. border-radius still matters — it clips the img to
+   the same 8px the SVG's own rx=9 renders to at 28px, so the box-shadow hugs the
+   tile instead of a square. */
 .brand-logo {
   width: 28px;
   height: 28px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
+  display: block;
   border-radius: 8px;
-  background: linear-gradient(150deg, #3a8bff, #1f6bff);
   box-shadow: 0 2px 8px rgba(47, 125, 255, 0.4);
 }
-.brand-logo svg { width: 16px; height: 16px; }
+.brand-logo img { width: 28px; height: 28px; display: block; }
 .brand-text h1 { font-size: 15px; font-weight: 800; letter-spacing: -0.02em; }
 .brand-live {
   gap: 6px;
@@ -1157,16 +1171,6 @@ label { -webkit-tap-highlight-color: transparent; }
 /* Chromium-only thin scrollbar (see .grid): standard scrollbar-width only lands
    in Chrome 121 and the extension supports 116+, so style the WebKit
    pseudo-element and skip the flagged standard properties entirely. */
-.now::-webkit-scrollbar { width: 10px; }
-.now::-webkit-scrollbar-thumb {
-  border: 3px solid transparent;
-  border-radius: var(--r-pill);
-  background: var(--scroll-thumb);
-  background-clip: padding-box;
-}
-.now::-webkit-scrollbar-thumb:hover { background: var(--scroll-thumb-hover); background-clip: padding-box; }
-.now::-webkit-scrollbar-track { background: transparent; }
-
 /* The media wants a 10:16 story frame, but it must yield height to the details
    below rather than push the download button past the fold. flex-shrink lets it
    give up the difference; only under --min-height does the panel start to
@@ -1203,6 +1207,11 @@ label { -webkit-tap-highlight-color: transparent; }
   border-radius: var(--r-md);
   overflow: hidden;
 }
+/* Images have no duration, so the middle cell is hidden and a fixed repeat(3)
+   would leave the last third empty with the divider off-centre. The column
+   count has to follow the number of visible cells; sidepanel.ts sets this
+   alongside the [hidden] toggle on the duration metric. */
+.metrics.is-two-up { grid-template-columns: repeat(2, 1fr); }
 .metric { flex-direction: column; align-items: flex-start; gap: 5px; padding: 12px 14px; }
 .metric + .metric { border-left: 1px solid var(--line); }
 .metric-label { font-size: 10px; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase; }

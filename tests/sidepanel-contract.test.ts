@@ -213,8 +213,28 @@ test('commits max saved items from the keyboard by blurring on Enter', () => {
   );
 });
 
-test('keeps the build-time 32px logo source in the brand', () => {
+// This used to only assert that SOME inline 32x32 <svg> sat in the brand, which
+// is exactly how the header's private copy of the glyph drifted away from the
+// logo.svg the toolbar icons are built from — two different logos, both "valid".
+// The property worth pinning is single-sourcing, not the presence of a tag.
+test('the header brand mark and the icon generator read the exact same logo.svg — no duplicated glyph', () => {
   const brand = html.match(/<span\b[^>]*class="brand-logo"[^>]*>([\s\S]*?)<\/span>/);
   assert.ok(brand, 'missing .brand-logo');
-  assert.match(brand[1]!, /<svg\b[^>]*viewBox="0 0 32 32"/);
+  assert.match(
+    brand[1]!,
+    /<img\b[^>]*src="icons\/logo\.svg"/,
+    'the header must render icons/logo.svg, not a private copy of the mark',
+  );
+  assert.doesNotMatch(
+    brand[1]!,
+    /<svg\b/,
+    'the header must not reintroduce an inline glyph — logo.svg is the only source of the brand mark',
+  );
+
+  const generator = readFileSync(join(ROOT, 'scripts', 'generate-icons.mjs'), 'utf8');
+  assert.match(
+    generator,
+    /join\(ROOT,\s*'src',\s*'sidepanel',\s*'icons',\s*'logo\.svg'\)/,
+    "generate-icons.mjs must read src/sidepanel/icons/logo.svg — the exact file the header's <img src=\"icons/logo.svg\"> resolves to from src/sidepanel/sidepanel.html",
+  );
 });
