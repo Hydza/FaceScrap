@@ -17,3 +17,8 @@ artifacts/
 # Editor / OS
 .DS_Store
 Thumbs.db
+
+# Tooling — machine-local agent/index state
+.claude/settings.local.json
+.serena/
+.codegraph
