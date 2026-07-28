@@ -23,6 +23,19 @@ All notable changes to FaceScrap are documented here. The format follows
 
 ### Fixed
 
+- **Every HD (DASH) download failed instantly.** Instrumenting the offscreen
+  document added a `chrome.storage.onChanged` listener to it — but an offscreen
+  document is given `chrome.runtime` and essentially nothing else, and
+  `chrome.storage` is undefined there. The reference threw while the script was
+  still evaluating, so the mux listener at the bottom of that file never
+  registered: `FACESCRAP_MUX` reached no receiver, `sendMessage` resolved
+  `undefined` in about a millisecond, and the worker reported the generic "Could
+  not merge audio and video." Direct downloads were unaffected, which is what
+  made it look like a Facebook-side problem. The offscreen document now receives
+  the diagnostics flag on the mux request and returns its trace in the mux
+  answer, using the one API it actually has. Found by reading the first exported
+  report: 110 of 110 DASH downloads failed, all in under 2 ms, with zero events
+  from the offscreen context.
 - The content script's first diagnostic event (`contentReady`) was recorded
   without arming its report timer, so on an otherwise idle tab it never reached
   the worker — the trace read as if the content script had never started.

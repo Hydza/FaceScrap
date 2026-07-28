@@ -2808,14 +2808,19 @@ async function exerciseDiagnostics(page, facebookPage) {
         documentOverflows: document.documentElement.scrollWidth > document.documentElement.clientWidth + 1,
         width: Math.round(box.width),
         buttons,
-        // Both on one line at this width: the wrap is the 300px fallback, not the norm.
-        sameRow: [...actions.children].every((b) => Math.abs(b.getBoundingClientRect().top - box.top) < 1),
+        // How many lines they actually took. Language-dependent: the Spanish
+        // labels ("Exportar informe" + "Reiniciar contadores") are wider than the
+        // row, so they wrap — which is what flex-wrap is FOR. Asserting one row
+        // here would be asserting English.
+        rows: new Set([...actions.children].map((b) => Math.round(b.getBoundingClientRect().top))).size,
+        // What actually matters in both languages: no button is clipped.
+        allFit: [...actions.children].every((b) => b.getBoundingClientRect().width <= box.width + 1),
       };
     })()`,
   );
   metrics.actionsLayout = layout;
   checks['layout:noOverflow'] = layout.overflows === false && layout.documentOverflows === false;
-  checks['layout:sameRow'] = layout.sameRow === true;
+  checks['layout:allButtonsFit'] = layout.allFit === true;
   // The diagnostics card is the last thing on the Advanced page, well below the
   // fold at 340px — an un-scrolled screenshot frames the filename template instead.
   await evaluate(page, `document.querySelector('.diagnostics')?.scrollIntoView({ block: 'end' })`);

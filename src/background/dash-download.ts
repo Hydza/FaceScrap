@@ -6,6 +6,8 @@
 // caller owns tabs, receipts and badges.
 
 import { createJobChain, withHeartbeat } from '../shared/async';
+import { diagLogEnabled } from '../shared/diag-log';
+import { addDiagEvents } from '../shared/diag-store';
 import {
   MUX_HARD_CAP_MS,
   MUX_PORT,
@@ -245,7 +247,14 @@ async function runDownloadDash(
     let res: MuxResponse | undefined;
     try {
       const guarded = withHeartbeat(
-        chrome.runtime.sendMessage({ type: 'FACESCRAP_MUX', videoUrl, audioUrl } satisfies MuxMsg),
+        // The flag rides along: the offscreen document cannot read settings for
+        // itself (no chrome.storage there — see offscreen.ts).
+        chrome.runtime.sendMessage({
+          type: 'FACESCRAP_MUX',
+          videoUrl,
+          audioUrl,
+          diag: diagLogEnabled(),
+        } satisfies MuxMsg),
         MUX_IDLE_MS,
         MUX_HARD_CAP_MS,
         'The merge timed out.',
@@ -256,6 +265,10 @@ async function runDownloadDash(
       } finally {
         activeBeat = null;
       }
+      // Persisted here rather than by the sender, on BOTH outcomes: the trace of a
+      // failed merge is the whole reason it is collected. addDiagEvents sanitizes
+      // and bounds; a no-op when the array is empty or diagnostics are off.
+      if (res?.events != null) void addDiagEvents(res.events).catch(() => {});
     } catch (e) {
       // A timed-out mux may still be RUNNING over there: the guard only stops
       // waiting, and there is no cancel message. Left alive, the wedge keeps the

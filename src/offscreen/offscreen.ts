@@ -14,34 +14,25 @@
 
 import { createJobChain } from '../shared/async';
 import { diagLog, diagLogDrain, errorText, redactUrl, setDiagContext, setDiagLogEnabled } from '../shared/diag-log';
-import { addDiagEvents } from '../shared/diag-store';
 import { MUX_PORT, MUX_PROGRESS_MS, type MuxProgress, type MuxResponse, type RuntimeMessage } from '../shared/messages';
 import { remux } from '../shared/mp4-remux';
-import { loadSettings } from '../shared/settings';
 import { fetchDashTracks, MAX_DASH_OUTPUT_BYTES } from '../shared/track-fetch';
 
 // Diagnostics (see shared/diag-log.ts). This document is where an HD download
 // actually happens — the two track fetches and the remux — so a failure here is
-// the one the user reports as "saving does nothing". It writes its own events
-// rather than routing them through the worker: it already holds chrome.storage,
-// and its answer to the worker is a one-shot sendMessage with no room for them.
+// the one the user reports as "saving does nothing".
+//
+// AN OFFSCREEN DOCUMENT HAS chrome.runtime AND ESSENTIALLY NOTHING ELSE.
+// `chrome.storage` is undefined here (measured on Edge 150; see
+// tests/fix-offscreen-apis.test.ts). It cannot read the diagnostics setting and
+// cannot persist what it records, so it does neither: the worker sends the flag on
+// the mux request, and this document hands its trace back in the mux answer.
+//
+// This is not a style preference. Touching chrome.storage at module scope here
+// throws while this script is still evaluating, which means the mux listener at the
+// bottom of this file never registers — and every HD download then fails instantly
+// with a generic error, because the worker's message reaches no receiver.
 setDiagContext('offscreen');
-function refreshDiagFlag(): void {
-  void loadSettings()
-    .then((s) => setDiagLogEnabled(s.diagEnabled))
-    .catch(() => setDiagLogEnabled(false));
-}
-refreshDiagFlag();
-chrome.storage.onChanged.addListener((changes, area) => {
-  if (area === 'local' && 'settings' in changes) refreshDiagFlag();
-});
-
-/** Persist this document's trace. Called at each job boundary — an offscreen
- *  document can be torn down by the worker the moment its answer is sent. */
-function flushDiag(): void {
-  const events = diagLogDrain();
-  if (events.length > 0) void addDiagEvents(events).catch(() => {});
-}
 /** Opens a progress port to the worker for ONE job. Jobs are serialized on both
  *  sides (muxQueue here, dashChain there), so at most one is ever open. */
 function progressPort(): { report: (p: MuxProgress) => void; close: () => void } {
@@ -159,7 +150,6 @@ function enqueueMux(videoUrl: string, audioUrl: string): Promise<string> {
       throw error;
     } finally {
       port.close();
-      flushDiag();
     }
   });
 }
@@ -170,12 +160,18 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (sender.tab) return undefined;
   const m = msg as RuntimeMessage | undefined;
   if (m?.type === 'FACESCRAP_MUX') {
+    // The flag arrives with the job, since this context cannot read settings. Set
+    // before the job starts so the whole job is traced, and cleared by the drain
+    // below so one job's events can never be reported twice.
+    setDiagLogEnabled(m.diag === true);
     (async () => {
       try {
         const blobUrl = await enqueueMux(m.videoUrl, m.audioUrl);
-        sendResponse({ ok: true, blobUrl } satisfies MuxResponse);
+        sendResponse({ ok: true, blobUrl, events: diagLogDrain() } satisfies MuxResponse);
       } catch (e) {
-        sendResponse({ ok: false, error: String((e as Error)?.message ?? e) } satisfies MuxResponse);
+        // The failure path is the one whose trace matters most — it carries the
+        // track sizes and the remux error behind the worker's generic message.
+        sendResponse({ ok: false, error: String((e as Error)?.message ?? e), events: diagLogDrain() } satisfies MuxResponse);
       }
     })();
     return true; // keep the channel open for the async response
