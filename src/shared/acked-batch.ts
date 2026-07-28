@@ -18,9 +18,9 @@ interface AckedBatchOptions<T, K = never> {
   key?: (item: T) => K;
   /** Combines a queued item with a newer item of the same key. */
   merge?: (queued: T, incoming: T) => T;
-  /** Which unique item loses when the bounded queue is full. In-flight items
-   *  are immutable and are never eligible for oldest eviction. */
-  overflow?: 'drop-newest' | 'drop-oldest';
+  /** Evict the OLDEST queued item when the bounded queue is full, instead of
+   *  refusing the newest. In-flight items are immutable and never eligible. */
+  overflow?: 'drop-oldest';
   /** Halve a rejected multi-item front batch on its next delivery attempt. */
   splitOnFailure?: boolean;
   /** Move a repeatedly rejected single item behind newer queued work. */

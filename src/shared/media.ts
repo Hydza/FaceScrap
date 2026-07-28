@@ -122,13 +122,10 @@ export function isNumericMediaId(value: unknown): value is string {
   return typeof value === 'string' && NUMERIC_MEDIA_ID_RE.test(value);
 }
 
-/** DASH byte-range segment query param names. widenDashUrl strips them below
- *  to recover the full-track URL; classifyNetworkRequest's isDash check tests
- *  for them too. The comment here used to say service-worker.ts re-spelled the
- *  pair as an inline regex and that the export existed for that copy to reference
- *  — it imports DASH_BYTE_RANGE_RE now, so there is no second literal to keep in
- *  lockstep. */
-export const DASH_BYTE_RANGE_PARAMS = ['bytestart', 'byteend'] as const;
+/** DASH byte-range segment query params. widenDashUrl strips them to recover the
+ *  full-track URL; classifyNetworkRequest's isDash check and service-worker.ts's
+ *  DASH_BYTE_RANGE_RE both derive from this pair so they cannot drift apart. */
+const DASH_BYTE_RANGE_PARAMS = ['bytestart', 'byteend'] as const;
 export const DASH_BYTE_RANGE_RE = new RegExp(`[?&](?:${DASH_BYTE_RANGE_PARAMS.join('|')})=`);
 
 /** Widen a DASH byte-range segment URL into the full-track URL. */

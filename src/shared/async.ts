@@ -1,15 +1,12 @@
 // Tiny async helpers shared across contexts (side panel, service worker).
 
 /** A timeout that measures IDLENESS, not elapsed time: `beat()` restarts the
- *  clock, so work that keeps reporting progress is never cut off.
+ *  clock, so work that keeps reporting progress is never cut off. A wall-clock
+ *  cap cannot tell a wedged job from a slow one, and killed large tracks on
+ *  slow-but-steady links deterministically.
  *
- *  A wall-clock cap cannot tell a wedged job from a slow one. The offscreen
- *  document learned this for single track reads (see STALL_MS there) but the
- *  worker still capped the whole mux round-trip at a fixed 115s, so a large
- *  track on a slow-but-steady link died mid-download — deterministically, and
- *  with every downloaded byte thrown away. `hardCapMs` stays as the backstop
- *  for the case the idle timer cannot see: an offscreen document that died
- *  outright would send neither progress nor an answer.
+ *  `hardCapMs` is the backstop for what the idle timer cannot see: a peer that
+ *  died outright and sends neither progress nor an answer.
  *
  *  Returns the guarded promise plus the beat function; the caller wires `beat`
  *  to whatever progress channel it owns. */

@@ -8,6 +8,7 @@
 import { withTimeout } from '../shared/async';
 import { createAckedLatest, type AckedLatestOutcome } from '../shared/acked-latest';
 import { diagBump } from '../shared/diag';
+import type { NoteFn } from './content-diag';
 import {
   isFbcdn,
   isNumericMediaId,
@@ -159,8 +160,7 @@ interface CentreMedia {
 interface PlayingDeps {
   relay: (items: MediaItem[]) => void;
   scheduleTheme: () => void;
-  /** Record one traced event (see content-diag.ts's `note`). */
-  note: (ev: string, data?: Record<string, string | number | boolean>) => void;
+  note: NoteFn;
 }
 
 interface PlayingDetector {

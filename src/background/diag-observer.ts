@@ -24,16 +24,11 @@ interface DiagObserverOptions {
   /** diag-log.ts's ring for the context this observer runs in — its drain and its
    *  flag travel together for exactly the reason workerCounters' do below. */
   workerEvents?: { drain: () => DiagEvent[]; setEnabled: (enabled: boolean) => void };
-  /** diag.ts's counters for the context this observer runs in — its drain and its flag,
-   *  as ONE option so the compiler cannot let a caller wire half of it.
-   *
-   *  There are two flags in play and they are easy to mistake for one: `enabled` below
-   *  decides whether renderer reports are persisted, while `setEnabled` here decides
-   *  whether a diagBump raised in this context is counted at all. The worker passed only
-   *  the drain, so every counter it raises for itself — captureNetwork, the storage
-   *  evictions, the in-page button's refusals — was a no-op that reached the panel as
-   *  zero. A drain without its flag can only ever return nothing, which is why the two
-   *  no longer travel separately. */
+  /** diag.ts's counters for the context this observer runs in — drain and flag as ONE
+   *  option, so a caller cannot wire half of it. The two flags are easy to conflate:
+   *  `enabled` below decides whether renderer reports are persisted; `setEnabled` here
+   *  decides whether a diagBump raised in THIS context is counted at all. A drain
+   *  without its flag can only ever return nothing. */
   workerCounters?: { drain: () => DiagCounters; setEnabled: (enabled: boolean) => void };
   intervalMs?: number;
   maxTabs?: number;

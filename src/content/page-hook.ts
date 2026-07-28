@@ -44,23 +44,14 @@ import {
   trimQueueToBudget,
   type BoundedCollector,
 } from '../shared/page-hook-limits';
+import { HOOK_ALIVE_ATTR } from '../shared/hook-attr';
 
 // --- Idempotency: is a hook already alive in this document? ---
-// page-hook.js can be installed into the SAME document twice: once by
-// manifest.json's declarative MAIN-world entry, once more by content.ts's
-// runtime <script> fallback (ensurePageHook()) if content.ts believes —
-// rightly or not — that no hook survived an update (see content-recovery.ts).
-// Each injection is a fresh evaluation of this file with its own module-scope
-// state, so a plain variable here cannot see a prior installation. The DOM is
-// the one thing every injection of this script, and the ISOLATED-world
-// content.ts/content-recovery.ts (which share no JS globals with this world
-// at all — only the DOM and postMessage), can all read and write: an
-// attribute on <html>, set here before anything else runs, answers "is a hook
-// alive in this document" at ANY later time with one synchronous read — no
-// listener has to already be registered, so there is no race to lose. (The
-// pre-fix design's only such answer was page-hook.ts's one-shot startup query
-// below being caught by a content.ts listener that may not exist yet.)
-const HOOK_ALIVE_ATTR = 'data-facescrap-hook';
+// page-hook.js can run twice in one document: manifest.json's declarative MAIN-world
+// entry, and content.ts's runtime <script> fallback if it believes no hook survived an
+// update (see content-recovery.ts). Each run is a fresh module evaluation with its own
+// state, so only the DOM — the one thing this world shares with the ISOLATED-world
+// content scripts — can answer "is a hook alive" synchronously, with no listener race.
 const alreadyHooked = document.documentElement.hasAttribute(HOOK_ALIVE_ATTR);
 if (!alreadyHooked) document.documentElement.setAttribute(HOOK_ALIVE_ATTR, '1');
 
@@ -685,34 +676,17 @@ XMLHttpRequest.prototype.open = function (this: XMLHttpRequest, _method: string,
 // This does NOT change how the id is resolved: reelVideoId (data-video-id)
 // still outranks the URL, which lags the scroll. It only makes the content
 // script look sooner.
-// Everything below, through the end of this file, is real installation work
-// that only the FIRST hook instance in this document should do. Unlike the
-// fetch/XHR patches above — whose wrapper bodies check alreadyHooked before
-// doing anything, so a redundant wrapper chain is wasteful but harmless — a
-// wrapped pushState/replaceState calls notifyNav() unconditionally on every
-// real call, and scanDocument's "already scanned" memory (scannedScripts,
-// below) is a fresh, empty WeakSet per module evaluation, invisible to any
-// other instance: a second instance re-notifies on every real navigation and
-// re-walks every <script> tag in the document from scratch, on the very main
-// thread this file otherwise goes out of its way to protect (MAX_BODY_BYTES,
-// yielding every 32 tags below).
+// Everything below is installation work only the FIRST hook instance may do.
+// The fetch/XHR patches above check alreadyHooked inside their own bodies, so a
+// redundant chain is merely wasteful; these are not idempotent — a wrapped
+// pushState calls notifyNav() on every real call, and scanDocument's WeakSet is
+// per-evaluation, so a second instance would re-walk every <script> in the
+// document on the main thread this file works to protect.
 //
-// A per-effect `if (alreadyHooked)` here, mirroring the fetch/XHR patches,
-// would only repeat the failure that left this block unguarded while those
-// two were fixed: it is easy to add a new effect later and forget it needs
-// its own check too. One guard around the whole block instead makes that
-// impossible by construction — a redundant instance installs NOTHING here.
-// That is correct, not merely convenient: a redundant instance does not own
-// the wrappers a live instance already installed, and that live instance is
-// already scanning the document on its own schedule, so the redundant one
-// has no work of its own left to do here.
-//
-// The DOM-liveness stamp and the diag-control message channel, both above,
-// stay OUTSIDE this guard on purpose: the stamp IS the alreadyHooked test
-// itself, and the diag channel only ever flips a local, per-instance
-// counters flag (diag.ts) that nothing below ever calls diagBump to read
-// again once this whole block is skipped — so leaving it live costs nothing
-// and needs no protection.
+// Guarded as ONE block rather than per-effect: a new effect added later would
+// otherwise need to remember its own check. The DOM stamp and the diag channel
+// above stay outside it — the stamp IS the alreadyHooked test, and the diag flag
+// is per-instance state nothing below reads once this block is skipped.
 if (!alreadyHooked) {
   function notifyNav(): void {
     try {

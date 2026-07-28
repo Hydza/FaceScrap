@@ -5,12 +5,10 @@
 // page fetches the separate DASH video + audio tracks from fbcdn
 // (host_permissions bypass CORS) and merges them into one MP4.
 //
-// The merge used to be ffmpeg.wasm running `-c copy -shortest`. It is now
-// src/shared/mp4-remux.ts, which does the same thing — copy the sample bytes,
-// write a new sample table around them, trim to the shorter track — in about 30 KB
-// of JavaScript instead of 9.8 MB of compressed wasm. The output is assembled from
-// Blob slices, so unlike the wasm path the media never passes through this
-// document's memory at all.
+// The merge is src/shared/mp4-remux.ts: copy the sample bytes, write a new sample
+// table around them, trim to the shorter track. Its output is assembled from Blob
+// slices, so the media never passes through this document's memory (see
+// ARCHITECTURE.md's remux invariant).
 
 import { createJobChain } from '../shared/async';
 import { diagLog, diagLogDrain, errorText, redactUrl, setDiagContext, setDiagLogEnabled } from '../shared/diag-log';

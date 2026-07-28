@@ -590,11 +590,10 @@ let lastRenderSig = '';
 // unchanged tick can bail before the card-model rebuild. Must be reset everywhere
 // lastRenderSig is: out of step, it would short-circuit a forced rebuild.
 let lastCheapSig = '';
-// Hold signature-changing rebuilds while the QUALITY picker is open — paintNow
-// rebuilds its options, tearing them out from under the popup, and capture bursts
-// churn the signature exactly while the user is picking. `:open` is the real test;
-// the gesture flag below is the fallback for builds that do not parse it, with a
-// shorter cap because a native picker can close emitting no observable event.
+// Hold signature-changing rebuilds while the quality picker is open — paintNow
+// rebuilds its options, tearing them out from under the open list, and capture bursts
+// churn the signature exactly while the user is picking. See qualityPickerRenderHoldMs
+// below for how "open" is tested.
 let renderBlockedSince = 0;
 let renderRetryTimer: number | undefined;
 const RENDER_HOLD_MAX_MS = 10_000;

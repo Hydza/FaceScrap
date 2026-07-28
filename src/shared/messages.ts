@@ -94,7 +94,7 @@ export type SettingsUpdateAck = SimpleAck;
 // which would make neighbour traffic look post-slide. The storage layer also
 // rejects an older boundary once a newer one has landed for the same tab.
 const MAX_PLAYING_MESSAGE_DELAY_MS = 30_000;
-export const MAX_PLAYING_FUTURE_SKEW_MS = 1_000;
+const MAX_PLAYING_FUTURE_SKEW_MS = 1_000;
 const PLAYING_TIME_EPSILON_MS = 0.001;
 
 /** True when a stored timestamp belongs to an older wall-clock epoch. This is

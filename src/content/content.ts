@@ -16,6 +16,7 @@ import {
   shouldStartContentInstance,
   type ContentScriptInstance,
 } from './content-instance';
+import { HOOK_ALIVE_ATTR } from '../shared/hook-attr';
 import { setupDiagChannel } from './content-diag';
 import { setupDomScan } from './content-dom-scan';
 import { setupMediaRelay } from './content-media-relay';
@@ -41,17 +42,9 @@ const startContentInstance = shouldStartContentInstance(
   forceContentRecovery,
 );
 
-// page-hook.ts stamps this attribute on <html>, synchronously, before it does
-// anything else (see its own "Idempotency" comment) — reading it here is what
-// makes "is a hook alive in this document" answerable without depending on
-// __facescrapHookInjected ever being set. That flag is only ever written by a
-// cross-realm message (page-hook.ts's one-shot startup query, caught by the
-// listener registered further down this file) or by this file's own runtime
-// <script> confirming its load — both of which can, for a declaratively-
-// installed hook, run before this file's listener exists to catch them. The
-// DOM attribute has no such ordering dependency: it is readable the instant
-// page-hook.ts has run, however long ago that was.
-const HOOK_ALIVE_ATTR = 'data-facescrap-hook';
+// page-hook.ts stamps this on <html> before anything else, so it answers "is a hook
+// alive here" with no ordering dependency. __facescrapHookInjected cannot: it is set
+// by a cross-realm message this file's listener may be registered too late to catch.
 function pageHookAliveInDom(): boolean {
   try {
     return document.documentElement.hasAttribute(HOOK_ALIVE_ATTR);

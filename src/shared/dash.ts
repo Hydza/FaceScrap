@@ -8,9 +8,8 @@ import { diagBump } from './diag';
 import { GRAPHQL_DIRECT_URL_KEYS } from './graphql-media';
 import { isFbcdn, widenDashUrl } from './media';
 
-// Keep structured harvesting and raw-text fallbacks on one shared list. These
-// used to be duplicated in page-hook.ts, where the fallback silently missed
-// hd_src/sd_src and four of the five MPD string fields.
+// Keep structured harvesting and raw-text fallbacks on one shared list, so a key
+// added to one path can never go silently missing from the other.
 export const VIDEO_KEYS = [
   'playable_url',
   'playable_url_quality_hd',

@@ -4,6 +4,7 @@
 // the DOM, which is what covers a page the hook was injected too late for.
 
 import { diagBump, diagDrain } from '../shared/diag';
+import type { NoteFn } from './content-diag';
 import {
   isFbcdn,
   isStaticFbAsset,
@@ -33,8 +34,7 @@ interface DomScanDeps {
   relay: (items: MediaItem[]) => void;
   scheduleTheme: () => void;
   reportDiag: (counters: unknown) => void;
-  /** Record one traced event (see content-diag.ts's `note`). */
-  note: (ev: string, data?: Record<string, string | number | boolean>) => void;
+  note: NoteFn;
   /** A fresh image load can also change what is playing. */
   onImageLoaded: () => void;
 }

@@ -29,7 +29,6 @@ import {
   setRecent,
 } from '../shared/storage';
 import { ensureCaptureHeadroom } from '../shared/session-write';
-import { addSaved, SAVED_ID_MAX, SAVED_LABEL_MAX, SAVED_THUMB_MAX, type SavedEntry } from '../shared/saved';
 import {
   addDiagCounters,
   addDiagEvents,
@@ -41,27 +40,20 @@ import {
 import {
   classifyNetworkRequest,
   DASH_BYTE_RANGE_RE,
-  isFbcdn,
   MAX_MEDIA_BATCH_BYTES,
-  MEDIA_KINDS,
-  MEDIA_SOURCES,
   mediaSourceFromLocation,
   sanitizeIncomingItems,
   type MediaSource,
 } from '../shared/media';
 import { forgetVideoGroupMemory } from '../shared/now-playing';
-import {
-  type DownloadDirectMsg,
-  type DownloadDirectResponse,
-  type RuntimeMessage,
-} from '../shared/messages';
+import { type RuntimeMessage } from '../shared/messages';
 import { facebookThemeRefAtReceipt } from '../shared/theme';
 import { hasOffscreen, hasSidePanel } from '../shared/capabilities';
 import { createSettingsMessageHandler, loadSettings } from '../shared/settings';
 import { createDiagObserver } from './diag-observer';
 import { createBindingMessageHandler } from './binding-handler';
+import { createDownloadHandler } from './download-handler';
 import { createContentScriptRecoveryCoordinator } from './content-script-recovery';
-import { downloadDash, downloadDirect } from './dash-download';
 import { createPlayingDownloadHandler } from './playing-download';
 import { createShortcutHandler } from './shortcut-download';
 import { persistNowPlayingMessage } from './playing-handler';
@@ -279,10 +271,11 @@ chrome.tabs.onActivated.addListener(({ tabId }) => {
 const tabLifecycle = createTabLifecycle(captureStorageReady);
 const handleBindingMessage = createBindingMessageHandler(tabLifecycle);
 const handleSettingsMessage = createSettingsMessageHandler();
+const downloads = createDownloadHandler({ isDead: (tabId) => tabLifecycle.isDead(tabId) });
 const handlePlayingDownload = createPlayingDownloadHandler({
   isDead: (tabId) => tabLifecycle.isDead(tabId),
   isFacebookUrl: (url) => FB_URL.test(url ?? ''),
-  persistReceipt: (tabId, receipt) => persistCompletedDownload(tabId, receipt),
+  persistReceipt: (tabId, receipt) => downloads.persistCompletedDownload(tabId, receipt),
 });
 
 // The global keyboard shortcut. Its logic lives in shortcut-download.ts so a test can drive it
@@ -339,13 +332,12 @@ type ContentAck = { ok: true } | { ok: false; retryable: boolean; error: string 
 const INVALID_SENDER: ContentAck = { ok: false, retryable: false, error: 'Invalid or closed sender tab.' };
 
 /**
- * Map a lifecycle rejection to the retry contract the content script acts on. One
- * decision for every capture message — three copies of this drifted apart once.
+ * Map a lifecycle rejection to the retry contract the content script acts on — one
+ * decision for every capture message, so the answer cannot drift per call site.
  *
- * A closed tab or a replaced document is permanent. A pending navigation is worth
- * retrying. A stale tab EPOCH acks ok: the document that would do the retrying is
- * already gone, so answering retryable:false would only make it tear itself down
- * over evidence that was never wrong.
+ * Closed tab or replaced document: permanent. Pending navigation: retryable. Stale
+ * tab EPOCH acks ok — the document that would retry is already gone, so
+ * retryable:false would only make it tear itself down over sound evidence.
  */
 function lifecycleAck(err: unknown): ContentAck {
   if (err instanceof StaleTabEpochError) return { ok: true };
@@ -356,61 +348,6 @@ function lifecycleAck(err: unknown): ContentAck {
       !(err instanceof ClosedTabError || err instanceof StaleDocumentError),
     error: err instanceof Error ? err.message : String(err),
   };
-}
-
-function sanitizeDownloadFilename(raw: unknown): string | undefined {
-  if (typeof raw !== 'string' || raw.length === 0 || raw.length > 240 || /[\\:*?"<>|\r\n]/.test(raw)) return undefined;
-  const parts = raw.split('/');
-  return parts.some((part) => part.length === 0 || part === '.' || part === '..') ? undefined : raw;
-}
-
-function sanitizeDownloadReceipt(raw: unknown): SavedEntry | undefined {
-  if (raw == null || typeof raw !== 'object') return undefined;
-  const receipt = raw as Record<string, unknown>;
-  if (
-    typeof receipt.id !== 'string' ||
-    receipt.id.length === 0 ||
-    receipt.id.length > SAVED_ID_MAX ||
-    typeof receipt.kind !== 'string' ||
-    !MEDIA_KINDS.has(receipt.kind) ||
-    typeof receipt.source !== 'string' ||
-    !MEDIA_SOURCES.has(receipt.source)
-  ) {
-    return undefined;
-  }
-  const clean: SavedEntry = {
-    id: receipt.id,
-    kind: receipt.kind as SavedEntry['kind'],
-    source: receipt.source as SavedEntry['source'],
-    // The durable receipt is minted only after Chrome confirms `complete`.
-    savedAt: Date.now(),
-  };
-  if (typeof receipt.thumbUrl === 'string' && receipt.thumbUrl.length <= SAVED_THUMB_MAX && isFbcdn(receipt.thumbUrl)) {
-    clean.thumbUrl = receipt.thumbUrl;
-  }
-  if (typeof receipt.resLabel === 'string') clean.resLabel = receipt.resLabel.slice(0, SAVED_LABEL_MAX);
-  if (typeof receipt.durationSec === 'number' && Number.isFinite(receipt.durationSec)) {
-    clean.durationSec = receipt.durationSec;
-  }
-  return clean;
-}
-
-async function persistCompletedDownload(tabId: number, receipt: SavedEntry): Promise<void> {
-  if (tabLifecycle.isDead(tabId)) return;
-  try {
-    await addSaved(tabId, { ...receipt, savedAt: Date.now() });
-  } catch (err) {
-    // The download itself already succeeded — the file callers report ok:true
-    // for is genuinely on disk by the time this runs — and addSaved has
-    // already exhausted its own retry/shed attempts before rethrowing. A
-    // receipt-write failure must never be reported as a failed DOWNLOAD: the
-    // panel would tag the card Failed with a Retry, and clicking it lands
-    // inside dashDeduper's success window and no-ops, showing an instant
-    // "success" that hides the fact the file was already saved the first
-    // time. Surfaced here rather than via a diag counter (diag.ts has no
-    // reason for this loss class today).
-    diagError('Saved receipt write failed after a successful download', err, { tab: tabId, id: receipt.id });
-  }
 }
 
 // 1. Observe fbcdn media streams (reels/stories video + DASH tracks).
@@ -522,6 +459,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (handleBindingMessage(msg, sender, sendResponse)) return true;
   if (handleSettingsMessage(msg, sender, sendResponse)) return true;
   if (handlePlayingDownload(msg, sender, sendResponse)) return true;
+  if (downloads.handle(msg, sender, sendResponse)) return true;
   const tabId = sender.tab?.id;
   // Narrowing on the shared union couples this receiver to the senders at
   // compile time. The runtime field checks below are not redundant: content
@@ -642,127 +580,6 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       (e: unknown) => sendResponse({ ok: false, error: String((e as Error)?.message ?? e) }),
     );
     return true; // async response
-  }
-
-  if (m?.type === 'FACESCRAP_DOWNLOAD_DASH') {
-    // Only the extension's own pages (side panel / popup) may drive a download.
-    // A content script has sender.tab set; reject it so a compromised page can't
-    // request a remux/download of an arbitrary URL.
-    if (sender.tab) {
-      sendResponse({ ok: false, error: 'Unauthorized request.' });
-      return true;
-    }
-    const { tabId: requestedTab, videoUrl, audioUrl, filename: rawFilename, saveAs, receipt: rawReceipt } = msg as {
-      tabId?: unknown;
-      videoUrl?: unknown;
-      audioUrl?: unknown;
-      filename?: unknown;
-      saveAs?: unknown;
-      receipt?: unknown;
-    };
-    const filename = sanitizeDownloadFilename(rawFilename);
-    const receipt = sanitizeDownloadReceipt(rawReceipt);
-    if (
-      typeof requestedTab !== 'number' ||
-      !Number.isInteger(requestedTab) ||
-      requestedTab < 0 ||
-      tabLifecycle.isDead(requestedTab) ||
-      typeof videoUrl !== 'string' ||
-      typeof audioUrl !== 'string' ||
-      filename == null ||
-      receipt == null ||
-      !isFbcdn(videoUrl) ||
-      !isFbcdn(audioUrl)
-    ) {
-      sendResponse({ ok: false, error: 'Invalid download request.' });
-      return true;
-    }
-    if (!hasOffscreen()) {
-      sendResponse({
-        ok: false,
-        error: 'This browser can\'t merge audio and video (no offscreen API). Download the direct version.',
-      });
-      return true;
-    }
-    const dashStartedAt = Date.now();
-    diagLog('downloadStart', {
-      mode: 'dash',
-      tab: requestedTab,
-      file: filename,
-      video: redactUrl(videoUrl),
-      audio: redactUrl(audioUrl),
-    });
-    downloadDash({
-      tabId: requestedTab,
-      receiptId: receipt.id,
-      videoUrl,
-      audioUrl,
-      filename,
-      saveAs: saveAs === true,
-    })
-      .then(() => persistCompletedDownload(requestedTab, receipt))
-      .then(
-        () => {
-          diagLog('downloadDone', { mode: 'dash', tab: requestedTab, ms: Date.now() - dashStartedAt });
-          sendResponse({ ok: true });
-        },
-        (e: unknown) => {
-          // The panel already shows this on the card; the log is what keeps it
-          // after the panel is closed, next to the capture that produced the URL.
-          diagLog(
-            'downloadFailed',
-            { mode: 'dash', tab: requestedTab, ms: Date.now() - dashStartedAt, error: errorText(e) },
-            'error',
-          );
-          sendResponse({ ok: false, error: String((e as Error)?.message ?? e) });
-        },
-      );
-    return true; // async response
-  }
-
-  if (m?.type === 'FACESCRAP_DOWNLOAD_DIRECT') {
-    if (sender.tab) {
-      sendResponse({ ok: false, error: 'Unauthorized request.' } satisfies DownloadDirectResponse);
-      return true;
-    }
-    const request = msg as Partial<DownloadDirectMsg>;
-    const filename = sanitizeDownloadFilename(request.filename);
-    const receipt = sanitizeDownloadReceipt(request.receipt);
-    if (
-      !Number.isInteger(request.tabId) ||
-      (request.tabId ?? -1) < 0 ||
-      tabLifecycle.isDead(request.tabId as number) ||
-      typeof request.url !== 'string' ||
-      !isFbcdn(request.url) ||
-      filename == null ||
-      receipt == null
-    ) {
-      sendResponse({ ok: false, error: 'Invalid download request.' } satisfies DownloadDirectResponse);
-      return true;
-    }
-    const requestedTab = request.tabId as number;
-    const directStartedAt = Date.now();
-    diagLog('downloadStart', { mode: 'direct', tab: requestedTab, file: filename, url: redactUrl(request.url) });
-    downloadDirect(request.url, filename, request.saveAs === true)
-      .then(() => persistCompletedDownload(requestedTab, receipt))
-      .then(
-        () => {
-          diagLog('downloadDone', { mode: 'direct', tab: requestedTab, ms: Date.now() - directStartedAt });
-          return sendResponse({ ok: true } satisfies DownloadDirectResponse);
-        },
-        (error: unknown) => {
-          diagLog(
-            'downloadFailed',
-            { mode: 'direct', tab: requestedTab, ms: Date.now() - directStartedAt, error: errorText(error) },
-            'error',
-          );
-          return sendResponse({
-            ok: false,
-            error: String((error as Error)?.message ?? error),
-          } satisfies DownloadDirectResponse);
-        },
-      );
-    return true;
   }
 
   return undefined;

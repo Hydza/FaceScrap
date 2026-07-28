@@ -496,7 +496,13 @@ p { margin: 0; }
   color: var(--md);
   font-size: 12.5px;
   line-height: 1.55;
-  text-wrap: pretty;
+}
+/* text-wrap: pretty lands in Chromium 117 and this extension supports 116, where the
+   declaration is dropped and the paragraph wraps normally. Behind @supports so the
+   intent is explicit rather than looking like an oversight. */
+@supports (text-wrap: pretty) {
+  .empty p,
+  .set-prose { text-wrap: pretty; }
 }
 .empty-actions { width: 100%; max-width: 240px; display: flex; flex-direction: column; gap: 8px; }
 .empty-promise {
@@ -1482,7 +1488,7 @@ p { margin: 0; }
 }
 /* The one card whose content is prose, not rows. */
 .set-card.is-prose { padding: 13px; }
-.set-prose { color: var(--md); font-size: 11.5px; line-height: 1.55; text-wrap: pretty; }
+.set-prose { color: var(--md); font-size: 11.5px; line-height: 1.55; }
 .set-prose code {
   color: var(--ach);
   font-family: var(--mono);

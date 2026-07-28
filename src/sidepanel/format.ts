@@ -22,12 +22,6 @@ export function presentationKey(kind: MediaKind, source: MediaSource): MsgKey {
   return kind === 'image' && source === 'video' ? 'kindImage' : SOURCE_KEY[source];
 }
 
-export const KIND_KEY: Record<MediaKind, MsgKey> = {
-  video: 'kindVideo',
-  image: 'kindImage',
-  audio: 'kindAudio',
-};
-
 export const KIND_ICON: Record<MediaKind, string> = {
   video: 'icons/nav-now.svg',
   image: 'icons/nav-library.svg',

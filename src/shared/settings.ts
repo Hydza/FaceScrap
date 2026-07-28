@@ -451,15 +451,12 @@ export async function saveSettings(patch: SettingsPatch): Promise<void> {
     }
   }
 
-  // Deliberate, accepted tradeoff (not an oversight): this local fallback runs
-  // only when the worker queue is unreachable — a unit-test context, or an old
-  // worker with no receiver around an extension reload. In that narrow window two
-  // extension pages could each write here without being serialized against one
-  // another. We accept it because chrome.storage offers no cross-context lock (the
-  // worker queue IS the serializer), and dropping the fallback would break every
-  // legitimate no-worker write. A write that reaches here after the worker died
-  // still fails safe via applySetting's rollback. Revisit only if a real
-  // cross-page clobber is ever observed in practice.
+  // Deliberate tradeoff: this runs only when the worker queue is unreachable (a
+  // unit test, or an old worker around a reload), so two pages could race here
+  // unserialized. Accepted because chrome.storage has no cross-context lock — the
+  // worker queue IS the serializer — and dropping the fallback would break every
+  // legitimate no-worker write. A write that lands after the worker died still
+  // fails safe via applySetting's rollback.
   await settingsPatchWriter(pendingPatch);
 }
 

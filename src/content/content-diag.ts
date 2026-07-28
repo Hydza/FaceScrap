@@ -21,6 +21,15 @@ const DIAG_REPORT_INTERVAL_MS = 1_000;
  *  the worker's observer applies its own, larger bound behind this one. */
 const DIAG_EVENT_QUEUE_MAX = 300;
 
+/** Record one traced event from a detector band. Exported so the bands reference
+ *  this type instead of re-declaring it — two hand-copied duplicates had already
+ *  drifted, both missing `lvl`. */
+export type NoteFn = (
+  ev: string,
+  data?: Record<string, string | number | boolean>,
+  lvl?: 'warn' | 'error',
+) => void;
+
 interface DiagChannel {
   /** Accumulate counts and trace from the page hook or this script. Dropped while
    *  disabled. */
@@ -28,10 +37,9 @@ interface DiagChannel {
   /** Record one event from THIS script and make sure it gets reported. The bands
    *  cannot just call diagLog: the report timer is armed here, so an event logged
    *  by a band that never reports counters would sit in the ring unsent. */
-  note: (ev: string, data?: Record<string, string | number | boolean>, lvl?: 'warn' | 'error') => void;
+  note: NoteFn;
   /** Tell the MAIN-world hook the current flag, from cache — never a storage read. */
   announce: () => void;
-  enabled: () => boolean;
 }
 
 export function setupDiagChannel(runtime: ContentRuntime): DiagChannel {
@@ -148,6 +156,5 @@ export function setupDiagChannel(runtime: ContentRuntime): DiagChannel {
       armFlush();
     },
     announce,
-    enabled: () => enabled,
   };
 }

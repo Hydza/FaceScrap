@@ -3,7 +3,7 @@
 // The MIRROR IMAGE of the panel's own download requests: those carry a URL and are
 // refused when sender.tab is set, because a page sharing a process with a content
 // script must never aim the downloader at a URL of its choosing. These carry no URL at
-// all — the tab comes from , which the page cannot forge, and every URL is
+// all — the tab comes from sender.tab, which the page cannot forge, and every URL is
 // resolved from capture state the worker already owns for that tab. So the most a
 // hostile facebook.com page can do is re-download what the user is watching.
 //
@@ -67,20 +67,17 @@ export function createPlayingDownloadHandler(deps: PlayingDownloadDeps) {
 
     void (async () => {
       try {
-        // The switch is read FIRST and on its own, ahead of the four capture-state reads.
-        // The overlay asks this question every 750ms for as long as any media is on screen,
-        // so answering it after those reads meant a switched-off button still paid five
-        // storage reads per poll to be told it has nothing to show. It now pays one.
+        // The switch is read first, alone, ahead of the four capture-state reads: the
+        // overlay polls this every 750ms, so a switched-off button must not pay five
+        // storage reads to learn it has nothing to show.
         //
-        // Answered here rather than in the content script for the same reason every other
-        // "what can this tab download" question is: the overlay decides nothing, it asks.
-        // "Nothing" is the reply it already handles — it hides, and hides BEFORE build(), so
-        // with the button off no node is injected into the page at all.
+        // Answered here, not in the content script: the overlay only asks, and "nothing"
+        // is a reply it already handles — it hides BEFORE build(), so with the button off
+        // no node is injected into the page at all.
         //
-        // Only the OPTIONS query is gated. The download request is shared with the global
-        // keyboard shortcut, which is configured separately and must keep working; and a UI
-        // switch was never the security boundary here anyway — the sender checks above are
-        // (see this file's header for what a compromised renderer can and cannot do).
+        // Only the OPTIONS query is gated; the download request is shared with the global
+        // shortcut and must keep working. The UI switch was never the security boundary —
+        // the sender checks above are (see this file's header).
         const settings = await loadSettings();
         if (!settings.inPageButton && !wantsDownload) {
           sendResponse({ ok: true, media: undefined });

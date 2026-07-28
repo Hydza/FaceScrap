@@ -6,6 +6,7 @@
 // caller owns tabs, receipts and badges.
 
 import { createJobChain, withHeartbeat } from '../shared/async';
+import { hasOffscreen } from '../shared/capabilities';
 import { diagLogEnabled } from '../shared/diag-log';
 import { addDiagEvents } from '../shared/diag-store';
 import {
@@ -39,6 +40,10 @@ let offscreenClosing: Promise<void> | null = null;
 let cancelPendingOffscreenIdleClose: (() => void) | null = null;
 
 async function ensureOffscreen(): Promise<void> {
+  // Checked here, not only at the call sites: every caller happens to gate on
+  // hasOffscreen() today, but a future one that forgets would get a raw TypeError
+  // on a fork without the API instead of this sentence.
+  if (!hasOffscreen()) throw new Error("This browser can't merge audio and video (no offscreen API).");
   const closing = offscreenClosing;
   if (closing) await closing;
   const contexts = await chrome.runtime.getContexts({
@@ -104,18 +109,12 @@ const MUX_IDLE_MS = WORST_CASE_SILENCE_MS + 30_000;
 const DEDUP_WINDOW_MS = MUX_HARD_CAP_MS + 30_000;
 const dashDeduper = createSuccessDeduper(DEDUP_WINDOW_MS, () => performance.now());
 
-// dashDeduper above is in-memory only, so its success window dies with the
-// worker — and MV3 can reap an idle worker roughly a minute after a download
-// settles (see scheduleIdleClose below), well inside DEDUP_WINDOW_MS. A Retry
-// clicked minutes later, after a restart, would otherwise re-run a full
-// track fetch + remux for a file already on disk. Mirror completions into
-// chrome.storage.session — wall-clock stamped (see DedupSnapshot), never
-// performance.now(), which resets its origin every worker instance — and
-// consult the mirror before ever asking dashDeduper to start a fresh job. A
-// separate small key rather than routed through storage.ts: this bookkeeping
-// is unrelated to the captured-media domain storage.ts owns (media/saved/
-// playing/recent/bind), so it does not participate in its capture-headroom
-// reservation or per-tab retention.
+// dashDeduper is in-memory and dies with a worker restart — well inside
+// DEDUP_WINDOW_MS, since MV3 can reap an idle worker about a minute after a
+// download settles (see scheduleIdleClose). Without a durable mirror, a Retry
+// clicked after a restart re-runs a full fetch + remux for a file already on
+// disk. Wall-clock stamped, never performance.now(), whose origin resets per
+// worker instance. Its own key: unrelated to the domain storage.ts owns.
 const DASH_DEDUP_STORAGE_KEY = 'dash_dedup_completed_v1';
 
 async function readDashDedupSnapshot(): Promise<DedupSnapshot> {

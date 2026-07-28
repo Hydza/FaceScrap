@@ -70,11 +70,9 @@ export type DiagReason =
    *  playing media could be saved as. Counts the query, not the download. */
   | 'overlayQueryFailed';
 
-// Keyed off a Record, not written out as an array: `Record<DiagReason, true>` makes the
-// COMPILER reject a reason the union declares and this list omits. It was an array, and
-// `overlayQueryFailed` was missing from it — so the one counter that reports why the
-// in-page button could not ask what was playing was dropped by sanitizeDiagCounters at
-// every boundary and could never appear in the panel.
+// A Record, not an array: `Record<DiagReason, true>` makes the COMPILER reject a reason
+// the union declares and this list omits. Sanitizers read this list at every boundary,
+// so a missing entry silently drops that counter everywhere.
 const REASONS: Record<DiagReason, true> = {
   graphqlBodyTooLarge: true,
   scanQueueEvicted: true,

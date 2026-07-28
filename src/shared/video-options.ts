@@ -126,9 +126,8 @@ export function videoOptions(group: MediaItem[], context: VideoOptionsContext): 
   //                of that size. Measured beats it.
   //   already muxed  only as a tie-break, to skip a remux when nothing else separates them.
   //
-  // The middle tier is the one that was missing. Without it the baseline outscored the rung it
-  // duplicates, so a 720x1280 DASH pair lost its slot to a progressive `tag=..._720p` — the
-  // user picked "720p" and got the worse of the two files.
+  // Without the middle tier the baseline outscores the rung it duplicates, and a 720x1280
+  // DASH pair loses its slot to a progressive `tag=..._720p` — the worse of the two files.
   const score = (i: MediaItem): number =>
     (willHaveAudio(i) ? 4 : 0) +
     (i.width != null && i.width > 0 && i.height != null && i.height > 0 ? 2 : 0) +

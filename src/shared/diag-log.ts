@@ -166,13 +166,10 @@ export function errorText(error: unknown): string {
   }
 }
 
-/** Report a failure to BOTH the console and the log.
- *
- *  The console call is unconditional on purpose: these messages were already
- *  being printed before this log existed, and someone watching the worker console
- *  live must not have to turn diagnostics on to keep seeing them. The log copy is
- *  what makes the same failure readable AFTER the fact, from an export, by
- *  someone who was not watching. */
+/** Report a failure to BOTH the console and the log. The console call is
+ *  unconditional: someone watching the worker console live must not need
+ *  diagnostics on to see it. The log copy is what makes the same failure readable
+ *  afterwards, from an export, by someone who was not watching. */
 export function diagError(ev: string, error: unknown, data?: Record<string, DiagValue>): void {
   console.error(`[FaceScrap] ${ev}`, error);
   diagLog(ev, { ...data, error: errorText(error) }, 'error');

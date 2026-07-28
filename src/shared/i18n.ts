@@ -1,5 +1,9 @@
 // Only panel-rendered strings live here; service-worker/offscreen errors stay console-only English.
-// Pure module (no chrome.*) so it bundles in any context.
+//
+// The table and t()/fmt() are chrome-free, but loadLang/saveLang/resolveLang below use
+// chrome.storage.local — so this bundles into the panel and the ISOLATED-world content
+// script, NEVER the MAIN-world page hook or the offscreen document, neither of which has
+// chrome.storage. (The header used to claim the whole module was chrome-free.)
 
 export type Lang = 'en' | 'es';
 
@@ -787,7 +791,7 @@ export function fmt(key: MsgKey, vars: Record<string, string | number>): string 
 /** Where the manual language choice is stored. */
 export const LANG_KEY = 'lang';
 
-export async function loadLang(): Promise<Lang> {
+async function loadLang(): Promise<Lang> {
   const stored = (await chrome.storage.local.get(LANG_KEY))[LANG_KEY];
   return stored === 'es' ? 'es' : 'en';
 }
@@ -798,8 +802,7 @@ export async function saveLang(lang: Lang): Promise<void> {
 
 /** The language to use: the browser's when "follow browser language" is on,
  *  otherwise the manually-saved choice. Shared so the in-page download overlay
- *  localises exactly like the panel — it used to live inside sidepanel.ts, where
- *  a content script could not reach it. */
+ *  localises exactly like the panel. */
 export async function resolveLang(followBrowserLang: boolean): Promise<Lang> {
   if (followBrowserLang) {
     return (navigator.language || 'en').toLowerCase().startsWith('es') ? 'es' : 'en';

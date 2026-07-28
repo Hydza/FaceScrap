@@ -17,14 +17,15 @@ import { playingVideoGroup, rememberedVideoGroup } from '../src/shared/now-playi
 import { optionForLabel, playingItems, videoGroupOf } from '../src/shared/video-options';
 import { downloadFilename, itemCardId, videoCardId } from '../src/shared/download-naming';
 import { mediaId, videoGroupKey, type MediaItem } from '../src/shared/media';
+import { createDownloadHandler } from '../src/background/download-handler';
 
 const ROOT = process.cwd();
-// The in-page handler lives in playing-download.ts; the router that gates it and the
-// DASH orchestration behind it are separate modules. Concatenated so these assertions
-// follow the code across module moves.
+// Every module the worker side of this feature spans, concatenated so the "must not
+// run the detector" assertion below follows the code across module moves.
 const worker = [
   join(ROOT, 'src', 'background', 'service-worker.ts'),
   join(ROOT, 'src', 'background', 'playing-download.ts'),
+  join(ROOT, 'src', 'background', 'download-handler.ts'),
   join(ROOT, 'src', 'background', 'dash-download.ts'),
 ]
   .map((file) => readFileSync(file, 'utf8'))
@@ -39,17 +40,49 @@ const overlaySource = readFileSync(join(ROOT, 'src', 'content', 'download-overla
 // The two in-page messages carry none and must therefore REQUIRE a tab. Getting
 // either polarity backwards is the whole risk of this feature.
 
-test('keeps refusing URL-carrying download messages from a content script', () => {
+// Driven through the real handler rather than grepped out of the router: since the
+// two URL-carrying messages moved into download-handler.ts they can be invoked
+// directly, which proves the refusal instead of proving the source still spells it.
+test('refuses URL-carrying download messages from a content script', () => {
+  const handler = createDownloadHandler({ isDead: () => false });
+  const fromPage = { tab: { id: 7, url: 'https://www.facebook.com/' } } as chrome.runtime.MessageSender;
+
   for (const type of ['FACESCRAP_DOWNLOAD_DASH', 'FACESCRAP_DOWNLOAD_DIRECT']) {
-    const at = worker.indexOf(`m?.type === '${type}'`);
-    assert.ok(at >= 0, `missing the ${type} handler`);
-    const body = worker.slice(at, at + 600);
-    assert.match(
-      body,
-      /if \(sender\.tab\) \{[\s\S]*?Unauthorized request\./,
-      `${type} must reject a sender that has a tab — it accepts a caller-supplied URL`,
+    let answer: unknown;
+    const claimed = handler.handle(
+      {
+        type,
+        tabId: 7,
+        url: 'https://scontent.xx.fbcdn.net/v/a.mp4',
+        videoUrl: 'https://scontent.xx.fbcdn.net/v/v.mp4',
+        audioUrl: 'https://scontent.xx.fbcdn.net/v/a.mp4',
+        filename: 'x.mp4',
+        receipt: { id: 'i', kind: 'video', source: 'reel' },
+      },
+      fromPage,
+      (response) => {
+        answer = response;
+      },
     );
+
+    assert.equal(claimed, true, `${type} must be claimed by the handler`);
+    assert.deepEqual(answer, { ok: false, error: 'Unauthorized request.' }, `${type} must refuse a sender with a tab`);
   }
+});
+
+test('accepts the same messages from an extension page (no sender.tab)', () => {
+  // The other polarity: getting this backwards would silently disable downloads.
+  const handler = createDownloadHandler({ isDead: () => true }); // dead tab → refuses at validation, not at the trust gate
+  let answer: unknown;
+  handler.handle(
+    { type: 'FACESCRAP_DOWNLOAD_DIRECT', tabId: 7, url: 'https://scontent.xx.fbcdn.net/v/a.mp4', filename: 'x.mp4', receipt: { id: 'i', kind: 'video', source: 'reel' } },
+    {} as chrome.runtime.MessageSender,
+    (response) => {
+      answer = response;
+    },
+  );
+
+  assert.deepEqual(answer, { ok: false, error: 'Invalid download request.' }, 'must get past the trust gate');
 });
 
 test('the in-page messages require a Facebook tab and never trust a tab id from the page', () => {
