@@ -141,7 +141,7 @@ test('every grid density offered is one the stylesheet can lay out', () => {
   const html = readFileSync(join(root, 'src', 'sidepanel', 'sidepanel.html'), 'utf8');
   const css = readFileSync(join(root, 'src', 'sidepanel', 'sidepanel.css'), 'utf8');
 
-  const group = html.match(/<div class="seg" data-seg="cols"[^>]*>(.*?)<\/div>/s)?.[1];
+  const group = html.match(/<div class="seg[^"]*" data-seg="cols"[^>]*>(.*?)<\/div>/s)?.[1];
   assert.ok(group, 'the density control must exist');
   const offered = [...group.matchAll(/data-value="(\d+)"/g)].map((m) => Number(m[1]));
   assert.deepEqual(offered, COLUMN_CHOICES, 'the control and the schema must offer the same set');
@@ -152,8 +152,12 @@ test('every grid density offered is one the stylesheet can lay out', () => {
     const rule = css.match(new RegExp(`#app\\[data-cols="${columns}"\\] \\.grid \\{([^}]*)\\}`));
     assert.ok(rule, `no layout rule for ${columns} columns`);
     assert.match(rule[1]!, /grid-template-columns:/, `${columns} columns sets no template`);
-    assert.match(rule[1]!, /--card-min:/, `${columns} columns leaves the card height at the 2-up value`);
   }
+  // Height used to be a tuned --card-min per density, which every new density had to
+  // restate. The tile carries one aspect ratio instead, so its height follows whatever
+  // width the template gives it — and a source of any shape renders unstretched.
+  assert.match(css, /\.tile\s*\{[^}]*aspect-ratio:\s*9 \/ 16/s);
+  assert.doesNotMatch(css, /--card-min/, 'the per-density height is gone; the aspect ratio replaced it');
   // And the base rule is the default, so no attribute at all still renders correctly —
   // which is what the panel shows for the instant before applyGridDensity runs.
   const base = css.match(/^\.grid \{([^}]*)\}/m)?.[1];

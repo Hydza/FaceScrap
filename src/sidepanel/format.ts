@@ -4,7 +4,8 @@
 // any view can import it without risking a cycle.
 
 import { fmt, t, type MsgKey } from '../shared/i18n';
-import type { MediaKind, MediaSource } from '../shared/media';
+import type { MediaItem, MediaKind, MediaSource } from '../shared/media';
+import { bitrate } from '../shared/video-options';
 
 /** What a captured item is CALLED in the UI, by the surface it came from. */
 export const SOURCE_KEY: Record<MediaSource, MsgKey> = {
@@ -33,8 +34,10 @@ export const KIND_ICON: Record<MediaKind, string> = {
   audio: 'icons/nav-saved.svg',
 };
 
-// Composition words for the tray's "video + image" line.
-const COMPOSE_KEY: Record<MediaKind, MsgKey> = {
+/** Composition words: the tray's "video + image" line, and the noun the Now Playing
+ *  button says it is saving. Lowercase and singular — they are always joined into a
+ *  phrase, never shown alone. */
+export const COMPOSE_KEY: Record<MediaKind, MsgKey> = {
   video: 'composeVideo',
   image: 'composeImage',
   audio: 'composeAudio',
@@ -53,6 +56,32 @@ export function composeLine(kinds: Iterable<MediaKind>): string {
     .filter((k) => present.has(k))
     .map((k) => t(COMPOSE_KEY[k]))
     .join(' + ');
+}
+
+/**
+ * What a representation will land on disk as, in bytes — from what the URL Facebook
+ * already signed carries: its `bitrate=` parameter, read as bits per second, over the
+ * manifest's duration. 0 when either input is missing or the answer is implausibly
+ * small, so a caller can print nothing rather than a number nobody should act on.
+ *
+ * Deliberately an ESTIMATE, and every caller prefixes it with "~". Nothing in the
+ * capture path knows a real content length: a HEAD request for one would be the
+ * extension ORIGINATING a request for media, which is exactly what ARCHITECTURE.md's
+ * passive-hook invariant forbids.
+ */
+export function estimatedBytes(item: MediaItem, durationSec: number | undefined): number {
+  if (durationSec == null || durationSec <= 0) return 0;
+  const bytes = (bitrate(item.url) / 8) * durationSec;
+  return Number.isFinite(bytes) && bytes >= 65_536 ? bytes : 0;
+}
+
+/** "~18 MB" for an estimate, "18.4 MB" for a counted one. Empty for 0, so a missing
+ *  estimate leaves its column blank rather than printing a confident zero. */
+export function formatBytes(bytes: number, exact = false): string {
+  if (bytes <= 0) return '';
+  const mb = bytes / 1_048_576;
+  if (exact) return mb >= 1024 ? `${(mb / 1024).toFixed(2)} GB` : `${mb.toFixed(1)} MB`;
+  return mb >= 1024 ? `~${(mb / 1024).toFixed(1)} GB` : `~${Math.round(mb)} MB`;
 }
 
 /** Seconds → "M:SS" (or "H:MM:SS" past an hour). */

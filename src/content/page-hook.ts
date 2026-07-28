@@ -26,6 +26,15 @@ import {
   type DashPair,
 } from '../shared/dash';
 import { diagBump, diagDrain, setDiagEnabled } from '../shared/diag';
+import {
+  diagLog,
+  diagLogDrain,
+  diagLogEnabled,
+  errorText,
+  redactUrl,
+  setDiagContext,
+  setDiagLogEnabled,
+} from '../shared/diag-log';
 import { graphqlImageCandidate, graphqlVideoUrl } from '../shared/graphql-media';
 import { storyDomIdForGraphqlChild, storyDomIdFromGraphqlNode } from '../shared/story-mark';
 import {
@@ -61,18 +70,57 @@ if (!alreadyHooked) document.documentElement.setAttribute(HOOK_ALIVE_ATTR, '1');
 // separate <script> and either side can win the load race, and delaying the
 // fetch/XHR patches below to await an answer would miss early traffic — the one
 // cost never worth paying.
+setDiagContext('hook');
 window.addEventListener('message', (e) => {
   if (e.source !== window) return;
   const d = e.data as { __facescrapCtl?: boolean; diag?: unknown } | null;
-  if (d && d.__facescrapCtl === true && typeof d.diag === 'boolean') setDiagEnabled(d.diag);
+  if (d && d.__facescrapCtl === true && typeof d.diag === 'boolean') {
+    setDiagEnabled(d.diag);
+    // One user-facing switch drives both: a counter tells you how often a path
+    // was taken, the trace tells you which response took it. Split flags would
+    // make "diagnostics on" mean two different things in two contexts.
+    setDiagLogEnabled(d.diag);
+    if (d.diag) diagLog('hookReady', { url: redactUrl(location.href), alreadyHooked });
+  }
 });
 window.postMessage({ __facescrapCtl: true, query: true }, '*');
 
-/** Hand this world's counts to the content script, which owns chrome.storage. */
+/** Hand this world's counts and trace to the content script, which owns chrome.storage. */
 function flushDiag(): void {
   const counters = diagDrain();
-  if (Object.keys(counters).length > 0) window.postMessage({ __facescrap: true, diag: counters }, '*');
+  const events = diagLogDrain();
+  if (Object.keys(counters).length === 0 && events.length === 0) return;
+  window.postMessage({ __facescrap: true, diag: counters, log: events }, '*');
 }
+
+// The scan drain (drainScans) is this world's natural flush point, but an event
+// can be recorded when no scan is queued at all — a page error, a navigation.
+// Without a timer of its own such an event would sit in the ring until the next
+// GraphQL response happened to arrive, which on an idle reel page is never.
+let diagFlushTimer: number | undefined;
+function scheduleDiagFlush(): void {
+  if (!diagLogEnabled() || diagFlushTimer !== undefined) return;
+  diagFlushTimer = window.setTimeout(() => {
+    diagFlushTimer = undefined;
+    flushDiag();
+  }, 2_000);
+}
+
+// Facebook's own uncaught errors and rejections, observed passively — never
+// preventDefault()ed, never re-thrown, so the page's own handling is unchanged.
+// This is the one signal that says "the page broke" rather than "we captured
+// nothing", and those two look identical from the panel. Only the message and
+// the source file are recorded; a stack would carry page internals.
+window.addEventListener('error', (e) => {
+  if (!diagLogEnabled()) return;
+  diagLog('pageError', { message: errorText(e.message), src: redactUrl(e.filename), line: e.lineno ?? 0 }, 'warn');
+  scheduleDiagFlush();
+});
+window.addEventListener('unhandledrejection', (e) => {
+  if (!diagLogEnabled()) return;
+  diagLog('pageRejection', { reason: errorText(e.reason) }, 'warn');
+  scheduleDiagFlush();
+});
 
 function post(items: readonly MediaItem[]): void {
   // The receiver hard-caps each message at MAX_ITEMS_PER_MESSAGE to bound a hostile
@@ -162,6 +210,7 @@ function pushPair(
   // adaptive-bitrate track the player actually streams (see MediaItem.trackIds).
   item.trackIds = pair.trackUrls.map(trackKey);
   if (pair.height != null) item.height = pair.height;
+  if (pair.width != null) item.width = pair.width;
   if (pair.durationSec != null) item.durationSec = pair.durationSec;
   out.add(item);
 }
@@ -327,7 +376,7 @@ function dedupeCollector(out: BoundedCollector<MediaItem>): BoundedCollector<Med
   };
 }
 
-function processScan(text: string, source: MediaSource): void {
+function processScan(text: string, source: MediaSource, label?: string): void {
   // Callers pre-gate on fbcdn in scanText(), so text here already contains media candidates.
   // 2,500 leaves ample room above the measured ~1,248-item reels feed while
   // preventing a hostile/changed response from growing work and postMessage
@@ -398,6 +447,29 @@ function processScan(text: string, source: MediaSource): void {
 
   if (out.full) diagBump('scanOutputCapped');
   diagBump('captureGraphql', out.items.length);
+  // The single most useful line in the whole trace: it ties ONE Facebook response
+  // to what came out of it. "captureGraphql: 0" says the parsers found nothing;
+  // this says WHICH query returned nothing, which is what a shape change looks
+  // like from the outside. `videos` counts the linked DASH pairs specifically —
+  // an item count that is all images is a different failure from an empty one.
+  if (diagLogEnabled()) {
+    let videos = 0;
+    let withAudio = 0;
+    for (const item of out.items) {
+      if (item.kind !== 'video') continue;
+      videos += 1;
+      if (item.audioUrl != null) withAudio += 1;
+    }
+    diagLog('graphql', {
+      q: label ?? 'unknown',
+      bytes: text.length,
+      items: out.items.length,
+      videos,
+      withAudio,
+      capped: out.full,
+      source,
+    });
+  }
   post(out.items);
 }
 
@@ -414,6 +486,9 @@ interface ScanJob {
   text: string;
   source: MediaSource;
   keep?: boolean;
+  /** What produced this body — a GraphQL query name, or `document`. Diagnostics
+   *  only: nothing in the capture path branches on it. */
+  label?: string;
 }
 const scanQueue: ScanJob[] = [];
 // Hard per-body/per-job cap. It is enforced while fetch clones stream and again
@@ -426,10 +501,11 @@ const SCAN_QUEUE_MAX = 8;
 const SCAN_QUEUE_MAX_BYTES = MAX_BODY_BYTES;
 let queuedBytes = 0;
 let draining = false;
-function scanText(text: string, source: MediaSource, keep = false): void {
+function scanText(text: string, source: MediaSource, keep = false, label?: string): void {
   if (!text || text.length < 20) return;
   if (text.length > MAX_BODY_BYTES) {
     diagBump('graphqlBodyTooLarge');
+    diagLog('graphqlDropped', { q: label ?? 'unknown', bytes: text.length, why: 'bodyTooLarge' }, 'warn');
     return;
   }
   // Pre-gate at ENQUEUE: every parser needs isFbcdn on each URL, so a body with no
@@ -437,7 +513,7 @@ function scanText(text: string, source: MediaSource, keep = false): void {
   // takes a queue slot or schedules a drain. Escaped JSON keeps the bare `fbcdn.net`
   // host intact, so this never hides media behind an unlisted key.
   if (!text.includes('fbcdn.net')) return;
-  scanQueue.push({ text, source, keep });
+  scanQueue.push({ text, source, keep, label });
   queuedBytes += text.length;
   // Prefer dropping disposable traffic, but a burst made only of document
   // (`keep`) jobs is still bounded. No job, including the newly queued one, is
@@ -453,6 +529,7 @@ function scanText(text: string, source: MediaSource, keep = false): void {
     queuedBytes -= dropped.text.length;
     // A whole response, not one item: every ladder it carried is gone.
     diagBump('scanQueueEvicted');
+    diagLog('graphqlDropped', { q: dropped.label ?? 'unknown', bytes: dropped.text.length, why: 'queueEvicted' }, 'warn');
   }
   if (!draining) {
     draining = true;
@@ -467,15 +544,40 @@ function drainScans(): void {
   }
   queuedBytes -= job.text.length;
   try {
-    processScan(job.text, job.source);
-  } catch {
-    /* ignore */
+    processScan(job.text, job.source, job.label);
+  } catch (error) {
+    // Was a bare `/* ignore */`. Still ignored — a parser fault must never
+    // propagate into Facebook's own promise chains — but no longer invisible:
+    // this catch swallowing a TypeError from a shape change is precisely the
+    // failure the panel reports as "nothing captured".
+    diagLog('scanFailed', { q: job.label ?? 'unknown', error: errorText(error) }, 'error');
   }
   job.text = ''; // release the body for GC before the next macrotask runs
   // Macrotask boundary: a natural flush point that needs no timer of its own.
   flushDiag();
   if (scanQueue.length) setTimeout(drainScans, 0);
   else draining = false;
+}
+
+/** The name Facebook gives the query it is issuing, read from the request body
+ *  it already built. Diagnostics only, and only while they are on.
+ *
+ *  Reads `init.body` exclusively — never a Request object's body, which is a
+ *  one-shot stream this hook must not consume (that would break the very request
+ *  it is observing). Passive by construction: it reads what the page is already
+ *  sending and never adds, alters or re-issues a query, so ARCHITECTURE.md's
+ *  passive-hook invariant holds unchanged. */
+function friendlyName(init: unknown): string | undefined {
+  if (!diagLogEnabled()) return undefined;
+  try {
+    const body = (init as RequestInit | undefined)?.body;
+    const text =
+      typeof body === 'string' ? body : body instanceof URLSearchParams ? body.toString() : undefined;
+    if (text == null) return undefined;
+    return /fb_api_req_friendly_name=([A-Za-z0-9_]{1,64})/.exec(text)?.[1];
+  } catch {
+    return undefined;
+  }
 }
 
 // --- Patch fetch ---
@@ -498,16 +600,26 @@ window.fetch = function (this: unknown, ...args: Parameters<typeof fetch>) {
       // a response belongs to whichever page issued it, not whichever page
       // happens to be showing once its body finishes streaming.
       const source = pageSource();
+      const label = friendlyName(args[1]);
       p.then(async (res) => {
+        // A GraphQL call Facebook itself made coming back 4xx/5xx explains an
+        // empty panel outright, and is invisible from every counter: nothing was
+        // discarded because nothing arrived.
+        if (!res.ok) diagLog('graphqlHttp', { q: label ?? 'unknown', status: res.status }, 'warn');
         const result = await readClonedResponseTextLimited(res, MAX_BODY_BYTES);
         if (!result.ok) {
           diagBump('graphqlBodyTooLarge');
+          diagLog('graphqlDropped', { q: label ?? 'unknown', why: 'bodyTooLarge' }, 'warn');
           return '';
         }
         return result.text;
       })
-        .then((text) => scanText(text, source))
-        .catch(() => {});
+        .then((text) => scanText(text, source, false, label))
+        .catch((error) => {
+          // The request itself failed, or its body could not be read. Facebook's
+          // own copy of this promise is untouched — this is our clone's chain.
+          diagLog('graphqlFailed', { q: label ?? 'unknown', error: errorText(error) }, 'warn');
+        });
     }
   } catch {
     /* ignore */
@@ -546,7 +658,10 @@ XMLHttpRequest.prototype.open = function (this: XMLHttpRequest, _method: string,
       function (this: XMLHttpRequest & { __facescrapUrl?: string; __facescrapSource?: MediaSource }) {
         try {
           if (this.__facescrapUrl?.includes('/api/graphql') && typeof this.responseText === 'string') {
-            scanText(this.responseText, this.__facescrapSource ?? 'video');
+            // No query name here: XHR carries it in send()'s body, and this hook
+            // patches open() only — wrapping send() as well would mean touching
+            // one more page API for a diagnostics label.
+            scanText(this.responseText, this.__facescrapSource ?? 'video', false, 'xhr');
           }
         } catch {
           /* ignore */
@@ -601,6 +716,8 @@ XMLHttpRequest.prototype.open = function (this: XMLHttpRequest, _method: string,
 if (!alreadyHooked) {
   function notifyNav(): void {
     try {
+      diagLog('nav', { url: redactUrl(location.href) });
+      scheduleDiagFlush();
       window.postMessage({ __facescrap: true, nav: true }, '*');
     } catch {
       /* ignore */
@@ -656,9 +773,9 @@ if (!alreadyHooked) {
         if (i > 0 && i % 32 === 0) await new Promise<void>((resolve) => setTimeout(resolve, 0));
       }
       const text = budget.value();
-      if (text) scanText(text, pageSource(), true);
-    } catch {
-      /* ignore */
+      if (text) scanText(text, pageSource(), true, 'document');
+    } catch (error) {
+      diagLog('documentScanFailed', { error: errorText(error) }, 'error');
     } finally {
       documentScanRunning = false;
     }

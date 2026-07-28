@@ -2,17 +2,17 @@
 // videos, so it tracks the active tab of its window live and re-renders as media
 // is captured (chrome.storage.session changes) or the tab switches.
 //
-// Three top-level views — Now Playing / Library / Saved — plus a Settings overlay.
-// Now Playing is the live video, in focus, with its own quality picker and one
-// Download. Library and Saved share a card grid: per-card download, multi-select,
-// a bulk tray.
+// Four nav surfaces — Now Playing / Library / Saved / Settings. Now Playing is the
+// live video, in focus, with the resolution picker that floats over it and one Save.
+// Library and Saved share a 9:16 tile grid where a tile does one thing — it selects —
+// and selecting raises the tray that saves the picks.
 //
 // This file is the controller: it owns the panel's state, builds the card model, and
 // decides when to repaint. The surfaces around it own no state — each is handed what
 // to paint and calls back on click, so the state lives in exactly one place:
 //
-//   card-view / now-view     paint a card, paint the live post
-//   settings-sheet           the Settings overlay and its controls
+//   card-view / now-view     paint a tile, paint the live post
+//   settings-sheet           the four Settings pages, their search and their controls
 //   download                 hand one item to the worker, report whether it landed
 //   panel-theme              which theme is painted, and the signals that change it
 //   media-play               thumbnail pairs and where the play glyph sits
@@ -31,9 +31,12 @@ import {
 import { itemCardId, savedEntryForItem, videoCardId } from '../shared/download-naming';
 import { defaultTarget, isDownloadable, videoOptions, willHaveAudio } from '../shared/video-options';
 import { fmt, getLang, LANG_KEY, resolveLang, saveLang, setLang, t, type Lang, type MsgKey } from '../shared/i18n';
+import { diagError, diagLogDrain, setDiagContext, setDiagLogEnabled } from '../shared/diag-log';
+import { addDiagEvents } from '../shared/diag-store';
 import { getCaps, getMedia } from '../shared/storage';
 import { getSaved, type SavedEntry } from '../shared/saved';
 import {
+  COLUMN_CHOICES,
   DEFAULT_SETTINGS,
   loadSettings,
   normalizeSettings,
@@ -53,25 +56,32 @@ import {
 } from '../shared/now-playing';
 import { schedulePlayPositions, setupPlayPositioning } from './media-play';
 import { cardBusy, failReason, pruneTabState, resetGen, tabKey } from './tab-state';
-import { byId, composeLine, pressOnly, tn } from './format';
+import { byId, composeLine, estimatedBytes, formatBytes, pressOnly, tn } from './format';
 import { downloadOne } from './download';
 import { applyEffectiveTheme, setupPanelTheme } from './panel-theme';
 import {
   closeSettingsSheet,
+  focusSettingsSearch,
   isDiagOpen,
   isSettingsOpen,
   reflectPanelBackground,
   reflectSettings,
   renderDiag,
+  repaintTintSwatches,
   setupSettingsSheet,
   toggleSettingsSheet,
 } from './settings-sheet';
 import { applyPanelBackground, loadPanelBackground } from './panel-background';
-import { accentById } from '../shared/appearance';
 import { restoreKeyCursor, setupPanelKeys } from './panel-keys';
 import { setupMarquee } from './marquee';
 import { paintCardPicked, renderCard, stubCard, type Card } from './card-view';
-import { paintNow, type NowState } from './now-view';
+import {
+  closeResolutionPicker,
+  isResolutionPickerOpen,
+  paintNow,
+  setupResolutionPicker,
+  type NowState,
+} from './now-view';
 
 // ── Panel state ───────────────────────────────────────────────────────────────
 
@@ -137,12 +147,15 @@ async function resolveActiveTab(): Promise<void> {
  *  which language pill is lit, which only reflectSettings can decide: Auto is a choice getLang()
  *  cannot express, since while it is on getLang() holds the browser's language, not the pick. */
 function localize(): void {
-  const nodes = document.querySelectorAll<HTMLElement>('[data-i18n], [data-i18n-title], [data-i18n-aria]');
+  const nodes = document.querySelectorAll<HTMLElement>(
+    '[data-i18n], [data-i18n-title], [data-i18n-aria], [data-i18n-placeholder]',
+  );
   for (const el of nodes) {
-    const { i18n, i18nTitle, i18nAria } = el.dataset;
+    const { i18n, i18nTitle, i18nAria, i18nPlaceholder } = el.dataset;
     if (i18n) el.textContent = t(i18n as MsgKey);
     if (i18nTitle) el.title = t(i18nTitle as MsgKey);
     if (i18nAria) el.setAttribute('aria-label', t(i18nAria as MsgKey));
+    if (i18nPlaceholder) el.setAttribute('placeholder', t(i18nPlaceholder as MsgKey));
   }
   // Keep the document language in sync so screen readers announce in the right one.
   document.documentElement.lang = getLang();
@@ -223,7 +236,7 @@ function savedEntryFor(cardId: string, item: MediaItem): SavedEntry {
  *  UI backstop burned, and the queue's tail would be tagged failed (receipt
  *  dropped) over work that then landed. One at a time keeps the backstop honest.
  *  Busy + failed state are keyed by card id and survive re-render. */
-async function downloadCard(cardId: string, item: MediaItem): Promise<void> {
+async function downloadCard(cardId: string, item: MediaItem, saveAs?: boolean): Promise<void> {
   // Snapshot the tab AND the receipt: the merge can await minutes, and
   // onActivated flips module `tabId` on a tab switch — the save belongs to the
   // tab and the card that were clicked.
@@ -232,6 +245,10 @@ async function downloadCard(cardId: string, item: MediaItem): Promise<void> {
   if (offscreenBusyHere()) return;
   const receipt = savedEntryFor(cardId, item);
   const gen = resetGen(tid);
+  // A fresh counter per download: the previous one's final byte total must not be the
+  // first thing the next save's overlay shows.
+  muxPhase = undefined;
+  muxBytes = 0;
   cardBusy.add(bkey);
   failReason.delete(bkey);
   // try/finally is mandatory, not tidiness: render() reaches an unguarded
@@ -240,7 +257,7 @@ async function downloadCard(cardId: string, item: MediaItem): Promise<void> {
   // download button until the panel is reopened — and pruneTabState never clears it.
   try {
     await render(); // busy/failed are signature terms; render() sees them flip
-    const err = await downloadOne(tid, item, receipt, settings);
+    const err = await downloadOne(tid, item, receipt, settings, saveAs);
     // The reset generation gates the tag: a prune during the await (nav reset,
     // Clear, tab close) means this failure belongs to content that is now wiped.
     if (err && resetGen(tid) === gen) failReason.set(bkey, err);
@@ -392,19 +409,85 @@ function paintTray(): void {
   }
   tray.hidden = false;
   byId('tray-count').textContent = tn('selectedCountOne', 'selectedCount', n);
+  // The second line is what the picks WEIGH and how many of them need the offscreen
+  // merge — the two facts that decide how long pressing Save will take. Both are real:
+  // the size is estimatedBytes' manifest-derived guess, the remux count is exact.
   const kinds: MediaKind[] = [];
+  let bytes = 0;
+  let remux = 0;
   for (const id of selected) {
     const c = cardsById.get(id);
-    if (c) kinds.push(c.kind);
+    if (c == null) continue;
+    kinds.push(c.kind);
+    if (c.target == null) continue;
+    bytes += estimatedBytes(c.target, c.durationSec);
+    if (c.target.audioUrl != null) remux += 1;
   }
-  byId('tray-meta').textContent = composeLine(kinds);
+  byId('tray-meta').textContent = [
+    formatBytes(bytes) || composeLine(kinds),
+    remux > 0 ? tn('trayRemuxOne', 'trayRemux', remux) : undefined,
+  ]
+    .filter((part) => part != null && part !== '')
+    .join(' · ');
+
+  // Only past three picks, the point at which deselecting one at a time becomes
+  // tedious — below it the dots are right there.
+  byId('clear-picks').hidden = n <= 3;
 
   const btn = byId<HTMLButtonElement>('bulk-dl');
   // Enablement is global (offscreenBusyHere); only the label is tab-scoped — a
   // run painting "Saving 2/3…" in its own tab must not be stamped over here.
   btn.disabled = offscreenBusyHere();
-  if (!bulkRunning || bulkTab !== tabId) btn.textContent = fmt('downloadSelected', { n });
+  if (!bulkRunning || bulkTab !== tabId) btn.textContent = fmt('traySave', { n });
   syncSelectAll();
+}
+
+/** How many items this panel's queue still owes, for the header pill. 0 outside a run;
+ *  a single download counts as one. */
+let queueRemaining = 0;
+
+// What the offscreen document last reported for the merge in flight. The report carries
+// a phase and the bytes done, and NO total — nothing upstream knows one, because
+// learning it would mean the extension originating a HEAD request for media the user is
+// not watching. So the bar sweeps rather than filling: a determinate one here would be
+// a number we invented.
+let muxPhase: 'fetch' | 'remux' | undefined;
+let muxBytes = 0;
+
+chrome.runtime.onMessage.addListener((message) => {
+  const m = message as { type?: string; phase?: 'fetch' | 'remux'; bytes?: number } | undefined;
+  if (m?.type !== 'FACESCRAP_MUX_PROGRESS') return;
+  muxPhase = m.phase;
+  muxBytes = typeof m.bytes === 'number' ? m.bytes : 0;
+  paintNowProgress();
+});
+
+/** The saving state, drawn ON the media over a veil so the picker and the button under
+ *  it never move while a download runs. */
+function paintNowProgress(): void {
+  const running = offscreenBusyHere() && !byId('now-content').hidden;
+  byId('now-veil').hidden = !running;
+  byId('now-progress').hidden = !running;
+  // The two overlays share the bottom of the frame; only one can be there.
+  byId('now-foot').hidden = running;
+  if (!running) return;
+  byId('now-progress-label').textContent = t(muxPhase === 'remux' ? 'downloadMerging' : 'downloadSaving');
+  byId('now-progress-pct').textContent = formatBytes(muxBytes, true);
+}
+
+/** The header pill has three things to say and says exactly one: the panel is working,
+ *  something is playing, or neither. Never hidden — a header that loses a control when
+ *  nothing is happening reads as broken chrome. */
+function paintStatusPill(capturing: boolean): void {
+  const pill = byId('now-live');
+  const text = byId('now-live-text');
+  const busy = offscreenBusyHere();
+  pill.classList.toggle('is-busy', busy);
+  pill.classList.toggle('is-idle', !busy && !capturing);
+  const pending = Math.max(queueRemaining, 1);
+  text.textContent = busy
+    ? fmt(pending === 1 ? 'statusQueueOne' : 'statusQueue', { n: pending })
+    : t(capturing ? 'statusCapturing' : 'statusWatching');
 }
 
 /** Toggle one card's pick and repaint the tray. Returns the new state for the button
@@ -450,6 +533,7 @@ async function runBulk(): Promise<void> {
   const btn = byId<HTMLButtonElement>('bulk-dl');
   bulkRunning = true;
   bulkTab = tid;
+  queueRemaining = queue.length;
   btn.disabled = true;
   const done: string[] = [];
   const failed: Array<{ id: string; err: string }> = [];
@@ -458,6 +542,7 @@ async function runBulk(): Promise<void> {
       // Only in the tab this run belongs to: elsewhere the panel shows a different
       // cart, and #bulk-dl is one shared node — this label would report our queue
       // over their picks.
+      queueRemaining = queue.length - i;
       if (bulkTab === tabId && view !== 'now') {
         btn.textContent = fmt('bulkBusy', { i: i + 1, n: queue.length });
       }
@@ -468,6 +553,7 @@ async function runBulk(): Promise<void> {
   } finally {
     bulkRunning = false;
     bulkTab = undefined;
+    queueRemaining = 0;
     // Unpick only what landed, so pressing Download again retries exactly what
     // didn't — and only while the panel still shows this queue's tab: `selected` is
     // NOT tab-namespaced and content-derived ids collide across tabs, so after a
@@ -511,13 +597,11 @@ let lastCheapSig = '';
 // shorter cap because a native picker can close emitting no observable event.
 let renderBlockedSince = 0;
 let renderRetryTimer: number | undefined;
-let qualityPickerFallbackEngaged = false;
 const RENDER_HOLD_MAX_MS = 10_000;
-const RENDER_FALLBACK_HOLD_MAX_MS = 1_500;
 const RENDER_HOLD_RETRY_MS = 500;
 
+/** The picker has closed (committed or dismissed): let the deferred render through. */
 function finishQualityPickerInteraction(): void {
-  qualityPickerFallbackEngaged = false;
   if (renderBlockedSince === 0) return;
   renderBlockedSince = 0;
   if (renderRetryTimer !== undefined) {
@@ -527,46 +611,13 @@ function finishQualityPickerInteraction(): void {
   void render();
 }
 
-function toggleQualityPickerFallback(): void {
-  if (qualityPickerFallbackEngaged) {
-    finishQualityPickerInteraction();
-    return;
-  }
-  qualityPickerFallbackEngaged = true;
-}
-
-function setupQualityPickerRenderHold(): void {
-  const select = byId<HTMLSelectElement>('now-qselect');
-  select.addEventListener('pointerdown', toggleQualityPickerFallback);
-  select.addEventListener('keydown', (event) => {
-    if (event.key === 'Escape') {
-      window.setTimeout(finishQualityPickerInteraction, 0);
-      return;
-    }
-    if (
-      event.key === ' ' ||
-      event.key === 'Enter' ||
-      event.key === 'F4' ||
-      (event.altKey && (event.key === 'ArrowDown' || event.key === 'ArrowUp'))
-    ) {
-      toggleQualityPickerFallback();
-      return;
-    }
-    if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
-      qualityPickerFallbackEngaged = true;
-    }
-  });
-  select.addEventListener('blur', finishQualityPickerInteraction);
-}
-
+/** How long a render may be held off while the resolution list is open. The list is
+ *  our own DOM, so "is it open" is simply whether it is hidden — no `:open` probe and
+ *  no gesture fallback, both of which existed only because this used to be a native
+ *  <select> that could close emitting nothing observable. The cap still stands: a
+ *  panel left open on a busy tab must eventually repaint. */
 function qualityPickerRenderHoldMs(): number {
-  const select = document.activeElement;
-  if (!(select instanceof HTMLSelectElement) || select.id !== 'now-qselect') return 0;
-  try {
-    return select.matches(':open') ? RENDER_HOLD_MAX_MS : 0;
-  } catch {
-    return qualityPickerFallbackEngaged ? RENDER_FALLBACK_HOLD_MAX_MS : 0;
-  }
+  return isResolutionPickerOpen() ? RENDER_HOLD_MAX_MS : 0;
 }
 
 async function render(): Promise<void> {
@@ -803,54 +854,63 @@ async function doRender(): Promise<void> {
   byId('view-now').hidden = view !== 'now';
   byId('view-grid').hidden = view === 'now';
 
+  paintStatusPill(now != null);
+
   if (view === 'now') {
     paintNow(now, {
       tid,
       defaultQuality: settings.defaultQuality,
+      subfolder: settings.subfolder,
       downloadsDisabled: offscreenBusyHere(),
-      onDownload: (cardId, target) => void downloadCard(cardId, target),
+      onDownload: (cardId, target, saveAs) => void downloadCard(cardId, target, saveAs),
       onQualityCommitted: finishQualityPickerInteraction,
     });
+    paintNowProgress();
     paintTray();
     return;
   }
 
+  const saved = view === 'saved';
   // Grid heading + counts, per Library vs Saved.
-  byId('grid-title').textContent = view === 'saved' ? t('savedTitle') : t('libraryTitle');
-  byId('grid-sub').textContent = view === 'saved' ? t('savedSubtitle') : t('librarySubtitle');
+  byId('grid-title').textContent = saved ? t('savedTitle') : t('libraryTitle');
   const count = byId('grid-count');
   count.hidden = gridCards.length === 0;
-  count.textContent = tn('foundCountOne', 'foundCount', gridCards.length);
+  count.textContent = saved
+    ? tn('filesCountOne', 'filesCount', gridCards.length)
+    : tn('onThisTabOne', 'onThisTab', gridCards.length);
 
   const empty = byId('grid-empty');
   empty.hidden = gridCards.length > 0;
-  // "Your picks / Select all" would read oddly above an empty-state message.
-  byId('picks-head').hidden = gridCards.length === 0;
+  // Both header actions would read oddly above an empty-state message.
+  byId('select-all').hidden = saved || gridCards.length === 0;
+  byId('open-folder').hidden = !saved || gridCards.length === 0;
+  // The two grids' empty states get their own glyph, so "nothing captured" and
+  // "nothing downloaded" are not the same picture with different words.
   if (gridCards.length === 0) {
-    byId('grid-empty-title').textContent = view === 'saved' ? t('savedEmptyTitle') : t('libraryEmptyTitle');
-    byId('grid-empty-body').textContent = view === 'saved' ? t('savedEmptyBody') : t('libraryEmptyBody');
+    const mark = empty.querySelector<HTMLElement>('.empty-mark');
+    mark?.style.setProperty('--empty-icon', `url("icons/${saved ? 'nav-saved' : 'nav-library'}.svg")`);
+    byId('grid-empty-title').textContent = saved ? t('savedEmptyTitle') : t('libraryEmptyTitle');
+    byId('grid-empty-body').textContent = saved ? t('savedEmptyBody') : t('libraryEmptyBody');
   }
 
   // ponytail: full teardown/rebuild on every sig change, including a single card's
   // busy bit flipping twice per download. Cheap at this list size, and no longer
   // audible now that #list is not a live region (the count is). Upgrade path if it
-  // ever matters: paint busy/disabled per card in place, the way paintTray() already
-  // does for selection, and reconcile instead of replacing.
+  // ever matters: paint state per tile in place, the way paintTray() already does for
+  // selection, and reconcile instead of replacing.
   const list = byId('list');
   list.textContent = '';
-  const downloadsDisabled = offscreenBusyHere();
   for (const c of gridCards) {
     const key = tabKey(tid, c.id);
     list.appendChild(
       renderCard(c, {
         picked: selected.has(c.id),
-        busy: cardBusy.has(key),
-        downloadsDisabled,
+        saved,
         // Never on a stub: a receipt IS a success, and a failure recorded under the
         // same content-derived id belongs to the live card, not the history row.
         failure: c.stale ? undefined : failReason.get(key),
         onPick: () => togglePick(c.id),
-        onDownload: (target) => void downloadCard(c.id, target),
+        onReveal: revealDownloads,
       }),
     );
   }
@@ -858,6 +918,23 @@ async function doRender(): Promise<void> {
   paintTray();
   restoreKeyCursor();
   schedulePlayPositions();
+  paintScrollPill();
+}
+
+/** Chrome will not point at one file without its download id, and receipts store none
+ *  (they are content-derived, and a file can be renamed or moved after the fact). The
+ *  folder is the honest target for both the header link and a tile's corner button. */
+function revealDownloads(): void {
+  chrome.downloads?.showDefaultFolder?.();
+}
+
+/** The pill that sits on the grid's fade. Shown only when there is actually more below:
+ *  the fade alone reads as the end of the list, and a pill over a list that does not
+ *  scroll reads as a broken one. */
+function paintScrollPill(): void {
+  const list = byId('list');
+  const more = list.scrollHeight - list.clientHeight - list.scrollTop > 8;
+  byId('scroll-more').hidden = !more;
 }
 
 // ── View + filter wiring ──────────────────────────────────────────────────────
@@ -879,26 +956,22 @@ function setupNav(navId: string, attr: 'view' | 'filter', adopt: (value: string 
 /** Push every appearance choice into CSS. None of these is a render signature term: they retune
  *  layout vars and colours on the DOM already on screen without changing the card model.
  *
- *  The accent covers what the Settings hint promises and no more — selection, progress and the
- *  primary button. Never text: no single colour clears 4.5:1 against both canvases, so a runtime
- *  accent used as text would put half the palette below AA. */
+ *  Accent and tint go on the ROOT, not on #app, for two reasons. The marquee is appended to
+ *  <body>, a sibling of #app, so a token scoped to #app would never reach it — and both
+ *  palettes resolve DIFFERENTLY per theme, which is also a root attribute. Written as
+ *  attributes rather than as JS custom properties so the pair can never land in the wrong
+ *  order: the theme arrives from its own async path, and CSS re-resolves both the moment it
+ *  changes.
+ *
+ *  The three below stay on #app because the stylesheet selects them there. */
 function applyAppearance(): void {
   const app = byId('app');
   app.dataset.cols = String(settings.columns);
   app.dataset.corners = settings.panelCorners;
   app.dataset.backdrop = settings.panelBackdrop;
-  // On the ROOT, not on #app: the marquee is appended to <body>, a sibling of #app, so a custom
-  // property set on #app would never reach it. The three data-* attributes above stay on #app
-  // because the stylesheet selects them there.
   const root = document.documentElement;
-  const accent = accentById(settings.accent);
-  root.style.setProperty('--accent', accent.solid);
-  root.style.setProperty('--accent-grad', accent.grad);
-  root.style.setProperty('--on-accent', accent.onAccent);
-  // The card rings, the pick check and the marquee are media chrome, which carries its own
-  // fixed-dark token family; selection there has to follow the accent too.
-  root.style.setProperty('--media-accent', accent.solid);
-  root.style.setProperty('--media-on-accent', accent.onAccent);
+  root.dataset.accent = settings.accent;
+  root.dataset.tint = settings.panelTint;
 }
 
 function setupViews(): void {
@@ -907,6 +980,9 @@ function setupViews(): void {
   setupNav('views', 'view', (value) => {
     view = (value as View | undefined) ?? 'now';
     byId('app').dataset.view = view;
+    // The list floats over the media at z-index 30; left open across a view switch it
+    // would hang over the grid that replaced it.
+    closeResolutionPicker();
     closeSettingsSheet();
   });
   setupNav('filters', 'filter', (value) => {
@@ -962,12 +1038,12 @@ function runKeyAction(action: KeyAction, cursor: HTMLElement | undefined): void 
       return;
     }
     case 'cycleFilter': {
-      // Only where the filter is on screen: the chips sit inside the grid view, and a
-      // programmatic click reaches a hidden button perfectly well.
+      // Only where the filter is on screen: the segmented control sits inside the grid
+      // view, and a programmatic click reaches a hidden button perfectly well.
       if (byId('view-grid').hidden) return;
-      const chips = [...byId('filters').querySelectorAll<HTMLButtonElement>('[data-filter]')];
-      const at = chips.findIndex((chip) => chip.getAttribute('aria-pressed') === 'true');
-      chips[(at + 1) % chips.length]?.click();
+      const segments = [...byId('filters').querySelectorAll<HTMLButtonElement>('[data-filter]')];
+      const at = segments.findIndex((button) => button.getAttribute('aria-pressed') === 'true');
+      segments[(at + 1) % segments.length]?.click();
       return;
     }
     case 'openSettings':
@@ -1003,9 +1079,14 @@ function showFatal(e: unknown): void {
       fmt('fatalStartup', { message: (e as Error)?.message ?? String(e) }) +
       (v ? fmt('fatalStartupVersion', { version: v }) : '');
   }
-  console.error('[FaceScrap] init failed', e);
+  // Written to the log as well as the console: a panel that failed to boot cannot
+  // show its own Export button, but the worker's console (faceScrapDiag.log()) and
+  // the NEXT successful panel's export both still find this.
+  diagError('panel init failed', e);
+  void addDiagEvents(diagLogDrain()).catch(() => {});
 }
 
+setDiagContext('panel');
 document.addEventListener('DOMContentLoaded', () => void init());
 
 async function init(): Promise<void> {
@@ -1016,6 +1097,7 @@ async function init(): Promise<void> {
     // fall into a read/listener gap.
     setupPanelTheme({ theme: () => settings.theme, trackedTab: () => tabId });
     settings = await loadSettings();
+    setDiagLogEnabled(settings.diagEnabled);
     await applyEffectiveTheme();
     setLang(await resolveLang(settings.followBrowserLang));
     localize();
@@ -1049,8 +1131,42 @@ async function init(): Promise<void> {
     // stored. storage.local, so this is the image from before the browser was last closed.
     applyPanelBackground(await loadPanelBackground());
     reflectPanelBackground();
-    setupQualityPickerRenderHold();
+    setupResolutionPicker();
     setupPlayPositioning();
+    // The tint swatches paint the RESOLVED theme's canvas, and the theme can flip from
+    // panel-theme.ts's own signals (the Facebook tab, the OS) with no settings write to
+    // hang a repaint on. Watch the attribute those signals land on instead.
+    new MutationObserver(repaintTintSwatches).observe(document.documentElement, {
+      attributeFilter: ['data-theme'],
+    });
+
+    // The density button walks the four column counts, so the Library can be retuned
+    // without a trip to Settings. Same setting, same write path.
+    byId('density').addEventListener('click', () => {
+      const at = COLUMN_CHOICES.indexOf(settings.columns);
+      void applySetting({ columns: COLUMN_CHOICES[(at + 1) % COLUMN_CHOICES.length]! });
+    });
+    byId('open-folder').addEventListener('click', revealDownloads);
+    byId('now-empty-lib').addEventListener('click', () => {
+      byId('views').querySelector<HTMLButtonElement>('[data-view="library"]')?.click();
+    });
+    byId('clear-picks').addEventListener('click', () => {
+      selected.clear();
+      lastRenderSig = ''; // picks paint in place and are not a signature term
+      lastCheapSig = '';
+      void render();
+    });
+    // The pill has to follow the scroll, not just the render that drew the list.
+    byId('list').addEventListener('scroll', paintScrollPill, { passive: true });
+    window.addEventListener('resize', paintScrollPill);
+    // Ctrl/Cmd K, as the field's own hint promises. Not a rebindable action: it is a
+    // browser-wide idiom for "search this surface", and the keymap is for panel verbs.
+    document.addEventListener('keydown', (e) => {
+      if (e.key !== 'k' && e.key !== 'K') return;
+      if (!e.ctrlKey && !e.metaKey) return;
+      e.preventDefault();
+      focusSettingsSearch();
+    });
 
     // Cosmetic: never let a missing getManifest (odd fork) break the init tail.
     const version = chrome.runtime?.getManifest?.().version;
@@ -1151,7 +1267,7 @@ async function init(): Promise<void> {
     chrome.storage.local.onChanged.addListener((changes) => {
       // Live-update the counters while the section is open, so a scroll session in
       // the Facebook tab shows discards accumulating without reopening settings.
-      if ('diag_counters' in changes && isDiagOpen()) void renderDiag();
+      if (('diag_counters' in changes || 'diag_log' in changes) && isDiagOpen()) void renderDiag();
       const next = changes[LANG_KEY]?.newValue;
       if ((next === 'en' || next === 'es') && next !== getLang()) {
         setLang(next);
@@ -1167,6 +1283,7 @@ async function init(): Promise<void> {
         if (echo != null && JSON.stringify(normalizeSettings(echo)) === JSON.stringify(settings)) return;
         void (async () => {
           settings = await loadSettings();
+          setDiagLogEnabled(settings.diagEnabled);
           await applyEffectiveTheme();
           reflectSettings(settings);
           applyAppearance();

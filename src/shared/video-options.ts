@@ -104,7 +104,7 @@ export function willHaveAudio(i: MediaItem): boolean {
 
 /** Collapse a video group's representations into a deduped, ranked option list —
  *  shared by the grid card (which takes one), Now Playing (which keeps them all
- *  for the quality selector) and the worker (which matches one by label for the
+ *  for the resolution picker) and the worker (which matches one by label for the
  *  in-page button). */
 export function videoOptions(group: MediaItem[], context: VideoOptionsContext): VideoOptions {
   const src = context.stripAudio
@@ -115,7 +115,24 @@ export function videoOptions(group: MediaItem[], context: VideoOptionsContext): 
   // height prefer the one that will produce sound (muxed progressive or DASH pair
   // with audioUrl) over a muted DASH track of the same size.
   const downloadable = src.filter(isDownloadable);
-  const score = (i: MediaItem): number => (willHaveAudio(i) ? 2 : 0) + (i.audioUrl == null ? 1 : 0);
+  // Three tiers, and the order between them is what decides which file the user gets when a
+  // ladder rung and a progressive baseline collapse under one label — which they do, because
+  // Facebook publishes both for the same resolution.
+  //
+  //   sound        first, always: a silent file is not a smaller version of the same thing.
+  //   measured     a representation that DECLARED its width and height came from the DASH
+  //                manifest, so it is a real rung of the ladder. One without them is the
+  //                progressive baseline, and on Facebook that is the lowest-bitrate encode
+  //                of that size. Measured beats it.
+  //   already muxed  only as a tie-break, to skip a remux when nothing else separates them.
+  //
+  // The middle tier is the one that was missing. Without it the baseline outscored the rung it
+  // duplicates, so a 720x1280 DASH pair lost its slot to a progressive `tag=..._720p` — the
+  // user picked "720p" and got the worse of the two files.
+  const score = (i: MediaItem): number =>
+    (willHaveAudio(i) ? 4 : 0) +
+    (i.width != null && i.width > 0 && i.height != null && i.height > 0 ? 2 : 0) +
+    (i.audioUrl == null ? 1 : 0);
   const byRes = new Map<string, MediaItem>();
   for (const i of downloadable) {
     const { label } = resolutionOf(i);

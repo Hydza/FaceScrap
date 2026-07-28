@@ -14,7 +14,7 @@ import type { ContentRuntime } from './content-runtime';
 
 interface PageHookDeps {
   relay: (items: MediaItem[]) => void;
-  reportDiag: (counters: unknown) => void;
+  reportDiag: (counters: unknown, events?: unknown) => void;
   /** Answer the hook's startup query from the cached flag. */
   announceDiag: () => void;
   /** An SPA navigation: re-detect now instead of waiting for a poller tick. */
@@ -40,8 +40,8 @@ export function setupPageHookIngress(runtime: ContentRuntime, deps: PageHookDeps
         return;
       }
       if (!data || data.__facescrap !== true) return;
-      if (data.diag !== undefined) {
-        deps.reportDiag(data.diag);
+      if (data.diag !== undefined || data.log !== undefined) {
+        deps.reportDiag(data.diag, data.log);
         return;
       }
       if (data.nav === true) {

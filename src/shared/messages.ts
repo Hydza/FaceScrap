@@ -7,6 +7,7 @@
 // a process with the page, so the worker never believes these types blindly.
 
 import type { DiagCounters } from './diag';
+import type { DiagEvent } from './diag-log';
 import type { MediaItem, MediaKind } from './media';
 import type { SettingsPatch } from './settings';
 import type { BindRecord, BindState } from './storage';
@@ -399,12 +400,16 @@ export interface PinPlayingMediaMsg {
   playingAt: number;
 }
 
-/** content script → service worker: discard counts drained from the page hook
- *  and the DOM scan. Only the worker can persist them — neither the MAIN world
- *  nor a content script may write the extension's storage directly. */
+/** content script → service worker: discard counts and the event trace drained
+ *  from the page hook and the DOM scan. Only the worker can persist them —
+ *  neither the MAIN world nor a content script may write the extension's storage
+ *  directly. Both payloads ride ONE message because they are drained together at
+ *  the same flush point; splitting them would double the IPC for one flush and
+ *  let a counter land without the events that explain it. */
 interface DiagReportMsg {
   type: 'DIAG_REPORT';
   counters: DiagCounters;
+  events?: DiagEvent[];
   documentToken?: string;
 }
 

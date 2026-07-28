@@ -1106,12 +1106,12 @@ async function activateSurface(page, surface, settleFrames = true) {
           , nowContentHidden: document.querySelector('#now-content')?.hidden,
             nowEmptyHidden: document.querySelector('#now-empty')?.hidden,
             fatalText: document.querySelector('#fatal')?.textContent ?? '',
-            cardCount: document.querySelectorAll('#list .card').length
+            cardCount: document.querySelectorAll('#list .tile').length
           }))()`
         : `(() => {
             const active = document.querySelector('#views [data-view="${surface}"]');
             const app = document.querySelector('#app');
-            const cardCount = document.querySelectorAll('#list .card').length;
+            const cardCount = document.querySelectorAll('#list .tile').length;
             return {
               ready:
                 app?.dataset.view === '${surface}' &&
@@ -1129,6 +1129,21 @@ async function activateSurface(page, surface, settleFrames = true) {
     // Let local fonts, image interception, and the CSS animation frame settle.
     await evaluate(page, `document.fonts?.ready ?? Promise.resolve()`);
     await evaluate(page, `new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)))`);
+    // And let the nav finish moving. Switching surfaces recolours two items over the
+    // design's 140ms, and two frames is not that: a capture taken mid-transition shows
+    // the OUTGOING item still wearing the accent, which reads as two active tabs.
+    await waitForEvaluation(
+      page,
+      `(() => {
+        const colours = [...document.querySelectorAll('#views .view-pill')]
+          .map((item) => getComputedStyle(item).color + '|' + getComputedStyle(item).backgroundColor)
+          .join(',');
+        const settled = colours === globalThis.__qaLastNavColours;
+        globalThis.__qaLastNavColours = colours;
+        return { ready: settled, colours };
+      })()`,
+      'the bottom navigation to finish recolouring',
+    );
   }
 }
 
@@ -1165,16 +1180,17 @@ async function inspectSurface(page, surface, language) {
       const preview = document.querySelector('#now-preview');
       const play = preview?.querySelector('.preview-play');
       const foreground = preview?.querySelector(':scope > img:not(.thumb-bg)');
-      const title = document.querySelector('#now-title');
-      const qualitySelect = document.querySelector('#now-qselect');
+      // The play glyph's obstruction now sits ON the media — the format/audio line over
+      // the scrim — rather than in a title below it.
+      const title = document.querySelector('#now-foot');
+      const qualityTrigger = document.querySelector('#now-qtrigger');
       const qualityCountText = document.querySelector('#now-qcount')?.textContent?.trim() ?? '';
-      const qualityOptionCount = qualitySelect instanceof HTMLSelectElement ? qualitySelect.options.length : 0;
-      const qualityOptionLabels =
-        qualitySelect instanceof HTMLSelectElement
-          ? [...qualitySelect.options].map((option) => option.textContent?.trim() ?? '')
-          : [];
-      const qualitySelectedLabel =
-        qualitySelect instanceof HTMLSelectElement ? qualitySelect.selectedOptions[0]?.textContent?.trim() ?? '' : '';
+      const qualityRows = [...document.querySelectorAll('#now-qlist .picker-row')];
+      const qualityOptionCount = qualityRows.length;
+      const qualityOptionLabels = qualityRows.map(
+        (row) => row.querySelector('.picker-label')?.textContent?.trim() ?? '',
+      );
+      const qualitySelectedLabel = document.querySelector('#now-qlabel')?.textContent?.trim() ?? '';
       const previewRect = preview?.getBoundingClientRect();
       const playRect = play?.getBoundingClientRect();
       const titleRect = title?.getBoundingClientRect();
@@ -1228,24 +1244,24 @@ async function inspectSurface(page, surface, language) {
           surface === 'now'
             ? `visible(document.querySelector('#now-content'))`
             : surface === 'library'
-              ? `document.querySelectorAll('#list .card').length >= 3`
+              ? `document.querySelectorAll('#list .tile').length >= 3`
               : surface === 'saved'
-                ? `document.querySelectorAll('#list .card').length >= 3`
+                ? `document.querySelectorAll('#list .tile').length >= 3`
                 : `visible(document.querySelector('#settings')) && document.querySelectorAll('#settings .set-card').length >= 4`
         },
         videoDurationPreserved: ${
           surface === 'now'
-            ? `visible(document.querySelector('#m-duration-metric')) && document.querySelector('#m-duration')?.textContent === '0:34'`
+            ? `visible(document.querySelector('#now-dur')) && document.querySelector('#now-dur')?.textContent === '0:34'`
             : `true`
         },
         videoResolutionPreserved: ${
           surface === 'now'
-            ? `document.querySelector('#m-resolution')?.textContent === '1080p'`
+            ? `document.querySelector('#now-qlabel')?.textContent === '1080p'`
             : `true`
         },
         qualityCountNumeric: ${
           surface === 'now'
-            ? `visible(document.querySelector('#now-qcount')) && /^\\d+$/.test(qualityCountText) && Number(qualityCountText) === qualityOptionCount`
+            ? `visible(document.querySelector('#now-qcount')) && qualityCountText.split(/[^0-9]+/).includes(String(qualityOptionCount))`
             : `true`
         },
         qualityOptionsPreserved: ${
@@ -1255,7 +1271,7 @@ async function inspectSurface(page, surface, language) {
         },
         qualitySelectionPreserved: ${
           surface === 'now'
-            ? `qualitySelect instanceof HTMLSelectElement && !qualitySelect.disabled && qualitySelectedLabel === '1080p'`
+            ? `qualityTrigger instanceof HTMLButtonElement && !qualityTrigger.disabled && qualitySelectedLabel === '1080p'`
             : `true`
         },
         playCentered: ${
@@ -1292,7 +1308,7 @@ async function inspectSurface(page, surface, language) {
           qualityOptionCount,
           qualityOptionLabels,
           qualitySelectedLabel,
-          cardCount: document.querySelectorAll('#list .card').length,
+          cardCount: document.querySelectorAll('#list .tile').length,
           fatalText: fatal?.textContent ?? '',
         },
       };
@@ -1304,10 +1320,10 @@ async function inspectCardPlayPositions(page) {
   return evaluate(
     page,
     `(() => {
-      const cards = [...document.querySelectorAll('#list .card-thumb.is-video')].map((thumb, index) => {
+      const cards = [...document.querySelectorAll('#list .tile-thumb.is-video')].map((thumb, index) => {
         const frame = thumb.getBoundingClientRect();
         const image = thumb.querySelector(':scope > img:not(.thumb-bg)');
-        const obstruction = thumb.closest('.card')?.querySelector('.card-title');
+        const obstruction = thumb.closest('.tile')?.querySelector('.tile-title');
         const obstructionRect = obstruction?.getBoundingClientRect();
         const imageReady = image instanceof HTMLImageElement && image.naturalWidth > 0 && image.naturalHeight > 0;
         const fit = imageReady && image.classList.contains('media-fit-cover') ? 'cover' : 'contain';
@@ -1375,7 +1391,7 @@ async function exerciseCardPlayResize(page) {
   await evaluate(
     page,
     `(async () => {
-      const images = [...document.querySelectorAll('#list .card-thumb.is-video > img:not(.thumb-bg)')];
+      const images = [...document.querySelectorAll('#list .tile-thumb.is-video > img:not(.thumb-bg)')];
       await Promise.all(images.map((image) => image.decode().catch(() => undefined)));
       await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => requestAnimationFrame(resolve))));
       return true;
@@ -1385,7 +1401,7 @@ async function exerciseCardPlayResize(page) {
   await evaluate(
     page,
     `(() => {
-      document.querySelectorAll('#list .card-thumb.is-video').forEach((thumb) => thumb.style.setProperty('--play-y', '-999px'));
+      document.querySelectorAll('#list .tile-thumb.is-video').forEach((thumb) => thumb.style.setProperty('--play-y', '-999px'));
       return true;
     })()`,
   );
@@ -1445,9 +1461,12 @@ async function captureSurface(page, surface, language) {
       'two selected Library cards and the bulk-download tray',
     );
   } else if (surface === 'saved') {
+    // Saved tiles wear the "On disk" badge where Library tiles wear the pick dot, so
+    // the tile body is the only selection surface here — which is what the design says
+    // it is on both grids anyway.
     await evaluate(
       page,
-      `(() => document.querySelectorAll('#list .pick[aria-pressed="true"]').forEach((pick) => pick.click()))()`,
+      `(() => document.querySelectorAll('#list .tile.is-picked').forEach((tile) => tile.click()))()`,
     );
     await waitForEvaluation(
       page,
@@ -1487,9 +1506,10 @@ async function captureSurface(page, surface, language) {
     inspection.metrics.cardPlay = cardPlay;
     inspection.passed = Object.values(inspection.checks).every(Boolean);
   } else if (surface === 'settings') {
-    // The first tab, not the first field: focusing a control on page one hid the fact that
-    // there are three more pages, and a keyboard user had to tab back out to find them.
-    inspection.checks.focusMovedIntoSettings = settingsInitialFocus === 'tab:general';
+    // The search box, not a control on page one: focusing a setting hid the fact that
+    // there are four pages, and a keyboard user had to tab back out to find them. The
+    // search spans all four, and Tab from it reaches the page strip immediately.
+    inspection.checks.focusMovedIntoSettings = settingsInitialFocus === 'set-search';
     inspection.metrics.initialFocusedElement = settingsInitialFocus;
     inspection.passed = Object.values(inspection.checks).every(Boolean);
   }
@@ -1921,7 +1941,7 @@ async function captureImageNowPlaying(
       const expectedUrl = ${JSON.stringify(low.url)};
       const foreground = document.querySelector('#now-preview > img:not(.thumb-bg)');
       const quality = document.querySelector('#now-quality');
-      const resolution = document.querySelector('#m-resolution')?.textContent?.trim() ?? '';
+      const resolution = document.querySelector('#now-format')?.textContent?.trim().split(' · ').pop() ?? '';
       const ready =
         foreground instanceof HTMLImageElement &&
         foreground.complete &&
@@ -1995,9 +2015,9 @@ async function captureImageNowPlaying(
       const expectedTitle = ${JSON.stringify(expectedTitle)};
       const foreground = document.querySelector('#now-preview > img:not(.thumb-bg)');
       const quality = document.querySelector('#now-quality');
-      const select = document.querySelector('#now-qselect');
-      const resolution = document.querySelector('#m-resolution')?.textContent?.trim() ?? '';
-      const title = document.querySelector('#now-title')?.textContent?.trim() ?? '';
+      const trigger = document.querySelector('#now-qtrigger');
+      const resolution = document.querySelector('#now-format')?.textContent?.trim().split(' · ').pop() ?? '';
+      const title = document.querySelector('#now-badge')?.textContent?.trim() ?? '';
       const metadataReady =
         foreground instanceof HTMLImageElement &&
         foreground.getAttribute('src') === expectedUrl &&
@@ -2009,8 +2029,8 @@ async function captureImageNowPlaying(
         quality instanceof HTMLElement &&
         quality.hidden &&
         getComputedStyle(quality).display === 'none' &&
-        select instanceof HTMLSelectElement &&
-        select.getClientRects().length === 0;
+        trigger instanceof HTMLButtonElement &&
+        trigger.getClientRects().length === 0;
       return {
         ready: metadataReady,
         phase: 'high',
@@ -2025,8 +2045,8 @@ async function captureImageNowPlaying(
           quality instanceof HTMLElement &&
           quality.hidden &&
           getComputedStyle(quality).display === 'none' &&
-          select instanceof HTMLSelectElement &&
-          select.getClientRects().length === 0,
+          trigger instanceof HTMLButtonElement &&
+          trigger.getClientRects().length === 0,
       };
     })()`,
     'stored HIGH metadata to repaint before the HIGH image response is released',
@@ -2119,7 +2139,7 @@ async function captureImageNowPlaying(
       const foreground = document.querySelector('#now-preview > img:not(.thumb-bg)');
       const background = document.querySelector('#now-preview > img.thumb-bg');
       const quality = document.querySelector('#now-quality');
-      const select = document.querySelector('#now-qselect');
+      const trigger = document.querySelector('#now-qtrigger');
       const ready =
         foreground instanceof HTMLImageElement &&
         foreground.complete &&
@@ -2129,13 +2149,13 @@ async function captureImageNowPlaying(
         foreground.currentSrc === expectedUrl &&
         background instanceof HTMLImageElement &&
         background.getAttribute('src') === expectedUrl &&
-        document.querySelector('#m-resolution')?.textContent?.trim() === '944×1088' &&
-        document.querySelector('#now-title')?.textContent?.trim() === expectedTitle &&
+        document.querySelector('#now-format')?.textContent?.trim().endsWith('944×1088') &&
+        document.querySelector('#now-badge')?.textContent?.trim() === expectedTitle &&
         quality instanceof HTMLElement &&
         quality.hidden &&
         getComputedStyle(quality).display === 'none' &&
-        select instanceof HTMLSelectElement &&
-        select.getClientRects().length === 0;
+        trigger instanceof HTMLButtonElement &&
+        trigger.getClientRects().length === 0;
       return {
         ready,
         foregroundSrc: foreground instanceof HTMLImageElement ? foreground.getAttribute('src') : null,
@@ -2143,11 +2163,11 @@ async function captureImageNowPlaying(
         backgroundSrc: background instanceof HTMLImageElement ? background.getAttribute('src') : null,
         naturalWidth: foreground instanceof HTMLImageElement ? foreground.naturalWidth : 0,
         naturalHeight: foreground instanceof HTMLImageElement ? foreground.naturalHeight : 0,
-        resolution: document.querySelector('#m-resolution')?.textContent?.trim() ?? '',
-        title: document.querySelector('#now-title')?.textContent?.trim() ?? '',
+        resolution: document.querySelector('#now-format')?.textContent?.trim().split(' · ').pop() ?? '',
+        title: document.querySelector('#now-badge')?.textContent?.trim() ?? '',
         qualityHidden: quality instanceof HTMLElement ? quality.hidden : false,
         qualityDisplay: quality instanceof HTMLElement ? getComputedStyle(quality).display : null,
-        qualitySelectRects: select instanceof HTMLSelectElement ? select.getClientRects().length : null,
+        qualityTriggerRects: trigger instanceof HTMLButtonElement ? trigger.getClientRects().length : null,
       };
     })()`,
     'the HIGH image Now Playing state after the download probe repaint',
@@ -2157,28 +2177,28 @@ async function captureImageNowPlaying(
     `(() => {
       const foreground = document.querySelector('#now-preview > img:not(.thumb-bg)');
       const background = document.querySelector('#now-preview > img.thumb-bg');
-      const durationMetric = document.querySelector('#m-duration-metric');
-      const durationValue = document.querySelector('#m-duration');
-      const previewDuration = document.querySelector('#now-dur');
+      // A photo has one duration surface, not two: the chip over the media. The metrics
+      // card that used to restate it is gone.
+      const durationChip = document.querySelector('#now-dur');
       const quality = document.querySelector('#now-quality');
-      const select = document.querySelector('#now-qselect');
+      const trigger = document.querySelector('#now-qtrigger');
       return {
         durationMetricHidden:
-          durationMetric instanceof HTMLElement &&
-          durationMetric.hidden &&
-          getComputedStyle(durationMetric).display === 'none',
-        durationValueEmpty: durationValue?.textContent === '',
+          durationChip instanceof HTMLElement &&
+          durationChip.textContent === '' &&
+          getComputedStyle(durationChip).display === 'none',
+        durationValueEmpty: durationChip?.textContent === '',
         previewDurationHidden:
-          previewDuration instanceof HTMLElement &&
-          previewDuration.textContent === '' &&
-          getComputedStyle(previewDuration).display === 'none',
-        formatIsJpg: document.querySelector('#m-format')?.textContent?.trim() === 'JPG',
+          durationChip instanceof HTMLElement &&
+          durationChip.textContent === '' &&
+          getComputedStyle(durationChip).display === 'none',
+        formatIsJpg: document.querySelector('#now-format')?.textContent?.trim().startsWith('JPG'),
         imageQualitySelectorHidden:
           quality instanceof HTMLElement &&
           quality.hidden &&
           getComputedStyle(quality).display === 'none' &&
-          select instanceof HTMLSelectElement &&
-          select.getClientRects().length === 0,
+          trigger instanceof HTMLButtonElement &&
+          trigger.getClientRects().length === 0,
         noHorizontalOverflow:
           document.documentElement.scrollWidth <= document.documentElement.clientWidth &&
           document.body.scrollWidth <= document.body.clientWidth,
@@ -2187,8 +2207,8 @@ async function captureImageNowPlaying(
         backgroundSrc: background instanceof HTMLImageElement ? background.getAttribute('src') : null,
         naturalWidth: foreground instanceof HTMLImageElement ? foreground.naturalWidth : 0,
         naturalHeight: foreground instanceof HTMLImageElement ? foreground.naturalHeight : 0,
-        resolutionText: document.querySelector('#m-resolution')?.textContent?.trim() ?? '',
-        titleText: document.querySelector('#now-title')?.textContent?.trim() ?? '',
+        resolutionText: document.querySelector('#now-format')?.textContent?.trim().split(' · ').pop() ?? '',
+        titleText: document.querySelector('#now-badge')?.textContent?.trim() ?? '',
       };
     })()`,
   );
@@ -2296,98 +2316,112 @@ async function dismissPicker(page) {
   await page.command('Input.dispatchKeyEvent', { type: 'keyUp', ...key });
 }
 
-async function captureOpenSelect(page, { surface, selectId, filename }) {
+async function captureOpenResolutionList(page, { surface, filename }) {
   await activateSurface(page, surface);
-  const support = await evaluate(
-    page,
-    `(() => {
-      const select = document.getElementById(${JSON.stringify(selectId)});
-      return {
-        customizableSelect: CSS.supports('appearance', 'base-select'),
-        showPicker: select instanceof HTMLSelectElement && typeof select.showPicker === 'function',
-      };
-    })()`,
-  );
-  if (!support.customizableSelect || !support.showPicker) {
-    throw new Error(`Browser does not expose the customizable select picker for #${selectId}: ${JSON.stringify(support)}`);
-  }
   await waitForEvaluation(
     page,
     `(() => {
-      const select = document.getElementById(${JSON.stringify(selectId)});
+      const trigger = document.querySelector('#now-qtrigger');
+      const rows = document.querySelectorAll('#now-qlist .picker-row');
       return {
         ready:
-          select instanceof HTMLSelectElement &&
-          !select.disabled &&
-          select.getClientRects().length > 0,
-        hidden: select instanceof HTMLElement ? select.hidden : null,
-        disabled: select instanceof HTMLSelectElement ? select.disabled : null,
-        optionCount: select instanceof HTMLSelectElement ? select.options.length : 0,
+          trigger instanceof HTMLButtonElement &&
+          !trigger.disabled &&
+          trigger.getClientRects().length > 0 &&
+          rows.length >= 2,
+        disabled: trigger instanceof HTMLButtonElement ? trigger.disabled : null,
+        rowCount: rows.length,
         trackedTab: document.documentElement.dataset.trackedTab ?? '',
         nowContentHidden: document.querySelector('#now-content')?.hidden ?? null,
       };
     })()`,
-    `rendered select #${selectId}`,
+    'the rendered resolution trigger',
+  );
+  // The frame's height with the list CLOSED. The design's whole claim about this
+  // control is that opening it does not move the media, and only a before/after read
+  // can see that.
+  const closedFrameHeight = await evaluate(
+    page,
+    `document.querySelector('#now-preview').getBoundingClientRect().height`,
   );
 
   try {
-    await evaluate(
-      page,
-      `(() => {
-        const select = document.getElementById(${JSON.stringify(selectId)});
-        if (!(select instanceof HTMLSelectElement)) throw new Error('Missing select #${selectId}');
-        select.focus();
-        select.showPicker();
-      })()`,
-    );
+    await evaluate(page, `document.querySelector('#now-qtrigger').click()`);
     await waitForEvaluation(
       page,
       `(() => {
-        const select = document.getElementById(${JSON.stringify(selectId)});
-        return { ready: select instanceof HTMLSelectElement && select.matches(':open') };
+        const list = document.querySelector('#now-qlist');
+        return { ready: list instanceof HTMLElement && !list.hidden && list.getClientRects().length > 0 };
       })()`,
-      `open picker for #${selectId}`,
+      'the open resolution list',
     );
-    await evaluate(page, `new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)))`);
+    // Two frames is enough for layout but not for the 180ms caret flip, and a screenshot
+    // taken mid-rotation reads as a broken glyph to whoever reviews the evidence. Wait
+    // for the transform to stop moving instead of guessing a delay.
+    await waitForEvaluation(
+      page,
+      `(() => {
+        const caret = document.querySelector('#now-qtrigger .picker-caret');
+        const transform = caret == null ? '' : getComputedStyle(caret).transform;
+        const settled = transform === globalThis.__qaLastCaretTransform;
+        globalThis.__qaLastCaretTransform = transform;
+        return { ready: settled, transform };
+      })()`,
+      'the caret rotation to settle',
+    );
 
     const inspection = await evaluate(
       page,
       `(() => {
-        const select = document.getElementById(${JSON.stringify(selectId)});
-        if (!(select instanceof HTMLSelectElement)) throw new Error('Missing select #${selectId}');
-        const trigger = getComputedStyle(select);
-        const picker = getComputedStyle(select, '::picker(select)');
-        const radius = Number.parseFloat(picker.borderTopLeftRadius);
-        const surfaceToken = getComputedStyle(document.documentElement).getPropertyValue(
-          ${JSON.stringify(selectId)} === 'now-qselect' ? '--media-surface' : '--surface',
-        ).trim();
-        const probe = document.createElement('span');
-        probe.style.backgroundColor = surfaceToken;
-        document.body.append(probe);
-        const expectedPickerBackground = getComputedStyle(probe).backgroundColor;
-        probe.remove();
+        const trigger = document.querySelector('#now-qtrigger');
+        const list = document.querySelector('#now-qlist');
+        const preview = document.querySelector('#now-preview');
+        if (!(list instanceof HTMLElement)) throw new Error('Missing #now-qlist');
+        const rows = [...list.querySelectorAll('.picker-row')];
+        const listRect = list.getBoundingClientRect();
+        const previewRect = preview.getBoundingClientRect();
+        const triggerRect = trigger.getBoundingClientRect();
+        const style = getComputedStyle(list);
+        const edge = getComputedStyle(list.querySelector('.picker-edge'), '::before');
+        const selected = rows.filter((row) => row.getAttribute('aria-selected') === 'true');
+        const tick = selected[0]?.querySelector('.picker-tick');
         const checks = {
-          pickerOpen: select.matches(':open'),
-          triggerUsesBaseSelect: trigger.appearance === 'base-select',
-          pickerUsesBaseSelect: picker.appearance === 'base-select',
-          pickerRounded: Number.isFinite(radius) && radius >= 14,
-          pickerUsesExpectedSurface: picker.backgroundColor === expectedPickerBackground,
-          selectedValuePresent: select.selectedOptions.length === 1 && select.selectedOptions[0].textContent.trim().length > 0,
+          listOpen: !list.hidden && listRect.height > 0,
+          triggerExpanded: trigger.getAttribute('aria-expanded') === 'true',
+          listIsALabelledListbox:
+            list.getAttribute('role') === 'listbox' && (list.getAttribute('aria-label') ?? '').length > 0,
+          // Over the media, not beside it: the list's top edge is inside the frame.
+          overlapsMedia: listRect.top < previewRect.bottom,
+          // And the frame kept the height it had while the list was closed.
+          mediaDidNotResize: Math.abs(previewRect.height - ${closedFrameHeight}) <= 1,
+          anchoredAboveTrigger: Math.abs(listRect.bottom - (triggerRect.top - 6)) <= 2,
+          spansTheTrigger: Math.abs(listRect.width - triggerRect.width) <= 1,
+          floatsAboveTheFrame: Number(style.zIndex) >= 30,
+          blursWhatIsBehindIt: /blur/.test(style.backdropFilter || style.webkitBackdropFilter || ''),
+          edgeLightSpins: edge.animationName === 'edgespin',
+          everyRowIsAnOption: rows.length >= 2 && rows.every((row) => row.getAttribute('role') === 'option'),
+          exactlyOneSelected: selected.length === 1,
+          selectedRowMatchesTrigger:
+            selected[0]?.querySelector('.picker-label')?.textContent?.trim() ===
+            document.querySelector('#now-qlabel')?.textContent?.trim(),
+          selectedTickVisible: tick != null && getComputedStyle(tick).visibility === 'visible',
         };
         return {
           surface: ${JSON.stringify(surface)},
-          selectId: ${JSON.stringify(selectId)},
+          control: 'now-qtrigger',
           checks,
           passed: Object.values(checks).every(Boolean),
           metrics: {
-            triggerAppearance: trigger.appearance,
-            triggerDisplay: trigger.display,
-            triggerAlignItems: trigger.alignItems,
-            pickerAppearance: picker.appearance,
-            pickerBackground: picker.backgroundColor,
-            expectedPickerBackground,
-            pickerBorderRadius: picker.borderTopLeftRadius,
-            selectedText: select.selectedOptions[0]?.textContent?.trim() ?? '',
+            rowCount: rows.length,
+            rowLabels: rows.map((row) => row.querySelector('.picker-label')?.textContent?.trim() ?? ''),
+            selectedText: document.querySelector('#now-qlabel')?.textContent?.trim() ?? '',
+            listTop: listRect.top,
+            listWidth: listRect.width,
+            previewBottom: previewRect.bottom,
+            previewHeight: previewRect.height,
+            closedFrameHeight: ${closedFrameHeight},
+            zIndex: style.zIndex,
+            backdropFilter: style.backdropFilter || style.webkitBackdropFilter || '',
           },
         };
       })()`,
@@ -2444,7 +2478,7 @@ async function captureSettingsPage(page, tab) {
         pressed: [...group.querySelectorAll('[data-value][aria-pressed="true"]')].map((b) => b.dataset.value),
         labelled: document.getElementById(group.getAttribute('aria-labelledby') ?? '') != null,
       }));
-      const swatches = [...document.querySelectorAll('#set-accent .swatch')].map((s) => ({
+      const swatches = [...document.querySelectorAll('#set-accent-solid .swatch')].map((s) => ({
         accent: s.dataset.accent,
         pressed: s.getAttribute('aria-pressed') === 'true',
         named: (s.getAttribute('aria-label') ?? '').length > 0,
@@ -2461,11 +2495,11 @@ async function captureSettingsPage(page, tab) {
         everyGroupLabelled: groups.every((g) => g.labelled),
         // Only on the page that has them; the others legitimately have none.
         accentRowConsistent:
-          tab !== 'appearance' ||
+          tab !== 'look' ||
           (swatches.length >= 3 &&
             swatches.filter((s) => s.pressed).length === 1 &&
             swatches.every((s) => s.named && s.accent)),
-        shortcutRowsPresent: tab !== 'shortcuts' || (keys.length === 9 && keys.every((k) => k.action && k.label)),
+        shortcutRowsPresent: tab !== 'keys' || (keys.length === 9 && keys.every((k) => k.action && k.label)),
         noHorizontalOverflow:
           document.documentElement.scrollWidth <= document.documentElement.clientWidth &&
           (!app || app.scrollWidth <= app.clientWidth),
@@ -2540,7 +2574,7 @@ async function exerciseSettingsControls(page) {
 
   for (const [name, spec] of Object.entries(SEG_FIELDS)) {
     // The page that owns this group has to be open for its buttons to be clickable.
-    for (const tab of ['general', 'appearance', 'advanced']) {
+    for (const tab of ['general', 'look', 'advanced']) {
       await evaluate(page, `document.querySelector('#set-tabs [data-tab=${JSON.stringify(tab)}]')?.click()`);
       const present = await evaluate(
         page,
@@ -2571,13 +2605,13 @@ async function exerciseSettingsControls(page) {
   // A swatch has to move the CSS variable, not only its own aria-pressed.
   const swatches = await evaluate(
     page,
-    `document.querySelector('#set-tabs [data-tab="appearance"]')?.click(),
-     [...document.querySelectorAll('#set-accent .swatch')].map((s) => s.dataset.accent)`,
+    `document.querySelector('#set-tabs [data-tab="look"]')?.click(),
+     [...document.querySelectorAll('#set-accent-solid .swatch')].map((s) => s.dataset.accent)`,
   );
   for (const accent of swatches.slice(0, 3).concat(['brand'])) {
     await clickAndSettle(
       page,
-      `#set-accent [data-accent="${accent}"]`,
+      `#set-accent-solid [data-accent="${accent}"]`,
       `stored.accent === ${JSON.stringify(accent)}`,
       `accent=${accent}`,
     );
@@ -2586,18 +2620,269 @@ async function exerciseSettingsControls(page) {
       `(() => {
         const root = getComputedStyle(document.documentElement);
         return {
-          accent: root.getPropertyValue('--accent').trim(),
-          media: root.getPropertyValue('--media-accent').trim(),
-          pressed: document.querySelector('#set-accent [data-accent][aria-pressed="true"]')?.dataset.accent ?? null,
+          attribute: document.documentElement.dataset.accent ?? null,
+          // --ac is the flat colour, --acg the paint (a gradient on half the palette),
+          // --ach the readable-on-canvas step, --onac the text drawn on it. All four
+          // come from the stylesheet's [data-accent] rule, so the attribute landing is
+          // what proves the whole set moved.
+          flat: root.getPropertyValue('--ac').trim(),
+          paint: root.getPropertyValue('--acg').trim(),
+          onAccent: root.getPropertyValue('--onac').trim(),
+          readable: root.getPropertyValue('--ach').trim(),
+          pressed: document.querySelector('#set-accent-solid [data-accent][aria-pressed="true"]')?.dataset.accent ?? null,
         };
       })()`,
     );
     metrics.accents.push({ accent, ...applied });
     checks[`accent:${accent}`] =
-      applied.pressed === accent && applied.accent.length > 0 && applied.accent === applied.media;
+      applied.pressed === accent &&
+      applied.attribute === accent &&
+      applied.flat.length > 0 &&
+      applied.paint.length > 0 &&
+      applied.onAccent.length > 0 &&
+      applied.readable.length > 0 &&
+      // The solid group states one colour twice; a gradient here would mean the swatch
+      // wrote the wrong half of the pair.
+      applied.paint === applied.flat;
+  }
+
+  // The panel tint is the same contract on a second palette: one attribute, four
+  // surfaces, resolved per theme by the stylesheet.
+  const tints = await evaluate(
+    page,
+    `[...document.querySelectorAll('#set-tint .swatch')].map((s) => s.dataset.tint)`,
+  );
+  metrics.tints = [];
+  for (const tint of tints.slice(0, 2).concat(['slate'])) {
+    await clickAndSettle(
+      page,
+      `#set-tint [data-tint="${tint}"]`,
+      `stored.panelTint === ${JSON.stringify(tint)}`,
+      `tint=${tint}`,
+    );
+    const applied = await evaluate(
+      page,
+      `(() => {
+        const root = getComputedStyle(document.documentElement);
+        const surfaces = ['--cv', '--sf', '--sf2', '--ln'].map((name) => root.getPropertyValue(name).trim());
+        return {
+          attribute: document.documentElement.dataset.tint ?? null,
+          surfaces,
+          pressed: document.querySelector('#set-tint [data-tint][aria-pressed="true"]')?.dataset.tint ?? null,
+        };
+      })()`,
+    );
+    metrics.tints.push({ tint, ...applied });
+    checks[`tint:${tint}`] =
+      applied.pressed === tint &&
+      applied.attribute === tint &&
+      applied.surfaces.every((value) => value.length > 0) &&
+      new Set(applied.surfaces).size === 4;
   }
 
   return { name: 'settings-controls', checks, metrics, passed: Object.values(checks).every(Boolean) };
+}
+
+/** The diagnostics block: the switch, the counters, and the export.
+ *
+ *  Written as a CLICK exercise for the reason the whole of exerciseSettingsControls
+ *  exists: this harness seeds settings before startup, so a seeded value only ever
+ *  proves the startup path. `diagEnabled` is read again by three other contexts
+ *  (worker, content script, MAIN-world hook), which is precisely the kind of setting
+ *  that can apply at boot and do nothing when pressed.
+ *
+ *  The export is intercepted rather than downloaded: the anchor's own click would
+ *  write a real file into the machine's Downloads folder on every QA run. Reading
+ *  the blob it points at proves more anyway — that the report parses, carries the
+ *  trace, and leaks no fbcdn signature. */
+async function exerciseDiagnostics(page, facebookPage) {
+  await activateSurface(page, 'settings');
+  await evaluate(page, `document.querySelector('#set-tabs [data-tab="advanced"]')?.click()`);
+  const checks = {};
+  const metrics = {};
+
+  // Every assertion below has to cross a value DIFFERENT from the one already
+  // stored. clickAndSettle returns as soon as its expectation holds, so a click
+  // asserted against the value that was ALREADY there passes without waiting for
+  // the click at all — which is how the first draft of this phase "passed" while
+  // leaving the switch in the opposite state. Normalize to off without asserting,
+  // then assert each real transition.
+  if (await evaluate(page, `document.querySelector('#set-diag').checked`)) {
+    await evaluate(page, `document.querySelector('#set-diag').click()`);
+  }
+  await waitForEvaluation(
+    page,
+    `(async () => {
+      const stored = (await chrome.storage.local.get('settings')).settings ?? {};
+      return { ready: stored.diagEnabled !== true, stored };
+    })()`,
+    'diagnostics start from off',
+  );
+
+  const on = await clickAndSettle(page, '#set-diag', 'stored.diagEnabled === true', 'diagnostics on');
+  checks['switch:on'] = on.stored.diagEnabled === true;
+  // The control has to agree with what was stored, or it is reporting a value that
+  // is not in force. reflectSettings() repaints this box after every settings
+  // write, so this also catches the repaint reverting the value that was just set.
+  checks['switch:onReflected'] = await evaluate(page, `document.querySelector('#set-diag').checked === true`);
+
+  const off = await clickAndSettle(page, '#set-diag', 'stored.diagEnabled === false', 'diagnostics off');
+  checks['switch:off'] = off.stored.diagEnabled === false;
+  checks['switch:offReflected'] = await evaluate(page, `document.querySelector('#set-diag').checked === false`);
+
+  // The whole point of the switch: with it on, the content script living in the
+  // OTHER tab has to start reporting. This is the only check here that crosses
+  // every hop — content script → worker → storage.local — and the only one that
+  // can fail while every UI check above passes.
+  //
+  // Nothing is seeded and no DOM is touched: turning the flag on is itself what
+  // the content script reports (`contentReady`), so this cannot contaminate the
+  // fixture the later phases still read. The trace is cleared first so what
+  // arrives can only be the result of THIS transition.
+  await evaluate(page, `chrome.storage.local.remove('diag_log')`);
+  await clickAndSettle(page, '#set-diag', 'stored.diagEnabled === true', 'diagnostics on again');
+  const live = await waitForEvaluation(
+    page,
+    `(async () => {
+      const log = (await chrome.storage.local.get('diag_log')).diag_log ?? [];
+      const fromContent = log.filter((e) => e.ctx === 'content');
+      return { ready: fromContent.length > 0, sample: fromContent[0] ?? null, total: log.length };
+    })()`,
+    'the content script reports into the trace once diagnostics are switched on',
+    // content-diag batches for 1s, the worker's observer coalesces for another
+    // 1.5s, and both run behind a settings read. This is a real multi-hop wait.
+    20_000,
+  );
+  metrics.liveEvent = live.sample;
+  checks['chain:contentReported'] = live.sample?.ev === 'contentReady';
+  // The worker stamps the tab: an event that reached storage without one never
+  // went through the observer's report path.
+  checks['chain:tabStamped'] = Number.isInteger(live.sample?.data?.tab);
+  // The synthetic Facebook page is the one that must have reported it.
+  const facebookAlive = await evaluate(facebookPage, `document.readyState`);
+  checks['chain:facebookPageAlive'] = typeof facebookAlive === 'string';
+
+  // A trace as the worker would have written it — already redacted, since redaction
+  // happens where each event is recorded. The unit suite covers the redactor itself;
+  // what is under test here is that the panel reads, counts and exports it.
+  const seeded = [
+    { at: 1_700_000_000_000, ctx: 'hook', ev: 'graphql', data: { q: 'ReelsFeed', items: 12, videos: 3 } },
+    { at: 1_700_000_000_500, ctx: 'worker', ev: 'net', data: { url: 'scontent.xx.fbcdn.net/v/t42.1790-2/a_n.mp4' } },
+    { at: 1_700_000_001_000, ctx: 'offscreen', ev: 'muxFailed', lvl: 'error', data: { error: 'Error: no audio' } },
+  ];
+  await evaluate(
+    page,
+    `(async () => {
+      await chrome.storage.local.set({ diag_log: ${JSON.stringify(seeded)}, diag_counters: { captureGraphql: 12, drmSkipped: 1 } });
+    })()`,
+  );
+
+  // Opening the section is what triggers its render — the counters are not read on
+  // every settings render.
+  await evaluate(page, `document.querySelector('#diag-details').open = true; document.querySelector('#diag-details').dispatchEvent(new Event('toggle'))`);
+  const rendered = await waitForEvaluation(
+    page,
+    `(() => {
+      const counters = document.querySelector('#diag-counters').textContent ?? '';
+      const events = document.querySelector('#diag-events').textContent ?? '';
+      return { ready: counters.includes('captureGraphql') && /3/.test(events), counters, events };
+    })()`,
+    'the diagnostics section renders its counters and event count',
+  );
+  metrics.counters = rendered.counters;
+  metrics.eventLine = rendered.events;
+  checks['render:counters'] = rendered.counters.includes('captureGraphql');
+  checks['render:eventCount'] = /\b3\b/.test(rendered.events);
+
+  // Two buttons where there was one, inside a 340px panel. Measured rather than
+  // eyeballed, and screenshotted so it CAN be eyeballed: the harness reaches no
+  // other part of this disclosure, so nothing else would catch the row overflowing.
+  const layout = await evaluate(
+    page,
+    `(() => {
+      const actions = document.querySelector('.diagnostics .diag-actions');
+      const box = actions.getBoundingClientRect();
+      const buttons = [...actions.children].map((b) => Math.round(b.getBoundingClientRect().width));
+      return {
+        overflows: actions.scrollWidth > actions.clientWidth + 1,
+        documentOverflows: document.documentElement.scrollWidth > document.documentElement.clientWidth + 1,
+        width: Math.round(box.width),
+        buttons,
+        // Both on one line at this width: the wrap is the 300px fallback, not the norm.
+        sameRow: [...actions.children].every((b) => Math.abs(b.getBoundingClientRect().top - box.top) < 1),
+      };
+    })()`,
+  );
+  metrics.actionsLayout = layout;
+  checks['layout:noOverflow'] = layout.overflows === false && layout.documentOverflows === false;
+  checks['layout:sameRow'] = layout.sameRow === true;
+  // The diagnostics card is the last thing on the Advanced page, well below the
+  // fold at 340px — an un-scrolled screenshot frames the filename template instead.
+  await evaluate(page, `document.querySelector('.diagnostics')?.scrollIntoView({ block: 'end' })`);
+  await delay(120);
+  const shot = await page.command('Page.captureScreenshot', { format: 'png', fromSurface: true, captureBeyondViewport: false });
+  await writeFile(join(QA_DIR, 'settings-diagnostics.png'), Buffer.from(shot.data, 'base64'));
+  metrics.screenshot = 'settings-diagnostics.png';
+
+  const report = await waitForEvaluation(
+    page,
+    `(async () => {
+      if (!window.__qaExportHook) {
+        window.__qaExports = [];
+        const original = HTMLAnchorElement.prototype.click;
+        HTMLAnchorElement.prototype.click = function () {
+          if (this.download) {
+            window.__qaExports.push({ name: this.download, href: this.href });
+            return;
+          }
+          return original.call(this);
+        };
+        window.__qaExportHook = true;
+        document.querySelector('#diag-export').click();
+      }
+      const written = window.__qaExports[0];
+      if (!written) return { ready: false };
+      const text = await (await fetch(written.href)).text();
+      return { ready: true, name: written.name, text };
+    })()`,
+    'the export button writes a diagnostics report',
+  );
+  const parsed = JSON.parse(report.text);
+  metrics.exportName = report.name;
+  metrics.exportBytes = report.text.length;
+  metrics.exportKeys = Object.keys(parsed);
+  checks['export:filename'] = /^facescrap-diagnostics-[\d-]+\.json$/.test(report.name);
+  checks['export:identity'] = parsed.report === 'facescrap-diagnostics';
+  checks['export:counters'] = parsed.counters?.captureGraphql === 12;
+  checks['export:events'] = parsed.events?.length === 3 && parsed.eventCount === 3;
+  // Both shapes ship: objects for a script, lines for a person.
+  checks['export:lines'] = Array.isArray(parsed.lines) && parsed.lines[0].includes('graphql');
+  // Settings ride along — half of what looks like a capture bug is a setting.
+  checks['export:settings'] = parsed.settings?.diagEnabled === true;
+  checks['export:extension'] = typeof parsed.extension?.version === 'string';
+  // Nothing signed may reach a file the user is about to hand to someone.
+  checks['export:noSecrets'] = !/[?&](oh|oe|_nc_sid|_nc_ohc)=/.test(report.text);
+
+  // Reset gets the trace as well as the counters: leaving events behind after a
+  // "Reset counters" that emptied the box would misreport what is still stored.
+  await evaluate(page, `document.querySelector('#diag-reset').click()`);
+  const cleared = await waitForEvaluation(
+    page,
+    `(async () => {
+      const stored = await chrome.storage.local.get(['diag_log', 'diag_counters']);
+      return { ready: stored.diag_log === undefined && stored.diag_counters === undefined, stored };
+    })()`,
+    'reset clears both the counters and the trace',
+  );
+  checks['reset:both'] = cleared.ready;
+
+  // Back to the seeded state, so the settings screenshots taken later are of the
+  // fixture and not of this phase's leftovers: the switch off, and the disclosure
+  // this phase opened closed again.
+  await clickAndSettle(page, '#set-diag', 'stored.diagEnabled === false', 'diagnostics restored to off');
+  await evaluate(page, `document.querySelector('#diag-details').open = false`);
+
+  return { name: 'diagnostics', checks, metrics, passed: Object.values(checks).every(Boolean) };
 }
 
 /** One real mouse gesture, as Chrome delivers it: dispatchMouseEvent produces the pointer events
@@ -2642,7 +2927,7 @@ async function exerciseMarqueeDrag(page) {
     page,
     `(() => {
       const list = document.querySelector('#list');
-      const cards = [...list.querySelectorAll('.card[data-card-id]')];
+      const cards = [...list.querySelectorAll('.tile[data-card-id]')];
       const box = list.getBoundingClientRect();
       return {
         cards: cards.length,
@@ -2666,7 +2951,7 @@ async function exerciseMarqueeDrag(page) {
   const after = await evaluate(
     page,
     `(() => {
-      const cards = [...document.querySelectorAll('#list .card[data-card-id]')];
+      const cards = [...document.querySelectorAll('#list .tile[data-card-id]')];
       return {
         picked: cards.filter((c) => c.classList.contains('is-picked')).length,
         pressedChecks: cards.filter((c) => c.querySelector('.pick[aria-pressed="true"]') != null).length,
@@ -2779,19 +3064,19 @@ async function captureSingleQualityOption(page, fixture, tabId) {
       page,
       `(() => {
         const count = document.querySelector('#now-qcount');
-        const select = document.querySelector('#now-qselect');
+        const trigger = document.querySelector('#now-qtrigger');
+        const rows = document.querySelectorAll('#now-qlist .picker-row');
         return {
           ready:
             count instanceof HTMLElement &&
-            count.hidden &&
             count.textContent.trim() === '' &&
-            select instanceof HTMLSelectElement &&
-            select.disabled &&
-            select.options.length === 1 &&
-            select.options[0]?.textContent?.trim() === '1080p',
+            trigger instanceof HTMLButtonElement &&
+            trigger.disabled &&
+            rows.length === 1 &&
+            document.querySelector('#now-qlabel')?.textContent?.trim() === '1080p',
         };
       })()`,
-      'single-option Now Playing quality selector',
+      'single-option Now Playing resolution picker',
     );
 
     const inspection = await evaluate(
@@ -2804,33 +3089,30 @@ async function captureSingleQualityOption(page, fixture, tabId) {
           return style.display !== 'none' && style.visibility !== 'hidden' && rect.width > 0 && rect.height > 0;
         };
         const count = document.querySelector('#now-qcount');
-        const select = document.querySelector('#now-qselect');
+        const trigger = document.querySelector('#now-qtrigger');
         const quality = document.querySelector('#now-quality');
-        if (!(select instanceof HTMLSelectElement)) throw new Error('Missing select #now-qselect');
-        const style = getComputedStyle(select);
-        const rect = select.getBoundingClientRect();
+        if (!(trigger instanceof HTMLButtonElement)) throw new Error('Missing #now-qtrigger');
+        const caret = trigger.querySelector('.picker-caret');
+        const rect = trigger.getBoundingClientRect();
         const qualityRect = quality?.getBoundingClientRect();
-        const labels = [...select.options].map((option) => option.textContent?.trim() ?? '');
+        const labels = [...document.querySelectorAll('#now-qlist .picker-row .picker-label')].map(
+          (label) => label.textContent?.trim() ?? '',
+        );
+        const selectedText = document.querySelector('#now-qlabel')?.textContent?.trim() ?? '';
         const checks = {
           qualityCountHiddenAndEmpty:
-            count instanceof HTMLElement &&
-            count.hidden &&
-            count.textContent.trim() === '' &&
-            !visible(count),
-          qualitySelectDisabled: select.disabled,
-          singleResolutionLabel:
-            labels.length === 1 &&
-            labels[0] === '1080p' &&
-            select.selectedOptions[0]?.textContent?.trim() === '1080p',
-          chevronHidden: style.backgroundImage === 'none',
-          // The redesign makes the resolution field full width (level with the
-          // download button) and 46px tall at the standard viewport — it still
-          // collapses to 32px under the max-height:650px rule, checked separately.
+            count instanceof HTMLElement && count.textContent.trim() === '' && !visible(count),
+          qualitySelectDisabled: trigger.disabled,
+          // The row still STATES the resolution — that is what it is for. What a single
+          // representation loses is the caret and the pointer, not the number.
+          singleResolutionLabel: labels.length === 1 && labels[0] === '1080p' && selectedText === '1080p',
+          chevronHidden: caret instanceof HTMLElement && getComputedStyle(caret).display === 'none',
+          // Flat 38px whatever the option count, and level with the button below it.
           compactDimensions:
             Boolean(qualityRect) &&
             Math.abs(rect.width - qualityRect.width) <= 2 &&
             rect.width > 180 &&
-            Math.abs(rect.height - 46) <= 2,
+            Math.abs(rect.height - 38) <= 2,
           viewportExact: innerWidth === ${VIEWPORT.width} && innerHeight === ${VIEWPORT.height},
         };
         return {
@@ -2840,11 +3122,11 @@ async function captureSingleQualityOption(page, fixture, tabId) {
           metrics: {
             countHidden: count instanceof HTMLElement ? count.hidden : null,
             countText: count?.textContent?.trim() ?? null,
-            selectDisabled: select.disabled,
-            optionCount: select.options.length,
+            triggerDisabled: trigger.disabled,
+            optionCount: labels.length,
             optionLabels: labels,
-            selectedText: select.selectedOptions[0]?.textContent?.trim() ?? '',
-            backgroundImage: style.backgroundImage,
+            selectedText,
+            caretDisplay: caret instanceof HTMLElement ? getComputedStyle(caret).display : null,
             width: rect.width,
             height: rect.height,
           },
@@ -2878,28 +3160,27 @@ async function captureSingleQualityOption(page, fixture, tabId) {
       page,
       `(() => {
         const count = document.querySelector('#now-qcount');
-        const select = document.querySelector('#now-qselect');
-        const labels =
-          select instanceof HTMLSelectElement
-            ? [...select.options].map((option) => option.textContent?.trim() ?? '')
-            : [];
+        const trigger = document.querySelector('#now-qtrigger');
+        const labels = [...document.querySelectorAll('#now-qlist .picker-row .picker-label')].map(
+          (label) => label.textContent?.trim() ?? '',
+        );
         return {
           ready:
             count instanceof HTMLElement &&
             !count.hidden &&
-            count.textContent.trim() === '2' &&
-            select instanceof HTMLSelectElement &&
-            !select.disabled &&
+            count.textContent.trim().split(/[^0-9]+/).includes('2') &&
+            trigger instanceof HTMLButtonElement &&
+            !trigger.disabled &&
             labels.length === 2 &&
             labels[0] === '1080p' &&
             labels[1] === '720p',
           countHidden: count instanceof HTMLElement ? count.hidden : null,
           countText: count?.textContent?.trim() ?? null,
-          selectDisabled: select instanceof HTMLSelectElement ? select.disabled : null,
+          triggerDisabled: trigger instanceof HTMLButtonElement ? trigger.disabled : null,
           optionLabels: labels,
         };
       })()`,
-      'restored two-option Now Playing quality selector',
+      'restored two-option Now Playing resolution picker',
     );
   }
 
@@ -2916,14 +3197,17 @@ async function captureCompactQualityScreenshot(page, { mode, filename }) {
     page,
     `(() => {
       const count = document.querySelector('#now-qcount');
-      const select = document.querySelector('#now-qselect');
+      const trigger = document.querySelector('#now-qtrigger');
       const quality = document.querySelector('#now-quality');
       const app = document.querySelector('#app');
-      if (!(select instanceof HTMLSelectElement)) throw new Error('Missing select #now-qselect');
-      const style = getComputedStyle(select);
-      const rect = select.getBoundingClientRect();
+      if (!(trigger instanceof HTMLButtonElement)) throw new Error('Missing #now-qtrigger');
+      const caret = trigger.querySelector('.picker-caret');
+      const rect = trigger.getBoundingClientRect();
       const qualityRect = quality?.getBoundingClientRect();
-      const labels = [...select.options].map((option) => option.textContent?.trim() ?? '');
+      const labels = [...document.querySelectorAll('#now-qlist .picker-row .picker-label')].map(
+        (label) => label.textContent?.trim() ?? '',
+      );
+      const selectedText = document.querySelector('#now-qlabel')?.textContent?.trim() ?? '';
       const noHorizontalOverflow =
         document.documentElement.scrollWidth <= document.documentElement.clientWidth &&
         document.body.scrollWidth <= document.body.clientWidth &&
@@ -2941,28 +3225,34 @@ async function captureCompactQualityScreenshot(page, { mode, filename }) {
           multiple
             ? `count instanceof HTMLElement &&
               !count.hidden &&
-              count.textContent.trim() === '2'`
+              count.textContent.trim().split(/[^0-9]+/).includes('2')`
             : `count instanceof HTMLElement &&
-              count.hidden &&
               count.textContent.trim() === ''`
         },
         qualitySelectState: ${
           multiple
-            ? `!select.disabled &&
+            ? `!trigger.disabled &&
               labels.length === 2 &&
               labels[0] === '1080p' &&
-              labels[1] === '720p'`
-            : `select.disabled &&
+              labels[1] === '720p' &&
+              selectedText === '1080p'`
+            : `trigger.disabled &&
               labels.length === 1 &&
               labels[0] === '1080p' &&
-              select.selectedOptions[0]?.textContent?.trim() === '1080p'`
+              selectedText === '1080p'`
         },
-        chevronState: ${multiple ? `style.backgroundImage !== 'none'` : `style.backgroundImage === 'none'`},
+        chevronState: ${
+          multiple
+            ? `caret instanceof HTMLElement && getComputedStyle(caret).display !== 'none'`
+            : `caret instanceof HTMLElement && getComputedStyle(caret).display === 'none'`
+        },
+        // The trigger is one flat field height whatever the option count — that is the
+        // point of the control, and the short-panel rule must not shrink it either.
         compactDimensions:
           Boolean(qualityRect) &&
           Math.abs(rect.width - qualityRect.width) <= 2 &&
           rect.width > 180 &&
-          Math.abs(rect.height - 32) <= 2,
+          Math.abs(rect.height - 38) <= 2,
       };
       return {
         surface: ${JSON.stringify(`now-quality-compact-${multiple ? 'two-options' : 'single-option'}`)},
@@ -2976,11 +3266,11 @@ async function captureCompactQualityScreenshot(page, { mode, filename }) {
           appScrollWidth: app?.scrollWidth ?? null,
           countHidden: count instanceof HTMLElement ? count.hidden : null,
           countText: count?.textContent?.trim() ?? null,
-          selectDisabled: select.disabled,
-          optionCount: select.options.length,
+          triggerDisabled: trigger.disabled,
+          optionCount: labels.length,
           optionLabels: labels,
-          selectedText: select.selectedOptions[0]?.textContent?.trim() ?? '',
-          backgroundImage: style.backgroundImage,
+          selectedText,
+          caretDisplay: caret instanceof HTMLElement ? getComputedStyle(caret).display : null,
           width: rect.width,
           height: rect.height,
           qualityLeft: qualityRect?.left ?? null,
@@ -3027,20 +3317,23 @@ async function captureCompactQualityStates(page, fixture, tabId) {
       page,
       `(() => {
         const count = document.querySelector('#now-qcount');
-        const select = document.querySelector('#now-qselect');
+        const trigger = document.querySelector('#now-qtrigger');
+        const labels = [...document.querySelectorAll('#now-qlist .picker-row .picker-label')].map(
+          (label) => label.textContent?.trim() ?? '',
+        );
         return {
           ready:
             innerWidth === ${VIEWPORT.width} &&
             innerHeight === 650 &&
             count instanceof HTMLElement &&
             !count.hidden &&
-            count.textContent.trim() === '2' &&
-            select instanceof HTMLSelectElement &&
-            !select.disabled &&
-            select.options.length === 2,
+            count.textContent.trim().split(/[^0-9]+/).includes('2') &&
+            trigger instanceof HTMLButtonElement &&
+            !trigger.disabled &&
+            labels.length === 2,
         };
       })()`,
-      'compact two-option Now Playing quality selector',
+      'compact two-option Now Playing resolution picker',
     );
     multiple = await captureCompactQualityScreenshot(page, {
       mode: 'multiple',
@@ -3060,20 +3353,22 @@ async function captureCompactQualityStates(page, fixture, tabId) {
       page,
       `(() => {
         const count = document.querySelector('#now-qcount');
-        const select = document.querySelector('#now-qselect');
+        const trigger = document.querySelector('#now-qtrigger');
+        const labels = [...document.querySelectorAll('#now-qlist .picker-row .picker-label')].map(
+          (label) => label.textContent?.trim() ?? '',
+        );
         return {
           ready:
             innerWidth === ${VIEWPORT.width} &&
             innerHeight === 650 &&
             count instanceof HTMLElement &&
-            count.hidden &&
             count.textContent.trim() === '' &&
-            select instanceof HTMLSelectElement &&
-            select.disabled &&
-            select.options.length === 1,
+            trigger instanceof HTMLButtonElement &&
+            trigger.disabled &&
+            labels.length === 1,
         };
       })()`,
-      'compact single-option Now Playing quality selector',
+      'compact single-option Now Playing resolution picker',
     );
     single = await captureCompactQualityScreenshot(page, {
       mode: 'single',
@@ -3094,20 +3389,19 @@ async function captureCompactQualityStates(page, fixture, tabId) {
       page,
       `(() => {
         const count = document.querySelector('#now-qcount');
-        const select = document.querySelector('#now-qselect');
-        const labels =
-          select instanceof HTMLSelectElement
-            ? [...select.options].map((option) => option.textContent?.trim() ?? '')
-            : [];
+        const trigger = document.querySelector('#now-qtrigger');
+        const labels = [...document.querySelectorAll('#now-qlist .picker-row .picker-label')].map(
+          (label) => label.textContent?.trim() ?? '',
+        );
         return {
           ready:
             innerWidth === ${VIEWPORT.width} &&
             innerHeight === ${VIEWPORT.height} &&
             count instanceof HTMLElement &&
             !count.hidden &&
-            count.textContent.trim() === '2' &&
-            select instanceof HTMLSelectElement &&
-            !select.disabled &&
+            count.textContent.trim().split(/[^0-9]+/).includes('2') &&
+            trigger instanceof HTMLButtonElement &&
+            !trigger.disabled &&
             labels.length === 2 &&
             labels[0] === '1080p' &&
             labels[1] === '720p',
@@ -3115,7 +3409,7 @@ async function captureCompactQualityStates(page, fixture, tabId) {
           innerHeight,
           countHidden: count instanceof HTMLElement ? count.hidden : null,
           countText: count?.textContent?.trim() ?? null,
-          selectDisabled: select instanceof HTMLSelectElement ? select.disabled : null,
+          triggerDisabled: trigger instanceof HTMLButtonElement ? trigger.disabled : null,
           optionLabels: labels,
         };
       })()`,
@@ -3138,425 +3432,11 @@ async function captureCompactQualityStates(page, fixture, tabId) {
   };
 }
 
-async function captureFocusedClosedQualityTransition(page, fixture, tabId) {
-  const filename = 'now-quality-focused-closed-transition.png';
-  const mediaKey = `media_${tabId}`;
-  const singleOptionItems = fixture.items.filter((item) => item.id !== 'fixture-main-720');
-  let capture;
-  let restoration;
-
-  try {
-    await evaluate(
-      page,
-      `(async () => {
-        await chrome.storage.session.set({
-          ${JSON.stringify(mediaKey)}: ${JSON.stringify(fixture.items)},
-        });
-      })()`,
-    );
-    await activateSurface(page, 'now');
-    await waitForEvaluation(
-      page,
-      `(() => {
-        const count = document.querySelector('#now-qcount');
-        const select = document.querySelector('#now-qselect');
-        return {
-          ready:
-            count instanceof HTMLElement &&
-            !count.hidden &&
-            count.textContent.trim() === '2' &&
-            select instanceof HTMLSelectElement &&
-            !select.disabled &&
-            select.options.length === 2,
-        };
-      })()`,
-      'two-option selector before the focused-closed transition',
-    );
-    const focusedClosed = await evaluate(
-      page,
-      `(() => {
-        const select = document.querySelector('#now-qselect');
-        if (!(select instanceof HTMLSelectElement)) throw new Error('Missing select #now-qselect');
-        select.focus({ preventScroll: true });
-        return {
-          focused: document.activeElement === select,
-          open: select.matches(':open'),
-          disabled: select.disabled,
-          optionCount: select.options.length,
-        };
-      })()`,
-    );
-    if (
-      focusedClosed.focused !== true ||
-      focusedClosed.open !== false ||
-      focusedClosed.disabled !== false ||
-      focusedClosed.optionCount !== 2
-    ) {
-      throw new Error(`Could not establish focused-closed quality state: ${JSON.stringify(focusedClosed)}`);
-    }
-
-    const transitionStartedAt = Date.now();
-    await evaluate(
-      page,
-      `(async () => {
-        await chrome.storage.session.set({
-          ${JSON.stringify(mediaKey)}: ${JSON.stringify(singleOptionItems)},
-        });
-      })()`,
-    );
-    const transition = await waitForEvaluation(
-      page,
-      `(() => {
-        const count = document.querySelector('#now-qcount');
-        const select = document.querySelector('#now-qselect');
-        if (!(select instanceof HTMLSelectElement)) {
-          return { ready: false, reason: 'missing-select' };
-        }
-        const labels = [...select.options].map((option) => option.textContent?.trim() ?? '');
-        const backgroundImage = getComputedStyle(select).backgroundImage;
-        return {
-          ready:
-            count instanceof HTMLElement &&
-            count.hidden &&
-            count.textContent.trim() === '' &&
-            select.disabled &&
-            labels.length === 1 &&
-            labels[0] === '1080p' &&
-            backgroundImage === 'none',
-          countHidden: count instanceof HTMLElement ? count.hidden : null,
-          countText: count?.textContent?.trim() ?? null,
-          selectDisabled: select.disabled,
-          optionLabels: labels,
-          backgroundImage,
-          activeElementId: document.activeElement?.id ?? '',
-        };
-      })()`,
-      'focused but closed quality selector to accept the single-option storage update',
-      FOCUSED_CLOSED_TIMEOUT_MS,
-    );
-    const elapsedMs = Date.now() - transitionStartedAt;
-    const screenshot = await page.command('Page.captureScreenshot', {
-      format: 'png',
-      fromSurface: true,
-      captureBeyondViewport: false,
-    });
-    const bytes = Buffer.from(screenshot.data, 'base64');
-    const dimensions = pngDimensions(bytes);
-    const checks = {
-      focusedClosedBeforeMutation:
-        focusedClosed.focused === true &&
-        focusedClosed.open === false &&
-        focusedClosed.disabled === false &&
-        focusedClosed.optionCount === 2,
-      updatedWithinFocusedClosedTimeout:
-        transition.ready === true && elapsedMs <= FOCUSED_CLOSED_TIMEOUT_MS,
-      qualityCountHiddenAndEmpty:
-        transition.countHidden === true && transition.countText === '',
-      qualitySelectDisabled: transition.selectDisabled === true,
-      singleResolutionLabel:
-        transition.optionLabels.length === 1 && transition.optionLabels[0] === '1080p',
-      chevronHidden: transition.backgroundImage === 'none',
-      pngDimensionsExact:
-        dimensions.width === VIEWPORT.width && dimensions.height === VIEWPORT.height,
-    };
-    const path = join(QA_DIR, filename);
-    await writeFile(path, bytes);
-    capture = {
-      surface: 'now-quality-focused-closed-transition',
-      checks,
-      passed: Object.values(checks).every(Boolean),
-      focusedClosed,
-      transition: { ...transition, elapsedMs, timeoutMs: FOCUSED_CLOSED_TIMEOUT_MS },
-      file: filename,
-      path,
-      ...dimensions,
-      bytes: bytes.length,
-    };
-  } finally {
-    await evaluate(
-      page,
-      `(async () => {
-        if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
-        await chrome.storage.session.set({
-          ${JSON.stringify(mediaKey)}: ${JSON.stringify(fixture.items)},
-        });
-      })()`,
-    );
-    await activateSurface(page, 'now');
-    restoration = await waitForEvaluation(
-      page,
-      `(() => {
-        const count = document.querySelector('#now-qcount');
-        const select = document.querySelector('#now-qselect');
-        const labels =
-          select instanceof HTMLSelectElement
-            ? [...select.options].map((option) => option.textContent?.trim() ?? '')
-            : [];
-        return {
-          ready:
-            count instanceof HTMLElement &&
-            !count.hidden &&
-            count.textContent.trim() === '2' &&
-            select instanceof HTMLSelectElement &&
-            !select.disabled &&
-            labels.length === 2 &&
-            labels[0] === '1080p' &&
-            labels[1] === '720p' &&
-            document.activeElement?.id !== 'now-qselect',
-          countHidden: count instanceof HTMLElement ? count.hidden : null,
-          countText: count?.textContent?.trim() ?? null,
-          selectDisabled: select instanceof HTMLSelectElement ? select.disabled : null,
-          optionLabels: labels,
-          activeElementId: document.activeElement?.id ?? '',
-        };
-      })()`,
-      'restored two-option fixture after the focused-closed transition',
-    );
-  }
-
-  if (!capture) throw new Error('Focused-closed quality transition capture did not complete');
-  capture.restoration = restoration;
-  capture.checks.fixtureRestored = restoration.ready === true;
-  capture.passed = Object.values(capture.checks).every(Boolean);
-  return capture;
-}
-
-async function captureForcedFallbackQualityTransition(page, fixture, tabId) {
-  const filename = 'now-quality-forced-fallback-transition.png';
-  const mediaKey = `media_${tabId}`;
-  const singleOptionItems = fixture.items.filter((item) => item.id !== 'fixture-main-720');
-  const probeKey = '__facescrapQaQualityMatchesProbe';
-  let capture;
-  let restoration;
-
-  try {
-    await evaluate(
-      page,
-      `(async () => {
-        await chrome.storage.session.set({
-          ${JSON.stringify(mediaKey)}: ${JSON.stringify(fixture.items)},
-        });
-      })()`,
-    );
-    await activateSurface(page, 'now');
-    await waitForEvaluation(
-      page,
-      `(() => {
-        const count = document.querySelector('#now-qcount');
-        const select = document.querySelector('#now-qselect');
-        return {
-          ready:
-            count instanceof HTMLElement &&
-            !count.hidden &&
-            count.textContent.trim() === '2' &&
-            select instanceof HTMLSelectElement &&
-            !select.disabled &&
-            select.options.length === 2,
-        };
-      })()`,
-      'two-option selector before the forced fallback transition',
-    );
-    const fallbackArmed = await evaluate(
-      page,
-      `(() => {
-        const select = document.querySelector('#now-qselect');
-        if (!(select instanceof HTMLSelectElement)) throw new Error('Missing select #now-qselect');
-        const probe = {
-          select,
-          ownDescriptor: Object.getOwnPropertyDescriptor(select, 'matches'),
-          openMatchThrowCount: 0,
-          pointerdownDispatchCount: 0,
-        };
-        Object.defineProperty(select, 'matches', {
-          configurable: true,
-          value(selector) {
-            if (selector === ':open') {
-              probe.openMatchThrowCount += 1;
-              throw new Error('FaceScrap QA forced :open fallback');
-            }
-            return Element.prototype.matches.call(this, selector);
-          },
-        });
-        globalThis[${JSON.stringify(probeKey)}] = probe;
-        select.focus({ preventScroll: true });
-        select.dispatchEvent(
-          new PointerEvent('pointerdown', {
-            bubbles: true,
-            cancelable: true,
-            button: 0,
-            pointerType: 'mouse',
-          }),
-        );
-        probe.pointerdownDispatchCount += 1;
-        return {
-          focused: document.activeElement === select,
-          ownMatchesInstalled: Object.hasOwn(select, 'matches'),
-          pointerdownDispatchCount: probe.pointerdownDispatchCount,
-          openMatchThrowCount: probe.openMatchThrowCount,
-          disabled: select.disabled,
-          optionCount: select.options.length,
-        };
-      })()`,
-    );
-    if (
-      fallbackArmed.focused !== true ||
-      fallbackArmed.ownMatchesInstalled !== true ||
-      fallbackArmed.pointerdownDispatchCount !== 1 ||
-      fallbackArmed.openMatchThrowCount !== 0 ||
-      fallbackArmed.disabled !== false ||
-      fallbackArmed.optionCount !== 2
-    ) {
-      throw new Error(`Could not arm the forced quality fallback: ${JSON.stringify(fallbackArmed)}`);
-    }
-
-    const transitionStartedAt = Date.now();
-    await evaluate(
-      page,
-      `(async () => {
-        await chrome.storage.session.set({
-          ${JSON.stringify(mediaKey)}: ${JSON.stringify(singleOptionItems)},
-        });
-      })()`,
-    );
-    const transition = await waitForEvaluation(
-      page,
-      `(() => {
-        const probe = globalThis[${JSON.stringify(probeKey)}];
-        const count = document.querySelector('#now-qcount');
-        const select = document.querySelector('#now-qselect');
-        if (!(select instanceof HTMLSelectElement)) {
-          return {
-            ready: false,
-            reason: 'missing-select',
-            openMatchThrowCount: probe?.openMatchThrowCount ?? 0,
-          };
-        }
-        const labels = [...select.options].map((option) => option.textContent?.trim() ?? '');
-        const backgroundImage = getComputedStyle(select).backgroundImage;
-        return {
-          ready:
-            probe?.openMatchThrowCount > 0 &&
-            count instanceof HTMLElement &&
-            count.hidden &&
-            count.textContent.trim() === '' &&
-            select.disabled &&
-            labels.length === 1 &&
-            labels[0] === '1080p' &&
-            backgroundImage === 'none',
-          openMatchThrowCount: probe?.openMatchThrowCount ?? 0,
-          pointerdownDispatchCount: probe?.pointerdownDispatchCount ?? 0,
-          countHidden: count instanceof HTMLElement ? count.hidden : null,
-          countText: count?.textContent?.trim() ?? null,
-          selectDisabled: select.disabled,
-          optionLabels: labels,
-          backgroundImage,
-          activeElementId: document.activeElement?.id ?? '',
-        };
-      })()`,
-      'forced legacy fallback to release and apply the single-option storage update',
-      FORCED_FALLBACK_TIMEOUT_MS,
-    );
-    const elapsedMs = Date.now() - transitionStartedAt;
-    const screenshot = await page.command('Page.captureScreenshot', {
-      format: 'png',
-      fromSurface: true,
-      captureBeyondViewport: false,
-    });
-    const bytes = Buffer.from(screenshot.data, 'base64');
-    const dimensions = pngDimensions(bytes);
-    const checks = {
-      fallbackArmedWithOneGesture:
-        fallbackArmed.focused === true &&
-        fallbackArmed.ownMatchesInstalled === true &&
-        fallbackArmed.pointerdownDispatchCount === 1 &&
-        fallbackArmed.openMatchThrowCount === 0,
-      forcedCatchObserved:
-        transition.openMatchThrowCount > 0 &&
-        transition.pointerdownDispatchCount === 1,
-      updatedWithinForcedFallbackTimeout:
-        transition.ready === true && elapsedMs <= FORCED_FALLBACK_TIMEOUT_MS,
-      qualityCountHiddenAndEmpty:
-        transition.countHidden === true && transition.countText === '',
-      qualitySelectDisabled: transition.selectDisabled === true,
-      singleResolutionLabel:
-        transition.optionLabels.length === 1 && transition.optionLabels[0] === '1080p',
-      chevronHidden: transition.backgroundImage === 'none',
-      pngDimensionsExact:
-        dimensions.width === VIEWPORT.width && dimensions.height === VIEWPORT.height,
-    };
-    const path = join(QA_DIR, filename);
-    await writeFile(path, bytes);
-    capture = {
-      surface: 'now-quality-forced-fallback-transition',
-      checks,
-      passed: Object.values(checks).every(Boolean),
-      fallbackArmed,
-      transition: { ...transition, elapsedMs, timeoutMs: FORCED_FALLBACK_TIMEOUT_MS },
-      file: filename,
-      path,
-      ...dimensions,
-      bytes: bytes.length,
-    };
-  } finally {
-    await evaluate(
-      page,
-      `(async () => {
-        const probeKey = ${JSON.stringify(probeKey)};
-        const probe = globalThis[probeKey];
-        if (probe?.select instanceof HTMLSelectElement) {
-          if (probe.ownDescriptor) {
-            Object.defineProperty(probe.select, 'matches', probe.ownDescriptor);
-          } else {
-            delete probe.select.matches;
-          }
-        }
-        delete globalThis[probeKey];
-        if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
-        await chrome.storage.session.set({
-          ${JSON.stringify(mediaKey)}: ${JSON.stringify(fixture.items)},
-        });
-      })()`,
-    );
-    await activateSurface(page, 'now');
-    restoration = await waitForEvaluation(
-      page,
-      `(() => {
-        const count = document.querySelector('#now-qcount');
-        const select = document.querySelector('#now-qselect');
-        const labels =
-          select instanceof HTMLSelectElement
-            ? [...select.options].map((option) => option.textContent?.trim() ?? '')
-            : [];
-        return {
-          ready:
-            globalThis[${JSON.stringify(probeKey)}] === undefined &&
-            count instanceof HTMLElement &&
-            !count.hidden &&
-            count.textContent.trim() === '2' &&
-            select instanceof HTMLSelectElement &&
-            !select.disabled &&
-            labels.length === 2 &&
-            labels[0] === '1080p' &&
-            labels[1] === '720p' &&
-            document.activeElement?.id !== 'now-qselect',
-          probeRemoved: globalThis[${JSON.stringify(probeKey)}] === undefined,
-          countHidden: count instanceof HTMLElement ? count.hidden : null,
-          countText: count?.textContent?.trim() ?? null,
-          selectDisabled: select instanceof HTMLSelectElement ? select.disabled : null,
-          optionLabels: labels,
-          activeElementId: document.activeElement?.id ?? '',
-        };
-      })()`,
-      'restored two-option fixture and native matches after the forced fallback transition',
-    );
-  }
-
-  if (!capture) throw new Error('Forced fallback quality transition capture did not complete');
-  capture.restoration = restoration;
-  capture.checks.fixtureAndMatchesRestored = restoration.ready === true;
-  capture.passed = Object.values(capture.checks).every(Boolean);
-  return capture;
-}
+// Two scenarios stood here: a focused-but-closed <select> transition, and a forced
+// fallback for a native popup that can close emitting no observable event. Both
+// existed only to work around the native element. The list is the panel's own DOM now,
+// so "is it open" is simply whether it is hidden — captureOpenResolutionList drives it
+// directly, including that opening it does not resize the media above it.
 
 async function openPageTarget(browser, port, url, description, evidence, context) {
   const target = await browser.command('Target.createTarget', { url, background: false });
@@ -4320,7 +4200,7 @@ async function inspectThemeState(page) {
         return channels[0] * 0.2126 + channels[1] * 0.7152 + channels[2] * 0.0722 >= 170;
       };
       const textOverlays = [
-        ...document.querySelectorAll('#now-preview .preview-dur, #list .card-title, #list .card-meta'),
+        ...document.querySelectorAll('#now-preview .media-dur, #list .tile-title, #list .tile-meta'),
       ]
         .filter(visible)
         .map((element) => ({
@@ -5327,6 +5207,19 @@ async function main() {
     }
     await browser.command('Target.activateTarget', { targetId: syntheticFacebook.target.id });
 
+    // Before the quiesce below, which navigates the synthetic page to about:blank
+    // and takes its content script with it: this phase asserts that flipping the
+    // diagnostics switch makes that content script report, so it needs one alive.
+    // It restores the switch and the disclosure it opened, so the settings
+    // screenshots taken later see the state they were seeded with.
+    await browser.command('Target.activateTarget', { targetId: target.targetId });
+    const diagnosticsInteraction = await exerciseDiagnostics(page, facebookPage);
+    evidence.interactionCaptures.push(diagnosticsInteraction);
+    if (!diagnosticsInteraction.passed) {
+      throw new Error(`Visual QA checks failed for diagnostics: ${JSON.stringify(diagnosticsInteraction.checks)}`);
+    }
+    await browser.command('Target.activateTarget', { targetId: syntheticFacebook.target.id });
+
     evidence.syntheticFacebook.quiesced = await quiesceSyntheticFacebookPage(facebookPage);
     evidence.syntheticFacebook.captureClear = await waitForTabCaptureClear(page, evidence.seed.tabId);
     const postThemeSeed = await seedStableStorage(page, fixture, language, theme, evidence.seed.tabId, true);
@@ -5361,30 +5254,6 @@ async function main() {
       );
     }
 
-    const focusedClosedCapture = await captureFocusedClosedQualityTransition(
-      page,
-      fixture,
-      evidence.seed.tabId,
-    );
-    evidence.interactionCaptures.push(focusedClosedCapture);
-    if (!focusedClosedCapture.passed) {
-      throw new Error(
-        `Visual QA checks failed for focused-closed video quality transition: ${JSON.stringify(focusedClosedCapture.checks)}`,
-      );
-    }
-
-    const forcedFallbackCapture = await captureForcedFallbackQualityTransition(
-      page,
-      fixture,
-      evidence.seed.tabId,
-    );
-    evidence.interactionCaptures.push(forcedFallbackCapture);
-    if (!forcedFallbackCapture.passed) {
-      throw new Error(
-        `Visual QA checks failed for forced video quality fallback: ${JSON.stringify(forcedFallbackCapture.checks)}`,
-      );
-    }
-
     for (const surface of ['now', 'library', 'saved', 'settings']) {
       const capture = await captureSurface(page, surface, language);
       evidence.captures.push(capture);
@@ -5393,17 +5262,18 @@ async function main() {
       }
     }
 
-    // now-qselect is the only <select> left in the panel: Settings' dropdowns became segmented
-    // button groups, and the resolution picker is the one place a list still belongs.
-    for (const spec of [{ surface: 'now', selectId: 'now-qselect', filename: 'now-quality-open.png' }]) {
-      const capture = await captureOpenSelect(page, spec);
+    // The resolution list is the one place a popup still belongs, and the one control
+    // the panel builds itself — Settings' dropdowns became segmented button groups, and
+    // a native popup cannot float over the media the way this one has to.
+    for (const spec of [{ surface: 'now', filename: 'now-quality-open.png' }]) {
+      const capture = await captureOpenResolutionList(page, spec);
       evidence.interactionCaptures.push(capture);
       if (!capture.passed) {
-        throw new Error(`Visual QA checks failed for open #${spec.selectId}: ${JSON.stringify(capture.checks)}`);
+        throw new Error(`Visual QA checks failed for the open resolution list: ${JSON.stringify(capture.checks)}`);
       }
     }
 
-    for (const tab of ['general', 'appearance', 'shortcuts', 'advanced']) {
+    for (const tab of ['general', 'look', 'keys', 'advanced']) {
       const capture = await captureSettingsPage(page, tab);
       evidence.captures.push(capture);
       if (!capture.passed) {
@@ -5572,7 +5442,14 @@ async function main() {
   process.stdout.write(`FaceScrap visual QA passed: ${join(QA_DIR, 'evidence.json')}\n`);
 }
 
-main().catch((error) => {
-  process.stderr.write(`${errorText(error)}\n`);
-  process.exitCode = 1;
-});
+// Only when this file IS the command. A probe that needs the CDP plumbing below can
+// import it without launching a browser and running the whole visual gate as a side
+// effect of the import.
+if (process.argv[1] != null && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  main().catch((error) => {
+    process.stderr.write(`${errorText(error)}\n`);
+    process.exitCode = 1;
+  });
+}
+
+export { CdpSocket, delay, evaluate, pollJsonList, requestJson, waitForDevToolsPort, BROWSER_EXECUTABLES, DIST };

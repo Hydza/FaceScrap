@@ -123,8 +123,8 @@ export async function clearPanelBackground(): Promise<void> {
 }
 
 /** Paint it, or take it away. The class is what the stylesheet keys off — .app then draws
- *  the image instead of its flat --canvas fill, with body's own --canvas still underneath
- *  as a floor for anything transparent or short. */
+ *  the image instead of its flat --cv fill, with body's own --cv still underneath as a
+ *  floor for anything transparent or short. */
 export function applyPanelBackground(dataUrl: string | undefined): void {
   const app = document.getElementById('app');
   if (app == null) return;

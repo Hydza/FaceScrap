@@ -6,8 +6,10 @@
 import { computePlayCenterY, createPlayPositionBatcher } from './play-position';
 
 const PORTRAIT_COVER_MAX_ASPECT = 0.7;
-const PREVIEW_PLAY_SIZE = 50;
-const CARD_PLAY_SIZE = 30;
+// The rendered diameters in sidepanel.css (.preview-play, .tile-thumb.is-video::after).
+// They are what decides whether the glyph still clears the text under it.
+const PREVIEW_PLAY_SIZE = 56;
+const CARD_PLAY_SIZE = 38;
 const PLAY_CLEARANCE = 12;
 
 interface MediaPlayTarget {
@@ -18,17 +20,21 @@ interface MediaPlayTarget {
 }
 
 /** The two surfaces that carry a play badge: the Now Playing preview and a video
- *  card's thumb. Null for anything else, or for a node already detached. */
+ *  tile's thumb. Null for anything else, or for a node already detached.
+ *
+ *  Both obstructions now sit ON the media rather than under it: the preview's
+ *  format/audio line and the tile's caption. That is the point of measuring against
+ *  them — the glyph rides above whatever text the scrim is carrying. */
 function describeMediaPlay(container: HTMLElement): MediaPlayTarget | null {
   if (!container.isConnected) return null;
   const isPreview = container.id === 'now-preview';
-  if (!isPreview && !container.matches('.card-thumb.is-video')) return null;
+  if (!isPreview && !container.matches('.tile-thumb.is-video')) return null;
   return {
     container,
     image: container.querySelector<HTMLImageElement>(':scope > img:not(.thumb-bg)'),
     obstruction: isPreview
-      ? document.getElementById('now-title')
-      : (container.closest('.card')?.querySelector<HTMLElement>('.card-title') ?? null),
+      ? document.getElementById('now-foot')
+      : (container.closest('.tile')?.querySelector<HTMLElement>('.tile-caption') ?? null),
     badgeSize: isPreview ? PREVIEW_PLAY_SIZE : CARD_PLAY_SIZE,
   };
 }
@@ -54,7 +60,7 @@ function updatePlayPositions(requested: readonly HTMLElement[] | null): void {
     requested ??
     [
       document.getElementById('now-preview'),
-      ...document.querySelectorAll<HTMLElement>('.card-thumb.is-video'),
+      ...document.querySelectorAll<HTMLElement>('.tile-thumb.is-video'),
     ].filter((element): element is HTMLElement => element instanceof HTMLElement);
   // Every geometry read completes before the first style write: interleaving them
   // forces one layout per thumbnail during a global resize pass.
@@ -82,7 +88,9 @@ export function setupPlayPositioning(): void {
   const observer = new ResizeObserver(() => schedulePlayPositions());
   for (const element of [
     document.getElementById('now-preview'),
-    document.querySelector('.now-overlay'),
+    // The control stack under the media: it is what decides how much height the frame
+    // gets, so its own resize moves the glyph.
+    document.getElementById('now-quality'),
     document.getElementById('list'),
   ]) {
     if (element instanceof Element) observer.observe(element);

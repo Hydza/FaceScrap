@@ -629,6 +629,22 @@ export async function getMedia(tabId: number): Promise<MediaItem[]> {
   return normalized;
 }
 
+/**
+ * The SLIDE a PlayingRef describes, as opposed to the observation that carried it.
+ *
+ * `mark` advances on a real slide change (a new story card, a new MSE load) and `vid` names the
+ * reel; `ids` does not belong here — it keeps growing as more of the same slide's
+ * representations are captured, and on an MSE surface it flickers between the cover and nothing
+ * at all as the video moves in and out of the centre hit-test.
+ *
+ * Empty means the surface exposes no identity, and there `at` must keep moving: with nothing to
+ * compare, holding a timestamp would freeze the anchor on the first thing ever seen.
+ */
+function playingSlideIdentity(ref: PlayingRef): string {
+  const identity = `${ref.mark ?? ''}|${ref.vid ?? ''}`;
+  return identity === '|' ? '' : identity;
+}
+
 export function setPlaying(tabId: number, ref: PlayingRef, receivedAt?: number): Promise<boolean> {
   let completed = false;
   return enqueueCaptureState(
@@ -650,8 +666,24 @@ export function setPlaying(tabId: number, ref: PlayingRef, receivedAt?: number):
           completed = true;
           return;
         }
+        // `at` marks when THIS SLIDE began, not when the last observation of it arrived.
+        // playingEvidence measures every streamed track against it to tell "this slide's
+        // stream" from the previous slide's residue, and that only works if it holds still
+        // while one slide plays.
+        //
+        // The detector re-emits several times a second, and on a story viewer it alternates
+        // between adopting the video (no ids — an MSE src is a blob:) and adopting the cover
+        // behind it (one id, no video). Re-stamping on each of those moved the anchor faster
+        // than any track could ever be measured against it, so nothing anchored, the panel
+        // showed "Nothing playing" over a running video and the in-page button stayed hidden.
+        // Carry the stored timestamp forward whenever the slide identity is unchanged.
+        const identity = playingSlideIdentity(ref);
+        const stamped =
+          current != null && identity !== '' && identity === playingSlideIdentity(current)
+            ? { ...ref, at: current.at }
+            : ref;
         if (!resetClockEpoch) {
-          await writeCaptureState({ [key]: ref });
+          await writeCaptureState({ [key]: stamped });
           completed = true;
           return;
         }

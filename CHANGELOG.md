@@ -4,6 +4,29 @@ All notable changes to FaceScrap are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+
+- **Diagnostics report.** The opt-in diagnostics switch now records an event log
+  next to its counters: per GraphQL response the query name, its size and what
+  was extracted from it (including HTTP failures and bodies dropped for size),
+  classified fbcdn media requests, the video the detector settled on, what each
+  navigation cleared, every download and remux outcome, and the uncaught errors
+  of both the page and the extension's own contexts. A new **Export report**
+  button in Settings → Advanced writes counters, log, settings and versions to
+  one JSON file. Response bodies are never recorded and every URL is reduced to
+  host + path before it is stored, so no fbcdn signature reaches the file.
+  Bounded to 2 000 events / ~700 KB, and it reports its own truncation.
+  `faceScrapDiag.log()` and `faceScrapDiag.report()` expose the same data from
+  the service-worker console.
+
+### Fixed
+
+- The content script's first diagnostic event (`contentReady`) was recorded
+  without arming its report timer, so on an otherwise idle tab it never reached
+  the worker — the trace read as if the content script had never started.
+
 ## [1.0.0] - 2026-07-24
 
 Initial public release.

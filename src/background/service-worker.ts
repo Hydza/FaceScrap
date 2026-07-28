@@ -10,6 +10,16 @@
 
 import { diagBump, diagDrain, setDiagEnabled } from '../shared/diag';
 import {
+  diagError,
+  diagLog,
+  diagLogDrain,
+  errorText,
+  formatDiagEvent,
+  redactUrl,
+  setDiagContext,
+  setDiagLogEnabled,
+} from '../shared/diag-log';
+import {
   addMedia,
   clearTab,
   setFacebookTheme,
@@ -20,7 +30,14 @@ import {
 } from '../shared/storage';
 import { ensureCaptureHeadroom } from '../shared/session-write';
 import { addSaved, SAVED_ID_MAX, SAVED_LABEL_MAX, SAVED_THUMB_MAX, type SavedEntry } from '../shared/saved';
-import { addDiagCounters, getDiagCounters, resetDiagCounters } from '../shared/diag-store';
+import {
+  addDiagCounters,
+  addDiagEvents,
+  getDiagCounters,
+  getDiagEvents,
+  resetDiagCounters,
+  resetDiagLog,
+} from '../shared/diag-store';
 import {
   classifyNetworkRequest,
   DASH_BYTE_RANGE_RE,
@@ -85,9 +102,12 @@ void captureStorageReady
 // Diagnostics are opt-in at BOTH trust boundaries. Renderer reports are
 // accumulated in memory and persisted at most once per interval; the worker's
 // own counters join the same write instead of causing a second storage update.
+setDiagContext('worker');
 const diagObserver = createDiagObserver({
   write: addDiagCounters,
+  writeEvents: addDiagEvents,
   workerCounters: { drain: diagDrain, setEnabled: setDiagEnabled },
+  workerEvents: { drain: diagLogDrain, setEnabled: setDiagLogEnabled },
   onError: (error) => console.error('[FaceScrap] diagnostic flush failed', error),
 });
 
@@ -97,6 +117,26 @@ function refreshDiagSetting(): void {
 refreshDiagSetting();
 chrome.storage.onChanged.addListener((changes, area) => {
   if (area === 'local' && 'settings' in changes) refreshDiagSetting();
+});
+
+// The worker's own uncaught failures. Everything else in this file reports through
+// a catch; these are what escapes one — including a throw at module eval, which
+// takes every capture path down at once and leaves no other trace.
+//
+// Guarded down to the method, the same way chrome.commands is above: this module is
+// also evaluated by the unit suite under Node, where a ServiceWorkerGlobalScope's
+// `self` does not exist at all. An unguarded reference there is a hard ReferenceError
+// at import — the whole worker failing to load, for a listener nobody registered.
+const workerScope = globalThis as typeof globalThis & {
+  addEventListener?: (type: string, listener: (event: never) => void) => void;
+};
+workerScope.addEventListener?.('error', (e: ErrorEvent) => {
+  diagLog('workerError', { message: errorText(e.message), src: redactUrl(e.filename), line: e.lineno ?? 0 }, 'error');
+  void diagObserver.flush().catch(() => {});
+});
+workerScope.addEventListener?.('unhandledrejection', (e: PromiseRejectionEvent) => {
+  diagLog('workerRejection', { reason: errorText(e.reason) }, 'error');
+  void diagObserver.flush().catch(() => {});
 });
 
 // Diagnostics from the worker console ("Inspect views: service worker" on
@@ -109,7 +149,23 @@ chrome.storage.onChanged.addListener((changes, area) => {
     console.table(counters);
     return counters as Record<string, number>;
   },
-  reset: (): Promise<void> => resetDiagCounters(),
+  /** The event trace, newest last, as lines. `limit` keeps a console paste short. */
+  async log(limit = 200): Promise<string> {
+    await diagObserver.flush();
+    const events = await getDiagEvents();
+    const text = events.slice(-Math.max(1, limit)).map(formatDiagEvent).join('\n');
+    console.log(text || '(empty — turn Diagnostics on in Settings)');
+    return text;
+  },
+  /** The same bundle the panel's export button writes, as an object. */
+  async report(): Promise<unknown> {
+    await diagObserver.flush();
+    return { counters: await getDiagCounters(), events: await getDiagEvents() };
+  },
+  reset: async (): Promise<void> => {
+    await resetDiagCounters();
+    await resetDiagLog();
+  },
 };
 
 // 0b. FaceScrap only operates on Facebook. Keep the toolbar action + side panel ENABLED
@@ -353,7 +409,7 @@ async function persistCompletedDownload(tabId: number, receipt: SavedEntry): Pro
     // "success" that hides the fact the file was already saved the first
     // time. Surfaced here rather than via a diag counter (diag.ts has no
     // reason for this loss class today).
-    console.error('[FaceScrap] Saved receipt write failed after a successful download', err);
+    diagError('Saved receipt write failed after a successful download', err, { tab: tabId, id: receipt.id });
   }
 }
 
@@ -367,7 +423,7 @@ const recentObserver = createRecentObserver(async (tabId, url, at, documentId) =
   }
 }, {
   isDead: (tabId) => tabLifecycle.isDead(tabId),
-  onError: (err) => console.error('[FaceScrap] recent observation failed', err),
+  onError: (err) => diagError('recent observation failed', err),
 });
 
 function bumpRecent(tabId: number, url: string, documentId?: string): void {
@@ -399,12 +455,16 @@ chrome.webRequest.onBeforeRequest.addListener(
       const item = classifyNetworkRequest(url, Date.now(), tabSurface.get(details.tabId) ?? 'video');
       if (item) {
         diagBump('captureNetwork');
+        // Only `media` requests are traced, not the DASH segment XHRs above: a
+        // single HD video streams hundreds of byte-range segments, and one line
+        // per segment would push everything else out of the ring.
+        diagLog('net', { tab: details.tabId, url: redactUrl(url), kind: item.kind, source: item.source });
         void tabLifecycle
           .runIfLive(details.tabId, () => addMedia(details.tabId, [item]), chromeDocumentIdentity(details.documentId))
           .then((n) => setBadge(details.tabId, n))
           .catch((err) => {
             if (!isExpectedLifecycleStop(err) && !(err instanceof NavigationPendingError)) {
-              console.error('[FaceScrap] network capture write failed', err);
+              diagError('network capture write failed', err, { tab: details.tabId });
             }
           });
       }
@@ -439,12 +499,17 @@ chrome.webNavigation.onCommitted.addListener((details) => {
   if (details.tabId < 0 || details.frameId !== 0) return;
   tabSurface.set(details.tabId, surfaceOf(details.url));
   tabLifecycle.commitDocument(details.tabId, chromeDocumentIdentity(details.documentId));
-  if (isViewerContinuation(details.url)) return;
+  const continuation = isViewerContinuation(details.url);
+  // A navigation is where captures are dropped on purpose, and "the Library
+  // emptied itself" is a routine report. The `kept` flag says which of the two
+  // paths this navigation took without having to reason about the URL.
+  diagLog('navCommit', { tab: details.tabId, url: redactUrl(details.url), kept: continuation });
+  if (continuation) return;
   void tabLifecycle
     .runIfLive(details.tabId, () => clearTab(details.tabId))
     .then(() => chrome.action.setBadgeText({ tabId: details.tabId, text: '' }))
     .catch((error) => {
-      if (!isExpectedLifecycleStop(error)) console.error('[FaceScrap] navigation clear failed', error);
+      if (!isExpectedLifecycleStop(error)) diagError('navigation clear failed', error, { tab: details.tabId });
     });
 });
 
@@ -521,7 +586,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     // disabled, invalid, closed or over-limit senders and re-sanitizes values.
     const documentId = contentDocumentIdentity(sender, m.documentToken);
     if (typeof tabId === 'number' && documentId != null && tabLifecycle.acceptDocument(tabId, documentId)) {
-      diagObserver.report(tabId, m.counters);
+      diagObserver.report(tabId, m.counters, m.events);
     }
     return undefined;
   }
@@ -619,6 +684,14 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       });
       return true;
     }
+    const dashStartedAt = Date.now();
+    diagLog('downloadStart', {
+      mode: 'dash',
+      tab: requestedTab,
+      file: filename,
+      video: redactUrl(videoUrl),
+      audio: redactUrl(audioUrl),
+    });
     downloadDash({
       tabId: requestedTab,
       receiptId: receipt.id,
@@ -630,9 +703,17 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       .then(() => persistCompletedDownload(requestedTab, receipt))
       .then(
         () => {
+          diagLog('downloadDone', { mode: 'dash', tab: requestedTab, ms: Date.now() - dashStartedAt });
           sendResponse({ ok: true });
         },
         (e: unknown) => {
+          // The panel already shows this on the card; the log is what keeps it
+          // after the panel is closed, next to the capture that produced the URL.
+          diagLog(
+            'downloadFailed',
+            { mode: 'dash', tab: requestedTab, ms: Date.now() - dashStartedAt, error: errorText(e) },
+            'error',
+          );
           sendResponse({ ok: false, error: String((e as Error)?.message ?? e) });
         },
       );
@@ -660,12 +741,26 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       return true;
     }
     const requestedTab = request.tabId as number;
+    const directStartedAt = Date.now();
+    diagLog('downloadStart', { mode: 'direct', tab: requestedTab, file: filename, url: redactUrl(request.url) });
     downloadDirect(request.url, filename, request.saveAs === true)
       .then(() => persistCompletedDownload(requestedTab, receipt))
       .then(
-        () => sendResponse({ ok: true } satisfies DownloadDirectResponse),
-        (error: unknown) =>
-          sendResponse({ ok: false, error: String((error as Error)?.message ?? error) } satisfies DownloadDirectResponse),
+        () => {
+          diagLog('downloadDone', { mode: 'direct', tab: requestedTab, ms: Date.now() - directStartedAt });
+          return sendResponse({ ok: true } satisfies DownloadDirectResponse);
+        },
+        (error: unknown) => {
+          diagLog(
+            'downloadFailed',
+            { mode: 'direct', tab: requestedTab, ms: Date.now() - directStartedAt, error: errorText(error) },
+            'error',
+          );
+          return sendResponse({
+            ok: false,
+            error: String((error as Error)?.message ?? error),
+          } satisfies DownloadDirectResponse);
+        },
       );
     return true;
   }

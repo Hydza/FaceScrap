@@ -5,25 +5,41 @@ import test from 'node:test';
 
 const css = readFileSync(join(process.cwd(), 'src', 'sidepanel', 'sidepanel.css'), 'utf8');
 
-test('uses one restrained play treatment across preview and cards', () => {
-  assert.match(css, /--play-surface:\s*rgba\(15, 17, 20, 0\.55\)/);
-  assert.match(css, /--play-line:\s*rgba\(255, 255, 255, 0\.35\)/);
-
+test('uses one restrained play treatment across preview and tiles', () => {
+  // Both glyphs sit ON media, so both are stated as literals rather than theme tokens —
+  // a colour that followed the panel theme would vanish on half the thumbnails. What
+  // this pins is that they are the SAME literals: one treatment, two sizes.
   const preview = css.match(/\.preview-play\s*\{([^}]*)\}/)?.[1];
   assert.ok(preview, 'missing preview play style');
-  assert.match(preview, /width:\s*60px/);
-  assert.match(preview, /height:\s*60px/);
+  assert.match(preview, /width:\s*56px/);
+  assert.match(preview, /height:\s*56px/);
   assert.match(preview, /top:\s*var\(--play-y,\s*50%\)/);
   assert.match(preview, /left:\s*50%/);
-  assert.match(preview, /background:\s*var\(--play-surface\)/);
-  assert.match(preview, /border:\s*1px solid var\(--play-line\)/);
+  assert.match(preview, /background:\s*rgba\(10, 12, 15, 0\.42\)/);
+  assert.match(preview, /border:\s*1px solid rgba\(255, 255, 255, 0\.38\)/);
 
-  const card = css.match(/\.card-thumb\.is-video::after\s*\{([^}]*)\}/)?.[1];
-  assert.ok(card, 'missing card play style');
-  assert.match(card, /top:\s*var\(--play-y,\s*50%\)/);
-  assert.match(card, /left:\s*50%/);
-  assert.match(card, /background-color:\s*var\(--play-surface\)/);
-  assert.match(card, /border:\s*1px solid var\(--play-line\)/);
+  const tile = css.match(/\.tile-thumb\.is-video::after\s*\{([^}]*)\}/)?.[1];
+  assert.ok(tile, 'missing tile play style');
+  assert.match(tile, /width:\s*38px/);
+  assert.match(tile, /height:\s*38px/);
+  assert.match(tile, /top:\s*var\(--play-y,\s*50%\)/);
+  assert.match(tile, /left:\s*50%/);
+  assert.match(tile, /background-color:\s*rgba\(10, 12, 15, 0\.42\)/);
+  assert.match(tile, /border:\s*1px solid rgba\(255, 255, 255, 0\.35\)/);
+
   assert.match(css, /\.preview\.play-obstructed \.preview-play\s*\{\s*visibility:\s*hidden/);
-  assert.match(css, /\.card-thumb\.play-obstructed\.is-video::after\s*\{\s*visibility:\s*hidden/);
+  assert.match(css, /\.tile-thumb\.play-obstructed\.is-video::after\s*\{\s*visibility:\s*hidden/);
+});
+
+test('the measured sizes are the rendered sizes', () => {
+  // media-play.ts decides whether the glyph still clears the text under it from these
+  // two numbers. If the CSS grows and the constant does not, the glyph is placed for a
+  // circle that is not the one on screen.
+  const source = readFileSync(join(process.cwd(), 'src', 'sidepanel', 'media-play.ts'), 'utf8');
+  assert.match(source, /const PREVIEW_PLAY_SIZE = 56/);
+  assert.match(source, /const CARD_PLAY_SIZE = 38/);
+  // Both obstructions now sit ON the media — the overlay line and the tile caption —
+  // rather than under it, which is what the measurement has to point at.
+  assert.match(source, /getElementById\('now-foot'\)/);
+  assert.match(source, /querySelector<HTMLElement>\('\.tile-caption'\)/);
 });

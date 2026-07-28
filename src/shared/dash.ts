@@ -188,6 +188,10 @@ export interface DashPair {
    *  a muted video-only track ("may lack audio" in the UI). */
   audioUrl?: string;
   height?: number;
+  /** Frame width, when the representation declares one. Carried so resolutionOf can
+   *  name a rung by its SHORT edge: a vertical reel is 1080x1920, and Facebook's own
+   *  picker calls that 1080p, not 1920p. */
+  width?: number;
   /** All representation URLs (every video quality + audio), widened. The player
    *  streams one adaptive quality that is usually NOT the highest — we keep the
    *  full set so the now-playing filter can match whichever one it fetches. */
@@ -199,6 +203,7 @@ interface Rep {
   bandwidth: number;
   kind: 'video' | 'audio';
   height?: number;
+  width?: number;
 }
 
 // Number.isFinite (not just isNaN) on both branches: Number("1e999") is
@@ -221,10 +226,18 @@ function kindFromCodecs(codecs: unknown): 'video' | 'audio' | null {
   return null;
 }
 
+// Codecs BEFORE the container mime. An audio-only track lives in an MP4 container, and a
+// ladder that declares that container `video/mp4` says the opposite of the truth about
+// what is inside it — the mime names the wrapper, the codec names the essence. Reading
+// the mime first put such a track through ladderPairs as a VIDEO representation, which
+// cost twice: it reached the quality menu as an option that downloads audio only, and it
+// left the ladder with no audio representation to link, so every real rung came out muted.
 function kindOf(mime: string, codecs: unknown): 'video' | 'audio' | null {
+  const fromCodecs = kindFromCodecs(codecs);
+  if (fromCodecs) return fromCodecs;
   if (mime.startsWith('audio')) return 'audio';
   if (mime.startsWith('video')) return 'video';
-  return kindFromCodecs(codecs);
+  return null;
 }
 
 /** One pair per VIDEO representation, highest quality first, so every rung of
@@ -246,6 +259,7 @@ function ladderPairs(reps: Rep[], durationSec?: number): DashPair[] {
     videoUrl: v.url,
     audioUrl: audio?.url,
     height: v.height,
+    width: v.width,
     trackUrls,
     durationSec,
   }));
@@ -291,6 +305,7 @@ export function fromPrefetchReps(input: unknown): DashPair[] {
       bandwidth: num(o.bandwidth) ?? num(o.bitrate) ?? 0,
       kind,
       height: num(o.height),
+      width: num(o.width),
     });
   }
   return ladderPairs(parsed);
@@ -421,6 +436,7 @@ export function fromMpdXml(xml: string): DashPair[] {
         bandwidth: num(rep.getAttribute('bandwidth')) ?? 0,
         kind,
         height: num(rep.getAttribute('height')),
+        width: num(rep.getAttribute('width')),
       });
     }
   }

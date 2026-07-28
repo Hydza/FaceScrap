@@ -8,9 +8,12 @@ import {
   BACKDROPS,
   CORNERS,
   DEFAULT_ACCENT,
+  DEFAULT_TINT,
+  PANEL_TINTS,
   type AccentId,
   type PanelBackdrop,
   type PanelCorners,
+  type PanelTintId,
 } from './appearance';
 import type { SettingsUpdateAck, SettingsUpdateMsg } from './messages';
 import type { ThemePreference } from './theme';
@@ -116,6 +119,9 @@ export interface Settings {
   columns: number;
   /** Accent for the selection, the progress and the primary button — see appearance.ts. */
   accent: AccentId;
+  /** The panel's own background family: canvas, both surfaces and the hairline move
+   *  together, so every surface stays in one hue. */
+  panelTint: PanelTintId;
   /** How much of a custom background shows through the panel's surfaces. */
   panelBackdrop: PanelBackdrop;
   /** The corner radius family. */
@@ -150,6 +156,7 @@ export const DEFAULT_SETTINGS: Settings = {
   listOrder: 'newest',
   columns: 2,
   accent: DEFAULT_ACCENT,
+  panelTint: DEFAULT_TINT,
   panelBackdrop: 'solid',
   panelCorners: 'soft',
   keysEnabled: true,
@@ -208,6 +215,9 @@ export function normalizeSettings(raw: unknown): Settings {
     listOrder: ORDER.includes(r.listOrder as ListOrder) ? (r.listOrder as ListOrder) : DEFAULT_SETTINGS.listOrder,
     columns: COLUMN_CHOICES.includes(r.columns as number) ? (r.columns as number) : DEFAULT_SETTINGS.columns,
     accent: ACCENTS.some((a) => a.id === r.accent) ? (r.accent as AccentId) : DEFAULT_SETTINGS.accent,
+    panelTint: PANEL_TINTS.some((tint) => tint.id === r.panelTint)
+      ? (r.panelTint as PanelTintId)
+      : DEFAULT_SETTINGS.panelTint,
     panelBackdrop: BACKDROPS.includes(r.panelBackdrop as PanelBackdrop)
       ? (r.panelBackdrop as PanelBackdrop)
       : DEFAULT_SETTINGS.panelBackdrop,

@@ -47,7 +47,7 @@ export function setupMarquee(select: (card: HTMLElement) => void): void {
     // Mouse only. On a touchscreen a drag across a scrolling list means "scroll", and a
     // band that swallowed it would leave the grid unscrollable.
     if (e.pointerType !== 'mouse' || e.button !== 0) return;
-    if ((e.target as HTMLElement).closest('.card-dl, .pick') != null) return;
+    if ((e.target as HTMLElement).closest('.tile-reveal, .pick') != null) return;
     origin = { x: e.clientX, y: e.clientY };
   });
 
@@ -70,7 +70,7 @@ export function setupMarquee(select: (card: HTMLElement) => void): void {
     // interleaving reads with paints costs one forced layout per card. Re-measured each frame
     // rather than cached at pointerdown: the wheel still scrolls the list mid-drag.
     const hits: HTMLElement[] = [];
-    for (const card of list.querySelectorAll<HTMLElement>('.card[data-card-id]')) {
+    for (const card of list.querySelectorAll<HTMLElement>('.tile[data-card-id]')) {
       if (!covered.has(card) && intersects(card.getBoundingClientRect(), rect)) hits.push(card);
     }
     band.style.left = `${rect.left}px`;

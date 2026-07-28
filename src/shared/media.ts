@@ -204,6 +204,10 @@ const KNOWN_MEDIA_EXTENSION_RE = new RegExp(
   'i',
 );
 
+/** "audio" as a whole token in an efg `vencode_tag`. Anchored on the separators Facebook
+ *  uses so a video tag — which carries a resolution, never this word — cannot match. */
+const AUDIO_ENCODE_TAG_RE = /(?:^|[._-])audio(?:$|[._-])/i;
+
 /**
  * File extensions are stronger evidence than the capture channel. Chromium can
  * occasionally surface a Facebook image through a request classified as
@@ -238,6 +242,14 @@ export function mediaKindFromUrl(url: string, hint?: MediaKind): MediaKind | und
         else if (efgMime?.toLowerCase().startsWith('audio/')) efgKind = 'audio';
         else if (efgMime?.toLowerCase().startsWith('video/')) efgKind = 'video';
         if (efg.is_audio === true || efg.is_audio === 1 || efg.is_audio === 'true' || efg.is_audio === '1') {
+          efgKind = 'audio';
+        } else if (typeof efg.vencode_tag === 'string' && AUDIO_ENCODE_TAG_RE.test(efg.vencode_tag)) {
+          // Facebook names each DASH track's encode here, and the audio ones say so
+          // ("dash.audio", "dash_ln_heaac_vbr3_audio") while the video ones carry a
+          // resolution instead ("dash.720.video") — resolutionOf reads the same field for
+          // exactly that. It is the only audio evidence left in a representation whose
+          // mime_type claims video/mp4, so it overrides that claim: everything downstream
+          // treats kind as authority for whether a URL is a video the user can download.
           efgKind = 'audio';
         }
       } catch {
@@ -639,11 +651,20 @@ export function fbAssetKeys(url: string): string[] {
   return keys;
 }
 
-/** Resolution label + rank for an item. Prefers the URL's `tag=..._720p` (progressive), then `height` (DASH), then the `efg`'s `vencode_tag`. */
-export function resolutionOf(item: Pick<MediaItem, 'url' | 'height'>): { label: string; rank: number } {
+/** Resolution label + rank for an item. Prefers the URL's `tag=..._720p` (progressive), then the
+ *  frame's SHORT edge (DASH), then the `efg`'s `vencode_tag`. */
+export function resolutionOf(item: Pick<MediaItem, 'url' | 'height' | 'width'>): { label: string; rank: number } {
   const tag = item.url.match(/[?&]tag=[^&]*?(\d{3,4})p/i);
   if (tag) return { label: `${tag[1]}p`, rank: Number(tag[1]) };
-  if (item.height != null && item.height > 0) return { label: `${item.height}p`, rank: item.height };
+  // The SHORT edge, not the height. Every reel and story is portrait — 1080x1920 — and
+  // both Facebook's own picker and the "1080p" everyone means by the word name the short
+  // one. Labelling by height put "1920p" next to a sibling rung whose label came from the
+  // encode tag as "720p", so one menu ranked its options on two different scales.
+  const short =
+    item.width != null && item.width > 0 && item.height != null && item.height > 0
+      ? Math.min(item.width, item.height)
+      : item.height;
+  if (short != null && short > 0) return { label: `${short}p`, rank: short };
   const json = decodeEfg(item.url);
   if (json != null) {
     const vt = json.match(/"vencode_tag":"[^"]*?\.(\d{3,4})\./);
@@ -993,6 +1014,17 @@ export function mergeMedia(existing: MediaItem[], incoming: MediaItem[], now = D
     }
     if (gainsThumb && it.thumbUrl != null) {
       accept({ ...enriched, thumbUrl: it.thumbUrl });
+    }
+    // Dimensions, but only into a row that has none. Whichever capture path reaches a URL
+    // first owns the row, and the network observer has no dimensions to offer at all — so
+    // a GraphQL representation arriving second used to lose its width and height for good,
+    // which dropped that rung to naming itself off the URL's encode tag. "None" is not a
+    // competing claim, so filling it in cannot overwrite a measurement.
+    if ((it.height != null && enriched.height == null) || (it.width != null && enriched.width == null)) {
+      const candidate = { ...enriched };
+      if (it.height != null && candidate.height == null) candidate.height = it.height;
+      if (it.width != null && candidate.width == null) candidate.width = it.width;
+      accept(candidate);
     }
     if (prev.kind === 'image' && it.kind === 'image') {
       const previousArea = imagePixelArea(prev);

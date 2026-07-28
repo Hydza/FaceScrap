@@ -79,7 +79,11 @@ function token(selector: string, name: string): string {
 // tabs out of four. Scrollbars are now invisible everywhere.
 test('hides the scrollbar on every container that scrolls, with one rule', () => {
   const scrollers = [...css.matchAll(/^(\.[\w-]+)[^{]*\{[^}]*overflow:[^;]*auto[^;]*;/gms)].map((m) => m[1]!);
-  assert.deepEqual(new Set(scrollers), new Set(['.grid', '.now', '.settings-body']), 'scrolling containers changed');
+  assert.deepEqual(
+    new Set(scrollers),
+    new Set(['.grid', '.settings-body', '.picker-list']),
+    'scrolling containers changed',
+  );
 
   for (const selector of scrollers) {
     assert.match(
@@ -94,104 +98,125 @@ test('hides the scrollbar on every container that scrolls, with one rule', () =>
   assert.doesNotMatch(css, /--scroll-thumb/, 'the thumb tokens are dead once nothing paints a thumb');
 });
 
-// #now-qselect:disabled forced --media-text (pinned #ffffff for overlay chips)
-// while its background is --field (#ffffff in the light theme), so a video with a
-// single quality rendered the resolution as white-on-white.
-test('paints the disabled resolution select with a theme-aware colour', () => {
-  const disabled = block('#now-qselect:disabled');
-  assert.doesNotMatch(disabled, /--media-text/, 'must not reuse the fixed-white media token off the media');
-  assert.match(disabled, /color:\s*var\(--text\)/);
-  assert.match(disabled, /-webkit-text-fill-color:\s*var\(--text\)/);
+// The resolution control used to go DISABLED with a single representation, and forced
+// --media-text (pinned white for overlay chips) over a light field — white on white.
+// The trigger it became still goes inert, so it still has to read with panel tokens.
+test('paints the inert resolution trigger with a theme-aware colour', () => {
+  const trigger = block('.picker-trigger');
+  assert.match(trigger, /color:\s*var\(--tx\)/);
+  assert.doesNotMatch(trigger, /#ffffff/, 'must not pin white off the media');
+  // Inert loses the caret and the pointer, never the text: the resolution is the one
+  // thing this row exists to state.
+  assert.match(css, /\.picker-trigger:disabled\s*\{[^}]*cursor:\s*default/s);
+  assert.doesNotMatch(css, /\.picker-trigger:disabled\s*\{[^}]*opacity/s);
 
   for (const selector of [':root', ':root[data-theme="light"]']) {
-    assert.ok(
-      contrast(token(selector, 'text'), token(selector, 'field')) >= 4.5,
-      `${selector} text/field`,
-    );
+    assert.ok(contrast(token(selector, 'tx'), token(selector, 'fld')) >= 4.5, `${selector} tx/fld`);
   }
 });
 
 // play.svg already centres its own triangle (box at x 9-17 of a 24 viewBox) and
-// both call sites centre the file again, so the extra margin only pushed Now
+// both call sites centre the file again, so an extra margin only pushed Now
 // Playing's play glyph off-centre relative to the grid thumbnails'.
 test('centres the play glyph identically in Now Playing and the grid', () => {
   assert.doesNotMatch(block('.preview-play::before'), /margin/, 'no nudge margin on an already-centred mask');
-  assert.match(block('.card-thumb.is-video::after'), /background-position:\s*center/);
+  assert.match(block('.tile-thumb.is-video::after'), /background-position:\s*center/);
 });
 
-// Both corner controls share the 26px box from the .pick,.card-dl block. .pick
-// used to shrink itself to 22px, which rode 2px higher than .card-dl at the same
-// `top` and also missed the 24px WCAG 2.5.8 target minimum.
-test('gives the card corner controls one shared box and a 24px-plus target', () => {
-  const shared = block('.pick,\n.card-dl');
-  const size = shared.match(/width:\s*(\d+)px/)?.[1];
-  assert.ok(size && Number(size) >= 24, `shared corner control must be >= 24px, got ${size}`);
-  assert.match(shared, new RegExp(`height:\\s*${size}px`), 'corner controls must be square');
-  assert.doesNotMatch(block('.pick'), /width:|height:/, '.pick must not re-shrink below the shared box');
-
-  // .link-btn reaches 24px through padding around an 18px line box.
+// The handoff draws the corner controls at 22px and the text buttons at 3px of padding
+// around an 11px/1.4 line box — 22px and 21.4px, both a little under the 24px WCAG 2.5.8
+// target minimum. Both are shipped as drawn, so the numbers are pinned HERE rather than
+// silently accepted: a regression that shrinks them further fails, and the tile itself
+// remains the real target for the one gesture the grid has.
+test('pins the handoff’s target sizes, and what the grid actually aims at', () => {
+  assert.doesNotMatch(css, /\.pick::after/, 'no hit outset — the design draws a flat 22px dot');
+  for (const selector of ['.pick', '.tile-reveal']) {
+    const size = Number(block(selector).match(/width:\s*(\d+)px/)?.[1]);
+    assert.equal(size, 22, `${selector} is the design's 22px circle`);
+    assert.equal(Number(block(selector).match(/height:\s*(\d+)px/)?.[1]), 22, `${selector} must be square`);
+  }
   const link = block('.link-btn');
   const pad = Number(link.match(/padding:\s*(\d+)px/)?.[1]);
-  const line = Number(link.match(/line-height:\s*(\d+)px/)?.[1]);
-  assert.ok(pad * 2 + line >= 24, `.link-btn target is ${pad * 2 + line}px, needs 24`);
+  const size = Number(link.match(/font-size:\s*(\d+)px/)?.[1]);
+  const line = Number(link.match(/line-height:\s*([\d.]+)/)?.[1]);
+  assert.equal(pad, 3, 'the design draws 3px of padding on a text button');
+  assert.ok(pad * 2 + size * line >= 21, `.link-btn fell to ${pad * 2 + size * line}px`);
+
+  // What makes the 22px dot acceptable: it is an INDICATOR, not the target. The whole
+  // tile toggles the selection — 159×282 at two columns — and Saved's reveal button is
+  // the only control the tile body has to step around.
+  assert.match(panel, /\.closest\('\.tile-reveal, \.pick'\)/);
+  assert.match(css, /\.tile\s*\{[^}]*cursor:\s*pointer/s);
 });
 
-// Images carry no duration, so the middle metric is hidden — but hiding a cell does not drop its
-// grid column, leaving an empty third and an off-centre divider. Only the CSS and the markup are
-// asserted, which is where the source is the artifact; the two source-order checks that used to
-// follow pinned the shape of the code instead and failed on any equivalent rewrite.
-test('matches the metrics column count to the visible cells on images', () => {
-  assert.match(css, /\.metrics\.is-two-up\s*\{\s*grid-template-columns:\s*repeat\(2,\s*1fr\)/);
-  assert.match(html, /id="metrics"/, 'the metrics card needs an id for the toggle');
-  assert.match(html, /id="m-duration-metric"/, 'the duration cell needs an id to be hidden by');
+// The grid has ONE verb. Selecting raises the tray, and the tray is what downloads —
+// so a per-tile download button was removed with the redesign rather than kept beside
+// a dot it would compete with. The keyboard binding is unchanged and still per-tile.
+test('the grid tile does one thing, and the tray does the other', () => {
+  assert.doesNotMatch(css, /\.tile-dl/, 'the per-tile download button is gone');
+  assert.doesNotMatch(panel, /tile-dl/);
+  // Nothing lost: the cursor binding downloads the tile under it without the tray.
+  assert.match(panel, /case 'downloadCard':/);
+  assert.match(panel, /void downloadCard\(cursorCard\.id, cursorCard\.target\)/);
+  // And the tray's own button is the mouse route.
+  assert.match(html, /id="bulk-dl" class="btn-accent"/);
+});
+
+// The 3-up metrics card is gone: it spent 66px of chrome restating facts the screen
+// already carried. Each fact now appears exactly once — the duration on its chip, the
+// container on the overlay line, the resolution in the picker — which is the rule that
+// replaced it and the one worth pinning.
+test('states each media fact exactly once across the Now Playing screen', () => {
+  assert.doesNotMatch(html, /id="metrics"/, 'the metrics card is gone');
+  assert.doesNotMatch(css, /\.metrics\b/);
+  assert.doesNotMatch(html, /id="m-(?:format|duration|resolution)"/);
+  // Duration: the chip beside the kind badge, and nowhere else.
+  assert.match(html, /id="now-dur" class="media-dur"/);
+  // Container + aspect: the line over the scrim. A photo has no resolution ladder, so
+  // its dimensions ride here too rather than in a picker it does not get.
+  assert.match(html, /id="now-format" class="preview-format"/);
+  assert.match(panel, /byId\('now-format'\)\.textContent = formatLine\(target, imageResolutionLabel\)/);
+  // Resolution: the picker's own label, videos only.
+  assert.match(html, /id="now-qlabel" class="picker-label"/);
+  assert.match(panel, /quality\.hidden = now\.kind !== 'video'/);
 });
 
 // A container that gets replaced wholesale is the wrong live region: every render
 // re-read the whole grid, including the two renders one download triggers.
-test('announces the grid through the count, not by re-reading every card', () => {
+test('announces the grid through the count, not by re-reading every tile', () => {
   assert.match(html, /<main id="list" class="grid"><\/main>/, '#list must not be a live region');
   assert.match(html, /id="grid-count"[^>]*role="status"/);
-  assert.match(panel, /count\.textContent = tn\('foundCountOne', 'foundCount'/);
+  assert.match(panel, /tn\('filesCountOne', 'filesCount', gridCards\.length\)/);
+  assert.match(panel, /tn\('onThisTabOne', 'onThisTab', gridCards\.length\)/);
 });
 
-// Contrast pairs the existing theme-contrast test does not cover.
-test('keeps the audited secondary-text pairs at WCAG AA', () => {
+// Contrast pairs the theme-contrast test does not cover: it walks text against the
+// tinted canvas and surfaces, and these are the ones drawn on a FIELD instead.
+test('keeps the audited field-text pairs at WCAG AA', () => {
   for (const selector of [':root', ':root[data-theme="light"]']) {
-    const canvas = token(selector, 'canvas');
-    const surface = token(selector, 'surface');
-    const faint = token(selector, 'faint');
-    assert.ok(contrast(faint, canvas) >= 4.5, `${selector} faint/canvas is ${contrast(faint, canvas).toFixed(2)}`);
-    assert.ok(contrast(faint, surface) >= 4.5, `${selector} faint/surface`);
-    // --accent-soft is the text-weight accent (.set-label headings sit on canvas,
-    // NOT inside .set-card, so canvas is the binding case).
-    const accentSoft = token(selector, 'accent-soft');
-    assert.ok(
-      contrast(accentSoft, canvas) >= 4.5,
-      `${selector} accent-soft/canvas is ${contrast(accentSoft, canvas).toFixed(2)}`,
-    );
+    const field = token(selector, 'fld');
+    for (const name of ['tx', 'md', 'ft']) {
+      const ratio = contrast(token(selector, name), field);
+      assert.ok(ratio >= 4.5, `${selector} ${name}/fld is ${ratio.toFixed(2)}`);
+    }
   }
-  // The version line must not re-dim --faint back below the threshold.
+  // The version line must not re-dim --ft back below the threshold.
   assert.doesNotMatch(block('.settings-version'), /opacity/);
 });
 
-// --control-line is a non-text boundary: AA wants 3:1. The dark theme states it
-// as an rgba over --surface, so it has to be composited before measuring.
-test('keeps the dark form-control border at the 3:1 non-text minimum', () => {
-  const alpha = Number(block(':root').match(/--control-line:\s*rgba\(255,\s*255,\s*255,\s*([\d.]+)\)/)?.[1]);
-  assert.ok(Number.isFinite(alpha), 'dark --control-line must stay an rgba over the surface');
-  const surface = token(':root', 'surface');
-  const composited =
-    '#' +
-    surface
-      .slice(1)
-      .match(/../g)!
-      .map((channel) => Math.round(255 * alpha + Number.parseInt(channel, 16) * (1 - alpha)))
-      .map((channel) => channel.toString(16).padStart(2, '0'))
-      .join('');
-  assert.ok(
-    contrast(composited, surface) >= 3,
-    `dark control border is ${contrast(composited, surface).toFixed(2)}:1`,
-  );
+// --ring is the design's field edge, and at 10% white it is a hairline rather than a
+// 3:1 boundary. That is deliberate — the field is found by its recessed FILL, not by
+// its edge — so what has to hold is that every control wearing it also wears the inset
+// that does the work, and that forced-colors replaces both with a system border.
+test('every control drawn with the faint ring also reads as recessed', () => {
+  const ringed = [...css.matchAll(/(^|\})\s*([^{}@]+?)\s*\{([^{}]*border:\s*1px solid var\(--ring\)[^{}]*)\}/gm)];
+  assert.ok(ringed.length >= 3, 'expected the ring on the segmented control, the search field and the icon button');
+  for (const match of ringed) {
+    assert.match(match[3]!, /box-shadow:\s*var\(--ei\)|background:\s*var\(--fld\)/, `${match[2]} needs the recess`);
+  }
+  const forced = css.match(/@media\s*\(forced-colors:\s*active\)\s*\{([^]*?)\n\}/)?.[1];
+  assert.ok(forced, 'missing forced-colors block');
+  assert.match(forced, /border:\s*1px solid ButtonText/);
 });
 
 // Download failures surface as a card `title` tooltip, so they are panel copy and
@@ -294,71 +319,79 @@ test('defines no custom property that nothing reads', () => {
 // differences, all of them between VIEWS — nothing but a cross-view comparison can
 // see them, which is why they are pinned here rather than left to a screenshot.
 test('opens Now Playing on the same grid as the other views', () => {
-  // 1. Same distance below the header. Now Playing had no top padding at all.
-  const topPad = css.match(/\.view-grid,\n\.view-now \{ padding-top: (\d+)px; \}/);
-  assert.ok(topPad, 'the two content views must share one padding-top rule');
-  assert.equal(topPad[1], '12');
-
-  // 2. Same horizontal inset as .grid and .settings-body, so the heading and the
-  //    media card line up with grid cards and settings rows. Read the CASCADE
-  //    winner, not the first block: .now is declared twice, and reading the wrong
-  //    one is how a stale 12px sat there unnoticed. Responsive overrides are
-  //    stripped first — they retune every view together and are not the baseline.
+  // Responsive overrides are stripped first — they retune every view together and are
+  // not the baseline.
   const base = withoutMediaQueries(css);
-  const inset = (selector: string): string => {
+  const inset = (selector: string, pattern: RegExp): string => {
     const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     const declared = [...base.matchAll(new RegExp(`${escaped}\\s*\\{([^}]*)\\}`, 'g'))]
-      .map((m) => m[1]!.match(/padding:\s*0(?:px)?\s+(\d+)px/)?.[1])
+      .map((m) => m[1]!.match(pattern)?.[1])
       .filter((value): value is string => value != null);
     assert.ok(declared.length > 0, `${selector} must declare a horizontal padding`);
+    // The CASCADE winner, not the first block: reading the wrong one is how a stale
+    // value once sat there unnoticed through a whole design audit.
     return declared[declared.length - 1]!;
   };
-  assert.equal(inset('.now'), '16');
-  assert.equal(inset('.grid'), '16');
-  assert.equal(inset('.settings-body'), '16');
-  // The head must not add its own inset on top of that.
-  assert.doesNotMatch(block('.now-head'), /padding/, '.now-head must inherit .now’s inset');
+  // 1. One horizontal inset for every view, so the heading, the media frame, the tiles
+  //    and the settings rows all line up on the same two edges.
+  assert.equal(inset('.now', /padding:\s*\d+px\s+(\d+)px/), '16');
+  assert.equal(inset('.grid', /padding:\s*0\s+(\d+)px/), '16');
+  assert.equal(inset('.settings-body', /padding:\s*0\s+(\d+)px/), '16');
+  assert.equal(inset('.grid-head', /padding:\s*\d+px\s+(\d+)px/), '16');
+  assert.equal(inset('.settings-head', /padding:\s*\d+px\s+(\d+)px/), '16');
 
-  // 3. The count sits beside the heading, as in .grid-title-line, not shoved to the
-  //    far edge by space-between.
-  assert.doesNotMatch(block('.now-head'), /justify-content/);
-  assert.match(block('.now-head'), /align-items:\s*baseline/);
-  assert.match(block('.grid-title-line'), /align-items:\s*baseline/);
+  // 2. The heading rows must not add their own inset on top of that.
+  assert.doesNotMatch(block('.head-line'), /padding/, '.head-line inherits .now’s inset');
 
-  // 4. And it is styled as the same kind of label as the grid's count.
-  const pieces = block('.now-pieces');
-  const count = block('.grid-count');
-  for (const property of ['color', 'font-size', 'line-height', 'font-weight']) {
-    const from = (rule: string): string | undefined =>
-      rule.match(new RegExp(`${property}:\\s*([^;]+)`))?.[1]?.trim();
-    assert.equal(from(pieces), from(count), `${property} must match .grid-count`);
+  // 3. The count sits beside the heading on a shared baseline, not shoved to the far
+  //    edge by space-between.
+  for (const selector of ['.head-line', '.grid-head', '.settings-head']) {
+    assert.doesNotMatch(block(selector), /justify-content/, `${selector} must not push the count away`);
+    assert.match(block(selector), /align-items:\s*baseline/);
   }
+
+  // 4. And it IS the same label in all three: one class, so they cannot drift.
+  assert.match(html, /id="now-pieces" class="head-note"/);
+  assert.match(html, /id="grid-count" class="head-note"/);
+  assert.match(html, /<span class="head-note" data-i18n="settingsAutosave"/);
 });
 
 // The Reset button sat flush against the counters box — measured 0px between them
 // in Chromium 148, where the UA wraps everything after <summary> in a
 // ::details-content box, so .set-row.col's column `gap` lands between the summary
 // and that box and never between its children.
-test('spaces the diagnostics counters from Reset without relying on the details gap', () => {
+// The buttons now sit in their own .diag-actions row (Export joined Reset), so the
+// margin that does this spacing moved from #diag-reset onto that row. What is being
+// pinned is unchanged: the separation comes from a margin, never from the gap.
+test('spaces the diagnostics counters from the actions without relying on the details gap', () => {
   assert.match(css, /\.diagnostics details\.set-row\.col \{[^}]*gap:\s*0/);
-  assert.match(block('.diagnostics #diag-counters'), /margin-top:\s*8px/);
-  const reset = block('.diagnostics #diag-reset');
+  assert.match(block('.diagnostics #diag-counters'), /margin:\s*8px 0 0/);
+  const actions = block('.diagnostics .diag-actions');
   // Equal margins are the point, not one of them: with the UA box the gap is
   // skipped, and on the Chrome 116 floor the children ARE flex siblings. Margins
   // give 8px in both worlds; keeping the gap as well would give 16px in one.
-  assert.match(reset, /margin-top:\s*8px/);
-  // In the flex-sibling case align-items: stretch would blow the button to full
+  assert.match(actions, /margin-top:\s*8px/);
+  // In the flex-sibling case align-items: stretch would blow the row to full
   // width, so the two versions would not even agree on its shape.
-  assert.match(reset, /align-self:\s*flex-start/);
+  assert.match(actions, /align-self:\s*flex-start/);
+  // The two buttons share one row rather than stacking, and wrap at 300px instead
+  // of overflowing it.
+  assert.match(actions, /display:\s*flex/);
+  assert.match(actions, /flex-wrap:\s*wrap/);
 });
 
-// The Spanish autosave note read as a lowercase fragment next to a full English
-// sentence.
-test('writes the settings autosave note as a full sentence in both languages', () => {
+// The note beside the Settings heading is a lowercase aside in the design — "saved as
+// you go" — sharing a baseline with a 19px title, not a sentence. What broke before was
+// the two languages disagreeing about which it was: English a full sentence, Spanish a
+// fragment. So what is pinned is that they MATCH in register, not which one they pick.
+test('writes the settings autosave note in the same register in both languages', () => {
   const notes = [...i18n.matchAll(/^\s+settingsAutosave: '([^']+)'/gm)].map((m) => m[1]!);
   assert.equal(notes.length, 2);
+  const capitalised = notes.map((note) => /^\p{Lu}/u.test(note));
+  assert.equal(capitalised[0], capitalised[1], `"${notes[0]}" and "${notes[1]}" disagree on capitalisation`);
   for (const note of notes) {
-    assert.match(note, /^\p{Lu}/u, `"${note}" must start with a capital`);
-    assert.ok(note.split(' ').length >= 3, `"${note}" reads as a fragment`);
+    // It shares a line with the heading, so it has to stay short enough not to wrap it.
+    assert.ok(note.length <= 24, `"${note}" is too long to sit beside the heading`);
+    assert.doesNotMatch(note, /[.!]$/, `"${note}" is an aside, not a sentence`);
   }
 });

@@ -55,11 +55,14 @@ async function startDashDownload(
   item: MediaItem,
   receipt: SavedEntry,
   settings: Settings,
+  forceSaveAs: boolean,
 ): Promise<string | null> {
   const audioUrl = item.audioUrl;
   if (audioUrl == null) return t('errNoAudioTrack'); // callers gate on audioUrl; narrow it for the typed message
   const filename = downloadFilename(item, settings);
-  const saveAs = settings.defaultQuality === 'ask'; // 'ask' means open Chrome's Save-As dialog
+  // 'ask' means open Chrome's Save-As dialog for every download; the Now Playing
+  // "Save as…" link asks for it once, without touching the setting.
+  const saveAs = forceSaveAs || settings.defaultQuality === 'ask';
   // Same fields and shape as downloadDash()'s own dashDownloadKey(request) call, so
   // this wait recognises its OWN FACESCRAP_DASH_JOB_STARTED without a round trip.
   const key = dashDownloadKey({ tabId: tid, receiptId: receipt.id, videoUrl: item.url, audioUrl, filename, saveAs });
@@ -103,6 +106,7 @@ async function startDirectDownload(
   item: MediaItem,
   receipt: SavedEntry,
   settings: Settings,
+  forceSaveAs: boolean,
 ): Promise<string | null> {
   try {
     const response = (await chrome.runtime.sendMessage({
@@ -110,7 +114,7 @@ async function startDirectDownload(
       tabId: tid,
       url: item.url,
       filename: downloadFilename(item, settings),
-      saveAs: settings.defaultQuality === 'ask',
+      saveAs: forceSaveAs || settings.defaultQuality === 'ask',
       receipt,
     } satisfies DownloadDirectMsg)) as DownloadDirectResponse | undefined;
     if (!response?.ok) throw new Error(response?.error || t('errDownloadFailed'));
@@ -134,9 +138,11 @@ export async function downloadOne(
   item: MediaItem,
   receipt: SavedEntry,
   settings: Settings,
+  /** Open Chrome's Save-As dialog for THIS download regardless of the setting. */
+  saveAs = false,
 ): Promise<string | null> {
   if (tid === undefined) return t('errInvalidTab');
   return item.audioUrl != null
-    ? startDashDownload(tid, item, receipt, settings)
-    : startDirectDownload(tid, item, receipt, settings);
+    ? startDashDownload(tid, item, receipt, settings, saveAs)
+    : startDirectDownload(tid, item, receipt, settings, saveAs);
 }

@@ -8,100 +8,88 @@
   font-display: swap;
   src: url("fonts/manrope-latin.woff2") format("woff2");
 }
+
+/* ── Tokens ───────────────────────────────────────────────────────────────────
+   Twelve theme colours, four elevations, five radii. Everything the panel paints
+   resolves through one of them; a literal colour below this block is a bug.
+
+   The canvas, the two surfaces and the hairline are NOT set here — the panel tint
+   owns those four together (see :root[data-tint]), so a tinted canvas can never
+   end up under neutral cards. */
 :root {
   color-scheme: dark;
-  --canvas: #0d0e11;
-  --surface: #15171b;
-  --line: #262a31;
-  --text: #f3f4f6;
-  --muted: #9ca3ac;
-  --accent: #1f6bff;
-  --accent-soft: #5b9bff;
-  --accent-grad: linear-gradient(180deg, #3a8bff, #2069f0);
-  --live: #35d07f;
-  --live-text: #5fe0a0;
-  --live-wash: rgba(53, 208, 127, 0.12);
-  --live-line: rgba(53, 208, 127, 0.22);
-  --danger: #f0868f;
-  --on-accent: #ffffff;
-  --mono: #5b9bff;
-  /* 4.98:1 on --canvas, 4.63:1 on --surface. The old #6c727a sat at 3.98:1,
-     below AA for the 10.5-12.5px labels that use this token. */
-  --faint: #7c828a;
-  --danger-wash: rgba(225, 85, 99, 0.14);
-  --danger-wash-strong: rgba(225, 85, 99, 0.24);
-  --danger-line: rgba(225, 85, 99, 0.4);
-  /* 3.13:1 against --surface — the AA non-text minimum. At the old 0.12 alpha
-     this was 1.42:1 and the settings inputs read as bare text, not fields. */
-  --control-line: rgba(255, 255, 255, 0.34);
-  --control-surface: #1e2127;
-  --input-deep: #0f1114;
-  --field: #1b1e23;
-  --track-off: #3a3f46;
-  --knob: #ffffff;
-  --select-hover: rgba(47, 125, 255, 0.16);
-  --select-chevron: url("icons/chevron.svg");
-  --picker-shadow: 0 16px 40px rgba(0, 0, 0, 0.5);
-  --media-overlay-soft: rgba(10, 11, 12, 0.94);
-  --media-control: rgba(0, 0, 0, 0.55);
-  --media-control-soft: rgba(0, 0, 0, 0.3);
-  --media-surface: #15171b;
-  /* The card's own edge. Not theme-split like --line: the media tokens are fixed
-     dark chrome because they sit over photographs, and this ring is read against
-     the canvas, which is dark wherever it is needed — a light theme already frames
-     a dark card by contrast. */
-  --media-frame: rgba(255, 255, 255, 0.17);
-  --media-text: #ffffff;
-  --media-muted: #c3c8ce;
-  --media-accent: #1f6bff;
-  --media-on-accent: #ffffff;
-  --media-select-hover: rgba(47, 125, 255, 0.16);
-  --media-danger: #f0868f;
-  --play-surface: rgba(15, 17, 20, 0.55);
-  --play-line: rgba(255, 255, 255, 0.35);
-  --play-shadow: 0 8px 22px rgba(0, 0, 0, 0.35);
-  --r-lg: 16px;
-  --r-md: 14px;
-  --r-sm: 12px;
-  --r-pill: 999px;
+  --tx: #eef1f5;              /* primary text */
+  --md: #9aa4b2;              /* secondary text, interactive chrome */
+  /* Faint STATIC labels. The design's value, verbatim.
+     MEASURED: 4.36:1 on graphite's card and 4.44:1 on sand's — both under AA's 4.5:1.
+     It clears the bar on the canvas (5.04:1 at worst) and on slate, navy, plum and moss;
+     the two lighter tints are where it slips. Kept because the handoff states this hex
+     and the ratio is a design decision, not an oversight — see the contrast test, which
+     records the same numbers rather than hiding them. */
+  --ft: #7c828a;
+  --fld: #10141a;             /* field interiors */
+  --off: #3a3f46;             /* toggle off track */
+  --lv: #31d07f;              /* the live dot itself */
+  --lvt: #5fe0a0;             /* live text */
+  --lv-wash: rgba(49, 208, 127, 0.14);
+  --lv-line: rgba(49, 208, 127, 0.28);
+  --lv-wash-strong: rgba(49, 208, 127, 0.18);
+  --lv-line-strong: rgba(49, 208, 127, 0.34);
+  --lv-on-media: #8ff0c0;
+  --dg: #ff7b87;              /* danger / DRM */
+  --dg-wash: rgba(255, 123, 135, 0.14);
+  --ring: rgba(255, 255, 255, 0.1); /* field border */
+  --e1: 0 1px 2px rgba(0, 0, 0, 0.28), inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  --e2: 0 -10px 24px -12px rgba(0, 0, 0, 0.55), inset 0 1px 0 rgba(255, 255, 255, 0.05);
+  --e3: 0 18px 40px -12px rgba(0, 0, 0, 0.6);
+  --ei: inset 0 1px 2px rgba(0, 0, 0, 0.22);
+  /* The floating picker sheet, and the ring the grid tiles wear. */
+  --sheet: rgba(16, 20, 27, 0.4);
+  --tile-ring: 0 0 0 1px rgba(255, 255, 255, 0.11), 0 8px 18px -8px rgba(0, 0, 0, 0.75);
+  --pill-shadow: 0 6px 18px rgba(0, 0, 0, 0.45);
+  --media-frame-shadow: none;
+  --logo-glow: 0 6px 14px -6px rgba(var(--acrgb), 0.55);
+  --nav-wash: rgba(var(--acrgb), 0.13);
+  /* Five radii and nothing else. The corner family retunes all five together. */
+  --r1: 6px;                  /* chips, kbd hints, small badges */
+  --r2: 8px;                  /* segment buttons, list rows, thumbnails */
+  --r3: 10px;                 /* fields, picker trigger, icon buttons */
+  --r4: 12px;                 /* nav items, media tiles, primary button */
+  --r5: 14px;                 /* section cards, the media frame */
+  --pill: 999px;
   --font: Manrope, "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, sans-serif;
-  --font-mono: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
-  --media-wash: linear-gradient(160deg, #2a2f37, #14171c 60%);
+  /* JetBrains Mono when the device has it; the design's numbers only need a
+     tabular monospace, and MV3's CSP rules out fetching the webfont. */
+  --mono: "JetBrains Mono", ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+  --media-wash: linear-gradient(150deg, #1d4ed8, #0ea5e9 55%, #0b3b7a);
 }
 :root[data-theme="light"] {
   color-scheme: light;
-  --canvas: #eef0f3;
-  --surface: #ffffff;
-  --line: #e3e6ea;
-  --text: #16181c;
-  --muted: #59636e;
-  --accent: #1f6bff;
-  /* The accent at text weight, for the armed capture pill and a link hover. A darker step than
-     --accent, whose #1f6bff reaches only 3.99:1 on --canvas; this is 4.81:1 and leaves --accent
-     alone, so the primary button keeps its fill. */
-  --accent-soft: #1a5fe6;
-  --accent-grad: linear-gradient(180deg, #3a8bff, #2069f0);
-  --live: #177a49;
-  /* 5.03:1 over --live-wash on --canvas; #177a49 was 4.12:1. */
-  --live-text: #146b40;
-  --live-wash: rgba(23, 122, 73, 0.1);
-  --live-line: rgba(23, 122, 73, 0.22);
-  --danger: #c2333f;
-  --on-accent: #ffffff;
-  --mono: #1f6bff;
-  --faint: #59636e;
-  --danger-wash: rgba(207, 63, 76, 0.12);
-  --danger-wash-strong: rgba(207, 63, 76, 0.2);
-  --danger-line: rgba(207, 63, 76, 0.4);
-  --control-line: #8a8d91;
-  --control-surface: #eef1f4;
-  --input-deep: #f2f4f7;
-  --field: #ffffff;
-  --track-off: #c9ced4;
-  --knob: #ffffff;
-  --select-hover: rgba(47, 125, 255, 0.14);
-  --select-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%2359636e' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m7 9.5 5 5 5-5'/%3E%3C/svg%3E");
-  --picker-shadow: 0 12px 28px rgba(20, 28, 38, 0.18);
+  --tx: #101318;
+  --md: #57616d;
+  --ft: #59636e;
+  --fld: #f4f6f9;
+  --off: #c9ced4;
+  --lv: #127a4a;
+  --lvt: #0f6b41;
+  --lv-wash: rgba(18, 122, 74, 0.1);
+  --lv-line: rgba(18, 122, 74, 0.24);
+  --lv-wash-strong: rgba(18, 122, 74, 0.14);
+  --lv-line-strong: rgba(18, 122, 74, 0.3);
+  --lv-on-media: #8ff0c0;
+  --dg: #c8323f;
+  --dg-wash: rgba(200, 50, 63, 0.14);
+  --ring: #dfe4ea;
+  --e1: 0 1px 2px rgba(16, 24, 40, 0.06), 0 1px 3px rgba(16, 24, 40, 0.05);
+  --e2: 0 -10px 24px -14px rgba(16, 24, 40, 0.26), inset 0 1px 0 rgba(255, 255, 255, 0.9);
+  --e3: 0 16px 36px -12px rgba(16, 24, 40, 0.24);
+  --ei: inset 0 1px 2px rgba(16, 24, 40, 0.05);
+  --sheet: rgba(255, 255, 255, 0.5);
+  --tile-ring: 0 0 0 1px rgba(16, 19, 24, 0.12), 0 6px 16px -8px rgba(16, 19, 24, 0.32);
+  --pill-shadow: 0 6px 18px rgba(16, 19, 24, 0.18);
+  --media-frame-shadow: 0 1px 3px rgba(16, 19, 24, 0.16);
+  --logo-glow: 0 2px 10px rgba(var(--acrgb), 0.28);
+  --nav-wash: rgba(var(--acrgb), 0.1);
 }
 
 /* Before settings load, match the device so Auto/Light never flashes the dark
@@ -109,44 +97,211 @@
 @media (prefers-color-scheme: light) {
   :root:not([data-theme]) {
     color-scheme: light;
-    --canvas: #eef0f3;
-    --surface: #ffffff;
-    --line: #e3e6ea;
-    --text: #16181c;
-    --muted: #59636e;
-    --accent: #1f6bff;
-    --accent-soft: #1a5fe6;
-    --accent-grad: linear-gradient(180deg, #3a8bff, #2069f0);
-    --live: #177a49;
-    --live-text: #146b40;
-    --live-wash: rgba(23, 122, 73, 0.1);
-    --live-line: rgba(23, 122, 73, 0.22);
-    --danger: #c2333f;
-    --on-accent: #ffffff;
-    --mono: #1f6bff;
-    --faint: #59636e;
-    --danger-wash: rgba(207, 63, 76, 0.12);
-    --danger-wash-strong: rgba(207, 63, 76, 0.2);
-    --danger-line: rgba(207, 63, 76, 0.4);
-    --control-line: #8a8d91;
-    --control-surface: #eef1f4;
-    --input-deep: #f2f4f7;
-    --field: #ffffff;
-    --track-off: #c9ced4;
-    --knob: #ffffff;
-    --select-hover: rgba(47, 125, 255, 0.14);
-    --select-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%2359636e' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m7 9.5 5 5 5-5'/%3E%3C/svg%3E");
-    --picker-shadow: 0 12px 28px rgba(20, 28, 38, 0.18);
+    --tx: #101318;
+    --md: #57616d;
+    --ft: #59636e;
+    --fld: #f4f6f9;
+    --off: #c9ced4;
+    --lv: #127a4a;
+    --lvt: #0f6b41;
+    --lv-wash: rgba(18, 122, 74, 0.1);
+    --lv-line: rgba(18, 122, 74, 0.24);
+    --lv-wash-strong: rgba(18, 122, 74, 0.14);
+    --lv-line-strong: rgba(18, 122, 74, 0.3);
+    --lv-on-media: #8ff0c0;
+    --dg: #c8323f;
+    --dg-wash: rgba(200, 50, 63, 0.14);
+    --ring: #dfe4ea;
+    --e1: 0 1px 2px rgba(16, 24, 40, 0.06), 0 1px 3px rgba(16, 24, 40, 0.05);
+    --e2: 0 -10px 24px -14px rgba(16, 24, 40, 0.26), inset 0 1px 0 rgba(255, 255, 255, 0.9);
+    --e3: 0 16px 36px -12px rgba(16, 24, 40, 0.24);
+    --ei: inset 0 1px 2px rgba(16, 24, 40, 0.05);
+    --sheet: rgba(255, 255, 255, 0.5);
+    --tile-ring: 0 0 0 1px rgba(16, 19, 24, 0.12), 0 6px 16px -8px rgba(16, 19, 24, 0.32);
+    --pill-shadow: 0 6px 18px rgba(16, 19, 24, 0.18);
+    --media-frame-shadow: 0 1px 3px rgba(16, 19, 24, 0.16);
+    --logo-glow: 0 2px 10px rgba(var(--acrgb), 0.28);
+    --nav-wash: rgba(var(--acrgb), 0.1);
+    --cv: #e8ecf2;
+    --sf: #ffffff;
+    --sf2: #f3f6fa;
+    --ln: #d7dee8;
   }
 }
+
+/* ── Panel tint ───────────────────────────────────────────────────────────────
+   Each entry moves the canvas, both surfaces and the hairline TOGETHER, so every
+   surface stays in one hue family. Attribute-driven rather than JS-written custom
+   properties: the tint depends on the resolved theme, and the theme arrives from a
+   different async path — a CSS pair can never land in the wrong order. Values are
+   PANEL_TINTS in shared/appearance.ts; the two must be edited together. */
+:root,
+:root[data-tint="slate"] { --cv: #0a0c0f; --sf: #141821; --sf2: #1b2029; --ln: #242a34; }
+:root[data-tint="graphite"] { --cv: #101214; --sf: #1a1d21; --sf2: #212529; --ln: #2c3138; }
+:root[data-tint="navy"] { --cv: #080d18; --sf: #111827; --sf2: #182030; --ln: #232d40; }
+:root[data-tint="plum"] { --cv: #0e0a12; --sf: #1a1420; --sf2: #221a2a; --ln: #2e2438; }
+:root[data-tint="moss"] { --cv: #080f0c; --sf: #121b17; --sf2: #18231e; --ln: #22302a; }
+:root[data-tint="sand"] { --cv: #100e0a; --sf: #1c1913; --sf2: #241f18; --ln: #302a20; }
+:root[data-theme="light"],
+:root[data-theme="light"][data-tint="slate"] { --cv: #e8ecf2; --sf: #ffffff; --sf2: #f3f6fa; --ln: #d7dee8; }
+:root[data-theme="light"][data-tint="graphite"] { --cv: #eaebec; --sf: #ffffff; --sf2: #f4f5f6; --ln: #d9dbdd; }
+:root[data-theme="light"][data-tint="navy"] { --cv: #dde6f5; --sf: #ffffff; --sf2: #eef3fc; --ln: #c5d4ec; }
+:root[data-theme="light"][data-tint="plum"] { --cv: #eee2f6; --sf: #ffffff; --sf2: #f8f0fc; --ln: #dbc7e9; }
+:root[data-theme="light"][data-tint="moss"] { --cv: #dcede3; --sf: #ffffff; --sf2: #eef9f2; --ln: #c3ddcf; }
+:root[data-theme="light"][data-tint="sand"] { --cv: #f2e7d5; --sf: #fffdfa; --sf2: #faf3e6; --ln: #e0d2b6; }
+
+/* ── Accent ───────────────────────────────────────────────────────────────────
+   --ac  the flat colour (borders, rings, SVG fill — none of which take a gradient)
+   --acg the paint (identical for the solids, a gradient for the gradient group)
+   --onac the text that sits ON it — per entry, because a light accent needs dark text
+   --ach the readable-on-canvas step, and the ONLY place an accent may be text
+   --acrgb the components, for the glows and the nav wash
+   Values are ACCENTS in shared/appearance.ts; the two must be edited together. */
+:root,
+:root[data-accent="brand"] { --ac: #0866ff; --acg: #0866ff; --onac: #ffffff; --ach: #4d93ff; --acrgb: 8, 102, 255; }
+:root[data-accent="alert"] { --ac: #e41e3f; --acg: #e41e3f; --onac: #ffffff; --ach: #ff8a97; --acrgb: 228, 30, 63; }
+:root[data-accent="sun"] { --ac: #f7b125; --acg: #f7b125; --onac: #16181c; --ach: #f8c65e; --acrgb: 247, 177, 37; }
+:root[data-accent="violet"] { --ac: #7c3aed; --acg: #7c3aed; --onac: #ffffff; --ach: #c4a4fb; --acrgb: 124, 58, 237; }
+:root[data-accent="indigo"] { --ac: #4f46e5; --acg: #4f46e5; --onac: #ffffff; --ach: #a5b4fc; --acrgb: 79, 70, 229; }
+:root[data-accent="pink"] { --ac: #db2777; --acg: #db2777; --onac: #ffffff; --ach: #f9a8d4; --acrgb: 219, 39, 119; }
+:root[data-accent="orange"] { --ac: #ea580c; --acg: #ea580c; --onac: #1f0a02; --ach: #fdba74; --acrgb: 234, 88, 12; }
+:root[data-accent="forest"] { --ac: #1a7f37; --acg: #1a7f37; --onac: #ffffff; --ach: #7ee2a8; --acrgb: 26, 127, 55; }
+:root[data-accent="pine"] { --ac: #0f766e; --acg: #0f766e; --onac: #ffffff; --ach: #5eead4; --acrgb: 15, 118, 110; }
+:root[data-accent="slate"] { --ac: #475569; --acg: #475569; --onac: #ffffff; --ach: #cbd5e1; --acrgb: 71, 85, 105; }
+:root[data-accent="meta"] {
+  --ac: #0064e0;
+  --acg: linear-gradient(180deg, #0082fb, #0064e0);
+  --onac: #ffffff;
+  --ach: #4d9bff;
+  --acrgb: 0, 100, 224;
+}
+:root[data-accent="messenger"] {
+  --ac: #006aff;
+  --acg: linear-gradient(135deg, #00b2ff, #006aff 38%, #a033ff 72%, #ff5c87);
+  --onac: #ffffff;
+  --ach: #4d97ff;
+  --acrgb: 0, 106, 255;
+}
+:root[data-accent="story"] {
+  --ac: #a033ff;
+  --acg: linear-gradient(135deg, #a033ff, #ff5c87);
+  --onac: #ffffff;
+  --ach: #c489ff;
+  --acrgb: 160, 51, 255;
+}
+:root[data-accent="grow"] {
+  --ac: #31a24c;
+  --acg: linear-gradient(180deg, #42b72a, #31a24c);
+  --onac: #16181c;
+  --ach: #62d67e;
+  --acrgb: 49, 162, 76;
+}
+:root[data-accent="dusk"] {
+  --ac: #7b3ff2;
+  --acg: linear-gradient(135deg, #a033ff, #4d6bff);
+  --onac: #ffffff;
+  --ach: #c08cff;
+  --acrgb: 123, 63, 242;
+}
+:root[data-accent="ember"] {
+  --ac: #f2683c;
+  --acg: linear-gradient(135deg, #ff5c87, #f7b125);
+  --onac: #231007;
+  --ach: #ffa07a;
+  --acrgb: 242, 104, 60;
+}
+:root[data-accent="teal"] {
+  --ac: #00a58c;
+  --acg: linear-gradient(135deg, #00c6a7, #0082fb);
+  --onac: #04201b;
+  --ach: #4fd6c0;
+  --acrgb: 0, 165, 140;
+}
+:root[data-accent="midnight"] {
+  --ac: #3730a3;
+  --acg: linear-gradient(135deg, #1e3a8a, #4338ca);
+  --onac: #ffffff;
+  --ach: #a5b4fc;
+  --acrgb: 55, 48, 163;
+}
+:root[data-accent="sunset"] {
+  --ac: #ff4d3d;
+  --acg: linear-gradient(135deg, #ff7a18, #ff2d55);
+  --onac: #2a0a05;
+  --ach: #ff9a86;
+  --acrgb: 255, 77, 61;
+}
+:root[data-accent="lime"] {
+  --ac: #4d9a2a;
+  --acg: linear-gradient(135deg, #a3e635, #15803d);
+  --onac: #0f2009;
+  --ach: #9ae65f;
+  --acrgb: 77, 154, 42;
+}
+:root[data-accent="copper"] {
+  --ac: #b45309;
+  --acg: linear-gradient(135deg, #f59e0b, #7c2d12);
+  --onac: #ffffff;
+  --ach: #f0b45f;
+  --acrgb: 180, 83, 9;
+}
+:root[data-accent="ice"] {
+  --ac: #38a1f0;
+  --acg: linear-gradient(135deg, #7dd3fc, #2563eb);
+  --onac: #06131f;
+  --ach: #8ecdf7;
+  --acrgb: 56, 161, 240;
+}
+:root[data-accent="steel"] {
+  --ac: #64748b;
+  --acg: linear-gradient(135deg, #94a3b8, #334155);
+  --onac: #ffffff;
+  --ach: #cbd5e1;
+  --acrgb: 100, 116, 139;
+}
+/* The light canvas needs the darker step of the same hue: softDark reads on the dark
+   canvas only, and using it here puts every accent-as-text below AA. */
+:root[data-theme="light"],
+:root[data-theme="light"][data-accent="brand"] { --ach: #0a5ae0; }
+:root[data-theme="light"][data-accent="alert"] { --ach: #b81a35; }
+:root[data-theme="light"][data-accent="sun"] { --ach: #7a5300; }
+:root[data-theme="light"][data-accent="violet"] { --ach: #5b21b6; }
+:root[data-theme="light"][data-accent="indigo"] { --ach: #3730a3; }
+:root[data-theme="light"][data-accent="pink"] { --ach: #9d174d; }
+:root[data-theme="light"][data-accent="orange"] { --ach: #9a3412; }
+:root[data-theme="light"][data-accent="forest"] { --ach: #116329; }
+:root[data-theme="light"][data-accent="pine"] { --ach: #115e59; }
+:root[data-theme="light"][data-accent="slate"] { --ach: #334155; }
+:root[data-theme="light"][data-accent="meta"] { --ach: #0056c2; }
+:root[data-theme="light"][data-accent="messenger"] { --ach: #0057cc; }
+:root[data-theme="light"][data-accent="story"] { --ach: #7d1fd1; }
+:root[data-theme="light"][data-accent="grow"] { --ach: #1b6b2f; }
+:root[data-theme="light"][data-accent="dusk"] { --ach: #6428d4; }
+:root[data-theme="light"][data-accent="ember"] { --ach: #9c3510; }
+:root[data-theme="light"][data-accent="teal"] { --ach: #00695a; }
+:root[data-theme="light"][data-accent="midnight"] { --ach: #312e81; }
+:root[data-theme="light"][data-accent="sunset"] { --ach: #b3241d; }
+:root[data-theme="light"][data-accent="lime"] { --ach: #2f6b17; }
+:root[data-theme="light"][data-accent="copper"] { --ach: #8a3f06; }
+:root[data-theme="light"][data-accent="ice"] { --ach: #1668b0; }
+:root[data-theme="light"][data-accent="steel"] { --ach: #475569; }
+
+/* The corner family. One attribute retunes all five radii together, so every card,
+   sheet, field and tile moves as a set. Pills and circles are untouched: a pill is a
+   shape, not a rounded rectangle. */
+#app[data-corners="sharp"] { --r1: 2px; --r2: 3px; --r3: 4px; --r4: 4px; --r5: 5px; }
+#app[data-corners="round"] { --r1: 10px; --r2: 14px; --r3: 16px; --r4: 18px; --r5: 20px; }
+
+/* ── Reset and boot ───────────────────────────────────────────────────────────
+   box-sizing globally: without it every fixed-height row in this file measures
+   over by its border and padding. */
 * { box-sizing: border-box; }
 [hidden] { display: none !important; }
 
-/* Storage-backed language and theme preferences are asynchronous. Keep the
-   whole document transparent and out of paint until both preferences have
-   been applied; otherwise the body canvas can briefly show the device theme
-   before a saved manual Light/Dark preference wins. Layout still exists, so
-   startup measurements remain deterministic. */
+/* Storage-backed language and theme preferences are asynchronous. Keep the whole
+   document transparent and out of paint until both have been applied; otherwise the
+   canvas can briefly show the device theme before a saved manual preference wins.
+   Layout still exists, so startup measurements remain deterministic. */
 :root[data-boot="pending"],
 :root[data-boot="pending"] body { background: transparent; }
 :root[data-boot="pending"] body { visibility: hidden; }
@@ -161,8 +316,8 @@ body {
   overflow: hidden;
 }
 body {
-  color: var(--text);
-  background: var(--canvas);
+  color: var(--tx);
+  background: var(--cv);
   font-family: var(--font);
   -webkit-font-smoothing: antialiased;
 }
@@ -170,9 +325,34 @@ button,
 input,
 select { font: inherit; }
 button,
+input,
 select,
 summary,
 label { -webkit-tap-highlight-color: transparent; }
+h1,
+h2,
+h3,
+p { margin: 0; }
+
+/* One rule for every container that scrolls: the bar is never painted, on any
+   surface, so it can't compete with content or read differently from tab to tab.
+   Scrolling itself is untouched — this only styles pseudo-elements, never
+   `overflow`, so wheel/touch/keyboard still work. The standard scrollbar-width
+   lands in Chrome 121 and this extension supports 116+, so ::-webkit-scrollbar is
+   what does the real work across the supported range. Zeroing the width also drops
+   the ~10px of layout Chromium reserves for a classic scrollbar, so the grid's
+   right-hand column no longer narrows just because the list became scrollable. */
+.grid,
+.settings-body,
+.picker-list { scrollbar-width: none; }
+.grid::-webkit-scrollbar,
+.settings-body::-webkit-scrollbar,
+.picker-list::-webkit-scrollbar { width: 0; height: 0; }
+
+@keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.45; } }
+@keyframes edgespin { to { transform: rotate(360deg); } }
+
+/* ── Shell ────────────────────────────────────────────────────────────────────*/
 .app {
   width: 100%;
   height: 100vh;
@@ -181,61 +361,93 @@ label { -webkit-tap-highlight-color: transparent; }
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  background: var(--canvas);
+  background: var(--cv);
+  color: var(--tx);
 }
 .brand {
   flex: none;
+  height: 52px;
+  padding: 0 14px;
   display: flex;
   align-items: center;
   gap: 9px;
+  background: var(--sf);
+  border-bottom: 1px solid var(--ln);
 }
+/* The brand mark lives in ONE file: icons/logo.svg, which the icon generator also
+   reads to build the toolbar PNGs. The radius clips the img to the same corner the
+   SVG's own rx renders to at 26px, so the glow hugs the tile and not a square. */
 .brand-logo {
   flex: none;
+  width: 26px;
+  height: 26px;
   display: block;
-  line-height: 0;
+  overflow: hidden;
+  border-radius: var(--r2);
+  box-shadow: var(--logo-glow);
 }
-.brand-logo img {
-  display: block; }
-.brand-text { min-width: 0; flex: 1; }
-.brand-text h1 { margin: 0; font-size: 15px; line-height: 19px;
-  }
-.brand-tagline { display: none; }
-.brand-live {
+.brand-logo img { width: 26px; height: 26px; display: block; }
+.brand-name {
+  flex: 1;
+  min-width: 0;
+  font-size: 15px;
+  line-height: 1.2;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  white-space: nowrap;
+}
+.status-pill {
   flex: none;
-  min-height: 22px;
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  border-radius: var(--r-pill);
-  font-size: 10px;
-  line-height: 14px;
-  font-weight: 700;
-  text-transform: uppercase;
+  padding: 5px 10px;
+  border-radius: var(--pill);
+  background: var(--lv-wash);
+  border: 1px solid var(--lv-line);
+  color: var(--lvt);
+  font-size: 11px;
+  line-height: 1.2;
+  font-weight: 600;
+  white-space: nowrap;
 }
-.live-dot {
+.status-dot {
   width: 6px;
   height: 6px;
   border-radius: 50%;
-  background: var(--live);
-  animation: live-pulse 1.8s ease-out infinite;
+  background: var(--lv);
+  animation: pulse 1.8s ease-in-out infinite;
 }
+/* Idle: nothing is being captured, so the pill drops to panel chrome and the dot stops.
+   The design's own values — a 5%-white wash, the hairline, and --ft. */
+.status-pill.is-idle {
+  background: rgba(255, 255, 255, 0.05);
+  border-color: var(--ln);
+  color: var(--ft);
+}
+.status-pill.is-idle .status-dot { background: var(--ft); animation: none; }
+/* A queue is running: the accent, because it is the panel's own work. */
+.status-pill.is-busy {
+  background: rgba(var(--acrgb), 0.14);
+  border-color: rgba(var(--acrgb), 0.32);
+  color: var(--ach);
+  font-weight: 700;
+}
+.status-pill.is-busy .status-dot { background: var(--ach); animation-duration: 1.2s; }
 
-@keyframes live-pulse {
-  60% { box-shadow: 0 0 0 4px rgba(49, 162, 76, 0); }
-  100% { box-shadow: 0 0 0 0 rgba(49, 162, 76, 0); }
-}
 .banner {
   flex: none;
-  margin: 0 12px 8px;
-  padding: 8px 10px;
-  color: var(--text);
-  background: var(--danger-wash);
-  border: 1px solid var(--danger-line);
-  border-radius: var(--r-sm);
+  margin: 10px 16px 0;
+  padding: 9px 11px;
+  color: var(--tx);
+  background: var(--dg-wash);
+  border: 1px solid var(--dg);
+  border-radius: var(--r4);
   font-size: 11px;
-  line-height: 15px;
+  line-height: 1.45;
 }
-.banner-error { background: var(--danger-wash-strong); font-weight: 600; }
+.banner-error { font-weight: 600; }
+
 .view {
   flex: 1;
   min-height: 0;
@@ -243,50 +455,98 @@ label { -webkit-tap-highlight-color: transparent; }
   flex-direction: column;
   overflow: hidden;
 }
+
+/* ── Empty states ─────────────────────────────────────────────────────────────
+   A designed state, never a bare sentence: a glyph, a line, an explanation, one way
+   forward, and the passive-capture promise stated plainly. */
 .empty {
   flex: 1;
   min-height: 0;
-  margin: 0 12px;
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 6px;
-  padding: 24px;
+  gap: 14px;
+  padding: 26px 30px;
   text-align: center;
-  border-radius: var(--r-lg);
-  background: var(--surface);
 }
 .empty-mark {
-  width: 42px;
-  height: 42px;
-  margin-bottom: 5px;
-  background: var(--muted);
-  -webkit-mask: url("icons/nav-now.svg") center / 30px 30px no-repeat;
-  mask: url("icons/nav-now.svg") center / 30px 30px no-repeat;
-  opacity: 0.7;
+  flex: none;
+  width: 64px;
+  height: 64px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--pill);
+  background: var(--sf);
+  border: 1px solid var(--ln);
 }
-.empty h2 { margin: 0; font-size: 17px; line-height: 22px;
-  }
-.empty p { max-width: 260px; margin: 0; color: var(--muted); font-size: 12px; line-height: 17px; }
+.empty-mark::before {
+  content: "";
+  width: 28px;
+  height: 28px;
+  background: var(--ft);
+  -webkit-mask: var(--empty-icon, url("icons/nav-now.svg")) center / contain no-repeat;
+  mask: var(--empty-icon, url("icons/nav-now.svg")) center / contain no-repeat;
+}
+.empty h2 { font-size: 17px; line-height: 1.3; font-weight: 700; letter-spacing: -0.02em; }
+.empty p {
+  max-width: 250px;
+  margin: 7px auto 0;
+  color: var(--md);
+  font-size: 12.5px;
+  line-height: 1.55;
+  text-wrap: pretty;
+}
+.empty-actions { width: 100%; max-width: 240px; display: flex; flex-direction: column; gap: 8px; }
+.empty-promise {
+  margin: 0;
+  color: var(--ft);
+  font-family: var(--mono);
+  font-size: 11px;
+  line-height: 1.4;
+  font-weight: 500;
+}
 
-/* Padding lives in the layout block further down, with the rest of the .now geometry. One
-   declaration, so the two cannot disagree. */
+/* ── Now playing ──────────────────────────────────────────────────────────────*/
 .now {
   flex: 1;
   min-height: 0;
   display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 14px 16px;
+  overflow: hidden;
 }
-.preview {
-  position: relative;
+.head-line { flex: none; min-width: 0; display: flex; align-items: baseline; gap: 9px; }
+.head-line h2 { font-size: 19px; line-height: 1.2; font-weight: 700; letter-spacing: -0.025em; }
+.head-note {
   min-width: 0;
   overflow: hidden;
-  border-radius: var(--r-lg);
+  color: var(--ft);
+  font-size: 12px;
+  line-height: 1.3;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The media fills whatever height the control stack below leaves it. flex-shrink
+   is what lets it give the difference up rather than push the save button past the
+   fold; only under min-height does anything scroll. */
+.preview {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 150px;
+  min-width: 0;
+  overflow: hidden;
+  border-radius: var(--r5);
   background: var(--media-wash);
+  box-shadow: var(--media-frame-shadow);
   isolation: isolate;
 }
 .preview > img:not(.thumb-bg),
-.card-thumb > img:not(.thumb-bg) {
+.tile-thumb > img:not(.thumb-bg) {
   position: absolute;
   inset: 0;
   width: 100%;
@@ -297,9 +557,9 @@ label { -webkit-tap-highlight-color: transparent; }
   object-position: center;
 }
 .preview > img.media-fit-cover:not(.thumb-bg),
-.card-thumb > img.media-fit-cover:not(.thumb-bg) { object-fit: cover; }
+.tile-thumb > img.media-fit-cover:not(.thumb-bg) { object-fit: cover; }
 .preview > img.thumb-bg,
-.card-thumb > img.thumb-bg {
+.tile-thumb > img.thumb-bg {
   position: absolute;
   inset: 0;
   width: 100%;
@@ -312,107 +572,155 @@ label { -webkit-tap-highlight-color: transparent; }
   filter: blur(14px) saturate(0.85) brightness(0.62);
   opacity: 0.82;
 }
-.preview-chips {
-  position: absolute;
-  z-index: 4;
-  top: 12px;
-  left: 12px;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-
-/* STORY / duration chips are rounded rectangles (7px), not pills, in the design. */
+.preview-chips { position: absolute; z-index: 4; top: 11px; left: 11px; display: flex; gap: 6px; }
 .media-badge,
-.preview-dur {
-  min-height: 22px;
+.media-dur {
+  height: 21px;
+  padding: 0 8px;
   display: inline-flex;
   align-items: center;
-  padding: 4px 10px;
-  border-radius: 7px;
-  font-size: 11px;
-  line-height: 14px;
+  border-radius: var(--r1);
   white-space: nowrap;
 }
 .media-badge {
-  color: var(--media-on-accent);
-  background: var(--media-accent);
+  background: var(--ac);
+  color: var(--onac);
+  font-size: 10px;
+  line-height: 1;
   font-weight: 800;
-  letter-spacing: 0.04em;
+  letter-spacing: 0.06em;
   text-transform: uppercase;
 }
-.preview-dur {
-  color: var(--media-text);
-  background: var(--media-control);
-  font-family: var(--font-mono);
-  font-weight: 700;
+.media-dur {
+  background: rgba(0, 0, 0, 0.55);
+  color: #ffffff;
+  font-family: var(--mono);
+  font-size: 10.5px;
+  line-height: 1;
+  font-weight: 600;
 }
-.preview-dur:empty { display: none; }
+.media-dur:empty { display: none; }
 .preview-play {
   position: absolute;
   z-index: 3;
   top: var(--play-y, 50%);
   left: 50%;
-  width: 60px;
-  height: 60px;
+  width: 56px;
+  height: 56px;
   transform: translate(-50%, -50%);
   display: none;
   align-items: center;
   justify-content: center;
-  border: 1px solid var(--play-line);
+  border: 1px solid rgba(255, 255, 255, 0.38);
   border-radius: 50%;
-  background: var(--play-surface);
-  box-shadow: var(--play-shadow);
-  -webkit-backdrop-filter: blur(10px) saturate(0.8);
-  backdrop-filter: blur(10px) saturate(0.8);
+  background: rgba(10, 12, 15, 0.42);
+  -webkit-backdrop-filter: blur(10px);
+  backdrop-filter: blur(10px);
 }
 .preview.is-video .preview-play { display: flex; }
 .preview.play-obstructed .preview-play { visibility: hidden; }
-/* No nudge margin: play.svg carries its own optical centring — the triangle's box sits at x 9-17
-   of a 24 viewBox — and `mask: center` centres that again. Any offset here lands visibly off,
-   which is why the grid thumbnails' ::after centres the same file with no margin either. */
+/* No nudge margin: play.svg carries its own optical centring — the triangle's box
+   sits at x 9-17 of a 24 viewBox — and `mask: center` centres that again. */
 .preview-play::before {
   content: "";
-  width: 22px;
-  height: 22px;
-  background: var(--media-text);
+  width: 20px;
+  height: 20px;
+  background: #ffffff;
   -webkit-mask: url("icons/play.svg") center / contain no-repeat;
   mask: url("icons/play.svg") center / contain no-repeat;
 }
-
-/* Stacked below the media, on the panel canvas — so it reads with the panel
-   tokens, not the dark media ones. The chips and play control stay ON the
-   media and keep --media-* (see .preview-chips / .preview-dur / .preview-play). */
-.now-overlay {
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  color: var(--text);
+.preview-scrim {
+  position: absolute;
+  z-index: 2;
+  inset: auto 0 0;
+  height: 78px;
+  background: linear-gradient(transparent, rgba(6, 8, 11, 0.9));
+  pointer-events: none;
 }
-.now-identity { display: flex; flex-direction: column; gap: 2px; }
-.now-title { margin: 0; font-size: 17px; line-height: 22px; font-weight: 800;
-  }
-.now-sub { margin: 0; color: var(--muted); font-size: 12.5px; line-height: 16px; }
-.metrics {
+.preview-foot {
+  position: absolute;
+  z-index: 4;
+  bottom: 11px;
+  left: 12px;
+  right: 12px;
+  display: flex;
   align-items: center;
-  }
-.metric { min-width: 0; display: flex;
-  }
-.metric-label { color: var(--faint);
-  line-height: 15px; white-space: nowrap; }
-.metric-value { overflow: hidden;
-  line-height: 15px; font-weight: 700; text-overflow: ellipsis; white-space: nowrap; }
-
-/* Full-width resolution field, matching the download button below it, with the
-   "RESOLUTION" label on its own row above (not overlaying the value). */
-.quality {
-  display: flex;
-  width: 100%;
-  flex-direction: column;
-  gap: 7px;
+  justify-content: space-between;
+  gap: 10px;
 }
-.quality.is-single-option { width: 100%; }
+.preview-format {
+  min-width: 0;
+  overflow: hidden;
+  color: rgba(255, 255, 255, 0.85);
+  font-family: var(--mono);
+  font-size: 11px;
+  line-height: 1.3;
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.audio-pill {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 9px;
+  border-radius: var(--pill);
+  background: var(--lv-wash-strong);
+  border: 1px solid var(--lv-line-strong);
+  color: var(--lv-on-media);
+  font-size: 10px;
+  line-height: 1.2;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.audio-pill.is-muted {
+  background: rgba(255, 123, 135, 0.2);
+  border-color: rgba(255, 123, 135, 0.38);
+  color: #ffc3c9;
+}
+
+/* Progress lives ON the media, over a veil, so a running save never displaces the
+   controls under it. */
+.preview-veil { position: absolute; z-index: 3; inset: 0; background: rgba(6, 8, 11, 0.5); }
+.preview-progress { position: absolute; z-index: 5; inset: auto 0 0; padding: 0 12px 11px; }
+.progress-line {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 7px;
+}
+.progress-label { color: #ffffff; font-size: 12px; line-height: 1.3; font-weight: 700; }
+.progress-pct {
+  color: #ffffff;
+  font-family: var(--mono);
+  font-size: 11px;
+  line-height: 1.3;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.progress-track { height: 5px; overflow: hidden; border-radius: var(--pill); background: rgba(255, 255, 255, 0.22); }
+.progress-fill { height: 5px; border-radius: var(--pill); background: #ffffff; transition: width 0.2s ease-out; }
+/* The offscreen reports bytes done, never a total, so there is no honest percentage
+   to draw. A sweep says "still working" without inventing one. */
+.progress-fill.is-indeterminate { width: 38%; animation: sweep 1.4s ease-in-out infinite; }
+@keyframes sweep {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(263%); }
+}
+.progress-note {
+  margin: 7px 0 0;
+  color: rgba(255, 255, 255, 0.7);
+  font-family: var(--mono);
+  font-size: 10px;
+  line-height: 1.3;
+  font-weight: 500;
+}
+
+/* The control stack is pinned to the bottom of the view; the media above it takes
+   the rest. */
+.quality { flex: none; margin-top: auto; display: flex; flex-direction: column; gap: 7px; }
 .quality-head {
   display: flex;
   align-items: baseline;
@@ -421,150 +729,163 @@ label { -webkit-tap-highlight-color: transparent; }
   padding: 0 2px;
 }
 .quality-label {
-  color: var(--faint);
+  flex: none;
+  color: var(--ft);
   font-size: 10px;
-  line-height: 13px;
+  line-height: 1.2;
   font-weight: 700;
   letter-spacing: 0.1em;
   text-transform: uppercase;
 }
 .quality-count {
-  color: var(--faint);
-  font-size: 11px;
-  line-height: 13px;
+  min-width: 0;
   overflow: hidden;
+  color: var(--ft);
+  font-size: 11px;
+  line-height: 1.2;
+  font-weight: 500;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.select-wrap { min-width: 0; }
-.select,
-.set-input {
-  min-width: 0;
-  height: 34px;
-  color: var(--text);
-  background-color: var(--canvas);
-  border: 1px solid var(--control-line);
-  border-radius: 8px;
-}
-.select {
-  appearance: none;
-  background-image: var(--select-chevron);
-  background-repeat: no-repeat;
-  background-position: right 9px center;
-  background-size: 12px;
-  line-height: 1;
-}
 
-/* Chromium on Windows may paint the native popup with the OS light surface
-   even though the closed control uses our dark color scheme. Give every option
-   an explicit matching surface so its inherited light text remains readable.
-   This is also the fallback for Chromium versions before customizable selects. */
-.select option {
-  color: var(--text);
-  background-color: var(--surface);
-}
-
-/* Chrome/Edge 134+ exposes the native picker as a styleable popover. Keeping
-   the real select preserves its keyboard and screen-reader behavior while the
-   popup can finally share the same rounded geometry as the closed control. */
-@supports (appearance: base-select) {
-  .select,
-  .select::picker(select) {
-    appearance: base-select;
-  }
-  .select {
-    display: flex;
-    align-items: center;
-  }
-
-  /* The popup is a floating surface, so it stays a step rounder than its 9px
-     trigger. Keep this at --r-md or above: the visual QA fails the picker below
-     a 14px radius, and --r-sm is 12px. */
-  .select::picker(select) {
-    margin-top: 4px;
-    padding: 4px;
-    color: var(--text);
-    background: var(--surface);
-    border: 1px solid var(--accent);
-    border-radius: var(--r-md);
-    box-shadow: var(--picker-shadow);
-    overflow: hidden;
-  }
-  .select::picker-icon,
-  .select option::checkmark { display: none; }
-  .select option {
-    min-height: 34px;
-    padding: 9px 11px;
-    border-radius: 10px;
-  }
-  .select option:hover,
-  .select option:focus-visible { background: var(--select-hover); }
-  .select option:checked {
-    color: var(--on-accent);
-    background: var(--accent);
-    font-weight: 700;
-  }
-}
-
-/* Now Playing's resolution control is a taller, monospace field (design uses a
-   14px mono value inside a 12px-radius #1b1e23 button). */
-#now-qselect {
+/* ── Resolution picker ────────────────────────────────────────────────────────
+   Flat 38px whatever the option count, and the list floats OVER the media so the
+   frame never resizes when it opens. */
+.picker { position: relative; }
+.picker-trigger {
   width: 100%;
-  height: 46px;
-  padding-right: 48px;
-  padding-left: 14px;
-  color: var(--text);
-  background-color: var(--field);
-  background-image: var(--select-chevron);
-  background-position: right 14px center;
-  border-color: var(--control-line);
-  border-radius: var(--r-sm);
-  font-family: var(--font-mono);
-  font-size: 14px;
-  font-weight: 600;
+  height: 38px;
+  padding: 0 12px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--tx);
+  background: var(--fld);
+  border: 1px solid var(--ln);
+  border-radius: var(--r3);
+  cursor: pointer;
 }
-#now-qselect.is-single-option {
-  padding-right: 14px;
-  background-image: none;
-}
-/* --text, not --media-text: this control sits on --field (the panel canvas),
-   not on the media. --media-text is pinned to #ffffff for overlay chips, so
-   using it here rendered white-on-white in the light theme whenever a video
-   offered a single quality and the select went disabled. */
-#now-qselect:disabled {
-  color: var(--text);
-  opacity: 1;
-  cursor: default;
-  -webkit-text-fill-color: var(--text);
-}
-#now-qselect option {
-  color: var(--media-text);
-  background-color: var(--media-surface);
-}
-
-@supports (appearance: base-select) {
-  #now-qselect::picker(select) {
-    color: var(--media-text);
-    background: var(--media-surface);
-    border-color: var(--media-accent);
-  }
-  #now-qselect option:hover,
-  #now-qselect option:focus-visible { background: var(--media-select-hover); }
-  #now-qselect option:checked {
-    color: var(--media-on-accent);
-    background: var(--media-accent);
-  }
-}
-.btn-primary {
+.picker-trigger:not(:disabled):hover { border-color: var(--ac); }
+.picker-trigger:disabled { cursor: default; }
+.picker-label { flex: none; font-family: var(--mono); font-size: 12.5px; font-weight: 700; }
+.picker-dims {
+  flex: 1;
   min-width: 0;
-  height: 48px;
+  overflow: hidden;
+  color: var(--md);
+  font-family: var(--mono);
+  font-size: 11px;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.picker-size { flex: none; color: var(--ft); font-family: var(--mono); font-size: 11px; }
+.picker-caret {
+  flex: none;
+  width: 14px;
+  height: 14px;
+  background: var(--md);
+  -webkit-mask: url("icons/chevron.svg") center / contain no-repeat;
+  mask: url("icons/chevron.svg") center / contain no-repeat;
+  transition: transform 0.18s ease-out;
+}
+.picker-trigger[aria-expanded="true"] .picker-caret { transform: rotate(180deg); }
+.picker-trigger:disabled .picker-caret { display: none; }
+.picker-list {
+  position: absolute;
+  z-index: 30;
+  bottom: calc(100% + 6px);
+  left: 0;
+  right: 0;
+  max-height: 226px;
+  padding: 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  overflow: hidden auto;
+  isolation: isolate;
+  background: var(--sheet);
+  border: 0;
+  border-radius: var(--r4);
+  box-shadow: var(--e3);
+  -webkit-backdrop-filter: blur(18px) saturate(1.1);
+  backdrop-filter: blur(18px) saturate(1.1);
+}
+/* The animated edge light, masked down to a 1.5px ring. The rows sit above it. */
+.picker-edge {
+  position: absolute;
+  z-index: 1;
+  inset: 0;
+  overflow: hidden;
+  padding: 1.5px;
+  border-radius: var(--r4);
+  pointer-events: none;
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  mask-composite: exclude;
+}
+.picker-edge::before {
+  content: "";
+  position: absolute;
+  inset: -70%;
+  background: conic-gradient(
+    from 0deg,
+    transparent 0deg,
+    var(--ach) 26deg,
+    #ffffff 42deg,
+    var(--ach) 58deg,
+    transparent 96deg
+  );
+  animation: edgespin 3.4s linear infinite;
+}
+.picker-row {
+  position: relative;
+  z-index: 2;
+  flex: none;
+  height: 32px;
+  padding: 0 10px;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  color: var(--tx);
+  background: transparent;
+  border: 0;
+  border-radius: var(--r2);
+  cursor: pointer;
+}
+.picker-row:hover { background: var(--sf2); }
+.picker-row[aria-selected="true"] { background: rgba(var(--acrgb), 0.16); color: var(--ach); }
+.picker-tick {
+  flex: none;
+  width: 12px;
+  height: 12px;
+  background: currentColor;
+  -webkit-mask: url("icons/check.svg") center / contain no-repeat;
+  mask: url("icons/check.svg") center / contain no-repeat;
+  visibility: hidden;
+}
+.picker-row[aria-selected="true"] .picker-tick { visibility: visible; }
+.picker-row .picker-label { min-width: 42px; text-align: left; font-weight: 500; }
+.picker-row[aria-selected="true"] .picker-label { font-weight: 700; }
+.picker-row .picker-dims { color: var(--tx); font-weight: 500; }
+.picker-row .picker-size { color: var(--tx); font-weight: 600; }
+
+/* ── Buttons ──────────────────────────────────────────────────────────────────*/
+.btn-primary {
+  flex: none;
+  height: 46px;
   padding: 0 14px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   gap: 9px;
+  color: var(--onac);
+  background: var(--acg);
   border: 0;
-  font-size: 15px;
+  border-radius: var(--r4);
+  box-shadow: 0 8px 20px -8px rgba(var(--acrgb), 0.75), inset 0 1px 0 rgba(255, 255, 255, 0.18);
+  font-size: 14.5px;
   line-height: 1;
   font-weight: 700;
   cursor: pointer;
@@ -572,335 +893,489 @@ label { -webkit-tap-highlight-color: transparent; }
 .btn-primary::before {
   content: "";
   flex: none;
-  width: 18px;
-  height: 18px;
+  width: 17px;
+  height: 17px;
   background: currentColor;
   -webkit-mask: url("icons/download.svg") center / contain no-repeat;
   mask: url("icons/download.svg") center / contain no-repeat;
 }
+.btn-primary:hover:not(:disabled) { filter: brightness(1.08); }
+.btn-primary:active:not(:disabled) { transform: translateY(1px); }
 .btn-primary:disabled { opacity: 0.55; cursor: default; }
-
-/* Both content views open the same distance below the app header. Now Playing had
-   no top padding at all, which read as glued to the header next to Library and
-   Saved; one rule so the two cannot drift apart again. */
-.view-grid,
-.view-now { padding-top: 12px; }
-.grid-head {
-  flex: none;
-  min-width: 0;
-  padding: 0 16px 8px;
-  display: flex;
-  align-items: flex-start;
-  gap: 8px;
-}
-.grid-title { min-width: 0; flex: 1; }
-.grid-title-line { display: flex; align-items: baseline; gap: 8px; }
-.grid-title h2 { margin: 0; font-size: 20px; line-height: 25px; font-weight: 800; }
-.grid-title p { height: 0; margin: 0; overflow: hidden; }
-.grid-count { min-width: 0; overflow: hidden; color: var(--muted); font-size: 12.5px; line-height: 16px; font-weight: 700; text-overflow: ellipsis; white-space: nowrap; }
-.picks-head {
+.now-dest {
   flex: none;
   display: flex;
   align-items: center;
-  gap: 5px;
-  color: var(--muted);
-  font-size: 0;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 0 2px;
 }
-.picks-head > span { display: none; }
+.now-dest-text { color: var(--ft); font-size: 11px; line-height: 1.4; font-weight: 500; }
+/* The design's 3px, verbatim: 3 + 15.4 + 3 = 21.4px tall, under the 24px WCAG 2.5.8
+   target minimum. "Select all", "Save as…" and "Open folder ↗" are all text buttons
+   with a full-width neighbour, so the miss is 2.6px of vertical slack. */
 .link-btn {
-  /* 3px + 18px line-height + 3px = the 24px WCAG 2.5.8 target minimum. */
+  flex: none;
   padding: 3px 0;
-  color: var(--muted);
+  color: var(--md);
   background: transparent;
   border: 0;
-  font-size: 11.5px;
-  line-height: 18px;
+  font-size: 11px;
+  line-height: 1.4;
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.link-btn:hover { color: var(--ach); }
+.link-accent { color: var(--ach); }
+.link-accent:hover { filter: brightness(1.15); }
+.btn-outline {
+  flex: none;
+  height: 36px;
+  padding: 0 12px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--md);
+  background: transparent;
+  border: 1px solid var(--ln);
+  border-radius: var(--r3);
+  font-size: 12px;
+  line-height: 1;
+  font-weight: 700;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.btn-outline:hover { color: var(--tx); border-color: var(--ac); }
+.btn-accent {
+  flex: none;
+  height: 36px;
+  padding: 0 15px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--onac);
+  background: var(--acg);
+  border: 0;
+  border-radius: var(--r3);
+  font-size: 12.5px;
+  line-height: 1;
+  font-weight: 700;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.btn-accent::before {
+  content: "";
+  flex: none;
+  width: 14px;
+  height: 14px;
+  background: currentColor;
+  -webkit-mask: url("icons/download.svg") center / contain no-repeat;
+  mask: url("icons/download.svg") center / contain no-repeat;
+}
+.btn-accent:hover:not(:disabled) { filter: brightness(1.08); }
+.btn-accent:disabled { opacity: 0.55; cursor: default; }
+/* A quiet, bordered action inside a settings row, and the wide variant the empty
+   state stacks. */
+.btn-quiet {
+  flex: none;
+  height: 30px;
+  padding: 0 13px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--tx);
+  background: var(--sf2);
+  border: 1px solid var(--ln);
+  border-radius: var(--r3);
+  font-size: 12px;
+  line-height: 1;
+  font-weight: 700;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.btn-quiet:hover { border-color: var(--ac); }
+.btn-quiet-wide {
+  height: 36px;
+  padding: 0 13px;
+  color: var(--md);
+  background: transparent;
+  border: 1px solid var(--ln);
+  border-radius: var(--r4);
+  font-size: 12.5px;
+  line-height: 1;
   font-weight: 600;
   cursor: pointer;
-  white-space: nowrap;
 }
-.filters { flex: none; padding: 0 16px 14px; display: flex; gap: 8px; }
-.chip {
-  min-height: 26px;
-  padding: 8px 16px;
-  color: var(--muted);
-  background: var(--field);
-  border: 1px solid var(--control-line);
-  border-radius: var(--r-pill);
-  font-size: 12.5px;
-  line-height: 14px;
+.btn-quiet-wide:hover { color: var(--tx); }
+.btn-danger {
+  flex: none;
+  height: 30px;
+  padding: 0 14px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--dg);
+  background: transparent;
+  border: 1px solid var(--dg);
+  border-radius: var(--r3);
+  font-size: 12px;
+  line-height: 1;
   font-weight: 700;
   cursor: pointer;
 }
-.chip[aria-pressed="true"] { color: var(--on-accent); background: var(--accent); border-color: transparent; font-weight: 700; }
+.btn-danger:hover { background: var(--dg-wash); }
+/* A 34px square icon button — the density toggle and anything that joins it. */
+.icon-btn {
+  flex: none;
+  width: 34px;
+  height: 34px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--md);
+  background: var(--fld);
+  border: 1px solid var(--ring);
+  border-radius: var(--r3);
+  cursor: pointer;
+}
+.icon-btn:hover { color: var(--tx); }
+.icon-btn::before {
+  content: "";
+  width: 16px;
+  height: 16px;
+  background: currentColor;
+  -webkit-mask: var(--icon) center / contain no-repeat;
+  mask: var(--icon) center / contain no-repeat;
+}
+.icon-density { --icon: url("icons/density.svg"); }
+
+/* ── Segmented control ────────────────────────────────────────────────────────
+   Every either/or choice, in one shape: the view filter, the settings tabs and each
+   settings row's options. Three sizes, one set of states. */
+.seg {
+  flex: 0 1 auto;
+  min-width: 0;
+  padding: 2px;
+  display: flex;
+  gap: 2px;
+  background: var(--fld);
+  border: 1px solid var(--ring);
+  border-radius: var(--r2);
+  box-shadow: var(--ei);
+}
+.seg > button {
+  min-width: 0;
+  height: 24px;
+  padding: 0 9px;
+  color: var(--md);
+  background: transparent;
+  border: 0;
+  border-radius: var(--r1);
+  font-family: var(--font);
+  font-size: 11px;
+  line-height: 1;
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background 0.14s ease-out, color 0.14s ease-out;
+}
+.seg > button[aria-pressed="true"] { color: var(--onac); background: var(--ac); font-weight: 700; }
+.seg > button:not([aria-pressed="true"]):hover { color: var(--tx); }
+/* Numeric options read as numbers. */
+.seg-mono > button { font-family: var(--mono); }
+/* Stretched: the options share the row's whole width. */
+.seg-fill { padding: 2px; }
+.seg-fill > button { flex: 1; padding: 0; }
+/* The two 10px-radius strips — the view filter and the settings tabs. */
+.seg-strip { flex: 1; padding: 3px; border-radius: var(--r3); }
+.seg-strip > button { flex: 1; height: 26px; padding: 0; border-radius: var(--r2); }
+.seg-tabs { flex: none; margin: 0 16px 12px; padding: 3px; border-radius: var(--r3); }
+.seg-tabs > button { flex: 1; height: 28px; padding: 0; border-radius: var(--r2); }
+/* The active page reads as a raised tile, not a filled accent pill: the accent
+   belongs to what is being chosen ON the page, and a lit strip above it competes. */
+.seg-tabs > button[aria-pressed="true"] { color: var(--tx); background: var(--sf2); }
+
+/* ── Library / Saved ──────────────────────────────────────────────────────────*/
+.grid-head {
+  flex: none;
+  min-width: 0;
+  padding: 14px 16px 10px;
+  display: flex;
+  align-items: baseline;
+  gap: 9px;
+}
+.grid-head h2 { flex: none; font-size: 19px; line-height: 1.2; font-weight: 700; letter-spacing: -0.025em; }
+.grid-head .head-note { flex: 1; }
+.grid-tools { flex: none; padding: 0 16px 12px; display: flex; align-items: center; gap: 8px; }
 .grid {
   flex: 1;
   min-height: 0;
   padding: 0 16px;
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  /* Card height per column count. A tuned number per width rather than one aspect-ratio: the
-     205px at two columns is measured, and an aspect would move it. */
-  --card-min: 205px;
-  grid-auto-rows: minmax(var(--card-min), 1fr);
-  gap: 13px;
+  grid-auto-rows: max-content;
+  gap: 14px;
   align-content: start;
   overflow: hidden auto;
-}
-/* One rule for every container that scrolls (.grid, .now, .settings-body): the
-   bar is never painted, on any surface, so it can't compete with content or
-   read differently from tab to tab. Scrolling itself is untouched — this only
-   styles pseudo-elements, never `overflow`, so wheel/touch/keyboard still work.
-   The standard scrollbar-width lands in Chrome 121 and this extension supports
-   116+, so ::-webkit-scrollbar is what does the real work across the supported
-   range; scrollbar-width rides along for the versions that honour it.
-   Zeroing the width also drops the ~10px of layout Chromium reserves for a
-   classic scrollbar, so .grid's right-hand column no longer narrows (and its
-   card titles no longer truncate) just because the list became scrollable. */
-.grid,
-.now,
-.settings-body {
-  scrollbar-width: none;
-}
-.grid::-webkit-scrollbar,
-.now::-webkit-scrollbar,
-.settings-body::-webkit-scrollbar {
-  width: 0;
-  height: 0;
-}
-/* The grid density, from settings.columns. An attribute rather than a JS-computed var:
-   the two numbers per density belong next to each other, and the panel only has to
-   write which density is active. */
-#app[data-cols="1"] .grid {
-  grid-template-columns: minmax(0, 1fr);
-  --card-min: 380px;
-}
-#app[data-cols="3"] .grid {
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  --card-min: 148px;
-}
-#app[data-cols="4"] .grid {
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  --card-min: 116px;
-  /* The 13px gutter eats a fifth of a 4-up card's width at this panel size. */
-  gap: 8px;
-}
-
-/* The corner family. One attribute retunes the three radius tokens together, so every card, sheet,
-   chip and field moves as a set. The pill radii (999px) are untouched: a pill is a shape, not a
-   rounded rectangle. */
-#app[data-corners="sharp"] { --r-lg: 5px; --r-md: 4px; --r-sm: 3px; }
-#app[data-corners="round"] { --r-lg: 24px; --r-md: 20px; --r-sm: 16px; }
-
-/* A custom background replaces .app's flat canvas fill. body keeps painting --canvas
-   underneath as a floor, so a transparent PNG or a short image still has something behind
-   it rather than showing the page through the panel. */
-.app.has-bg {
-  background-image: var(--panel-bg);
-  background-size: cover;
-  background-position: center;
-}
-/* How much of it comes through. Explicit rgba per theme rather than a color-mix() or a
-   relative-colour syntax: the floor this extension supports is Chrome 116, and these two
-   surface tokens are the only thing that has to change. Frosted and glass also blur, so a
-   photographic background cannot fight the text sitting on it. */
-#app[data-backdrop="frosted"] { --surface: rgba(21, 23, 27, 0.82); --media-surface: rgba(21, 23, 27, 0.82); --veil-blur: blur(14px); }
-#app[data-backdrop="glass"] { --surface: rgba(21, 23, 27, 0.55); --media-surface: rgba(21, 23, 27, 0.55); --veil-blur: blur(22px); }
-:root[data-theme="light"] #app[data-backdrop="frosted"] { --surface: rgba(255, 255, 255, 0.82); }
-:root[data-theme="light"] #app[data-backdrop="glass"] { --surface: rgba(255, 255, 255, 0.6); }
-/* Gated on has-bg: backdrop-filter forces a compositing layer per element it is set on, and with
-   no custom image behind the cards there is nothing to blur. A panel without a background pays
-   nothing.
-   ponytail: one layer per VISIBLE card when a background IS set, which Chrome culls for off-screen
-   tiles. If a dense grid ever stutters, the upgrade is one blurred layer behind the whole grid —
-   at the cost of blurring the gaps, which is where the image shows. */
-#app.has-bg[data-backdrop="frosted"] .card,
-#app.has-bg[data-backdrop="frosted"] .set-card,
-#app.has-bg[data-backdrop="glass"] .card,
-#app.has-bg[data-backdrop="glass"] .set-card {
-  -webkit-backdrop-filter: var(--veil-blur);
-  backdrop-filter: var(--veil-blur);
-}
-/* The rubber band. Fixed on the body so .grid's own overflow cannot clip it, and
-   pointer-events: none so it never becomes the hit target of the drag drawing it. */
-.marquee {
-  position: fixed;
-  z-index: 5;
-  pointer-events: none;
-  border: 1px solid var(--media-accent);
-  border-radius: 4px;
-  background: var(--select-hover);
+  /* Cut the last 26px so a scrollable list reads as scrollable. The floating pill
+     below sits on the cut — without it the fade reads as the end of the list. */
+  -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 26px), transparent);
+  mask-image: linear-gradient(to bottom, #000 calc(100% - 26px), transparent);
 }
 .grid:empty { display: none; }
-.spacer { display: none; }
-.card {
-  position: relative;
-  min-width: 0;
-  min-height: var(--card-min, 205px);
-  overflow: hidden;
-  border-radius: var(--r-md);
-  color: var(--media-text);
-  background: var(--media-surface);
-  isolation: isolate;
-  /* Drawn OUTSIDE the card, against the canvas rather than over the media: an inset ring is only
-     visible on half the images — a pale story swallows a light one, a night video a dark one. Out
-     here the contrast is constant whatever the photo is, and the same 1px reads as the gap. */
-  box-shadow: 0 0 0 1px var(--media-frame);
-  transition: transform 0.16s ease;
-  /* The whole card selects on click and rubber-band drags across it, so a drag must
-     not start highlighting the title and meta text instead. */
-  user-select: none;
-  cursor: pointer;
-}
-/* Picked, on the whole card and not only in its 28px checkbox: at three columns that circle is
-   most of what there is to aim at. Replaces the frame; is-live's outline is INSET, so a live
-   picked card still shows both. */
-.card.is-picked { box-shadow: 0 0 0 2px var(--media-accent); }
-/* Nothing to select here (an MSE blob:, a receipt whose capture is gone). */
-.card.is-inert { cursor: default; }
-.card.is-live { outline: 2px solid var(--accent); outline-offset: -2px; }
-/* The keyboard cursor. Its own rule because the global focus ring is scoped to real controls and
-   a card is an <article>; offset OUTSIDE so it reads against the canvas rather than the photo.
-   Declared after is-live: same specificity, and the cursor wins because it is where you are. */
-.card:focus-visible { outline: 2px solid var(--media-text); outline-offset: 2px; }
-.card::after {
-  content: "";
-  position: absolute;
-  z-index: 1;
-  inset: auto 0 0;
-  height: 82px;
-  background: linear-gradient(transparent, var(--media-overlay-soft));
+#app[data-cols="1"] .grid { grid-template-columns: minmax(0, 1fr); }
+#app[data-cols="3"] .grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+#app[data-cols="4"] .grid { grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
+.scroll-pill {
+  flex: none;
+  align-self: center;
+  z-index: 3;
+  margin: -34px 0 10px;
+  padding: 5px 12px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--md);
+  background: var(--sf2);
+  border: 1px solid var(--ln);
+  border-radius: var(--pill);
+  box-shadow: var(--pill-shadow);
+  font-size: 11px;
+  line-height: 1.2;
+  font-weight: 700;
   pointer-events: none;
 }
-.card-thumb {
+
+/* One tile. 9/16 whatever the source ratio, and separated by two layers so a wall
+   of them never fuses: a 1px ring for the edge, a soft drop for the depth. */
+.tile {
+  position: relative;
+  min-width: 0;
+  aspect-ratio: 9 / 16;
+  overflow: hidden;
+  border-radius: var(--r4);
+  background: var(--media-wash);
+  box-shadow: var(--tile-ring);
+  isolation: isolate;
+  user-select: none;
+  cursor: pointer;
+  transition: transform 0.16s ease, box-shadow 0.14s ease-out;
+}
+.tile:hover { transform: translateY(-2px); }
+.tile.is-picked { box-shadow: 0 0 0 2px var(--ac), 0 10px 22px -10px rgba(var(--acrgb), 0.7); }
+/* Nothing to select here (an MSE blob:, a receipt whose capture is gone). */
+.tile.is-inert { cursor: default; }
+.tile.is-inert:hover { transform: none; }
+/* The card the tab is playing. Inset, so a picked live tile still shows both. */
+.tile.is-live { outline: 2px solid var(--ac); outline-offset: -3px; }
+/* The keyboard cursor. Its own rule because the global focus ring is scoped to real
+   controls and a tile is an <article>; offset OUTSIDE so it reads against the canvas
+   rather than the photo. Declared after is-live: same specificity, and the cursor
+   wins because it is where you are. */
+.tile:focus-visible { outline: 2px solid var(--tx); outline-offset: 2px; }
+.tile-thumb {
   position: absolute;
   inset: 0;
   display: flex;
   align-items: center;
   justify-content: center;
   overflow: hidden;
-  background: var(--media-wash);
   isolation: isolate;
 }
 .kind-fallback {
   width: 32px;
   height: 32px;
-  background: var(--media-muted);
+  background: rgba(255, 255, 255, 0.72);
   -webkit-mask: var(--kind-icon) center / contain no-repeat;
   mask: var(--kind-icon) center / contain no-repeat;
 }
-.card-thumb.is-video::after {
-  content: "";
+.tile-scrim {
   position: absolute;
   z-index: 2;
+  inset: auto 0 0;
+  height: 74px;
+  background: linear-gradient(transparent, rgba(6, 8, 11, 0.92));
+  pointer-events: none;
+}
+.tile-thumb.is-video::after {
+  content: "";
+  position: absolute;
+  z-index: 3;
   top: var(--play-y, 50%);
   left: 50%;
   width: 38px;
   height: 38px;
   transform: translate(-50%, -50%);
-  border: 1px solid var(--play-line);
+  border: 1px solid rgba(255, 255, 255, 0.35);
   border-radius: 50%;
-  background-color: var(--play-surface);
+  background-color: rgba(10, 12, 15, 0.42);
   background-image: url("icons/play.svg");
   background-repeat: no-repeat;
   background-position: center;
   background-size: 15px;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.24);
   pointer-events: none;
 }
-.card-thumb.play-obstructed.is-video::after { visibility: hidden; }
-.pick,
-.card-dl {
+.tile-thumb.play-obstructed.is-video::after { visibility: hidden; }
+/* The selection dot. 22px with a 2px border, top-left, as the design draws it —
+   but the whole tile is the hit target, so this is an indicator you can also click. */
+.pick {
   position: absolute;
   z-index: 4;
-  top: 8px;
-  width: 26px;
-  height: 26px;
+  top: 7px;
+  left: 7px;
+  width: 22px;
+  height: 22px;
   padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 2px solid rgba(255, 255, 255, 0.8);
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.28);
+  cursor: pointer;
+}
+.pick::before {
+  content: "";
+  width: 11px;
+  height: 11px;
+  background: var(--onac);
+  -webkit-mask: url("icons/check.svg") center / contain no-repeat;
+  mask: url("icons/check.svg") center / contain no-repeat;
+  visibility: hidden;
+}
+.pick[aria-pressed="true"] { background: var(--ac); border-color: var(--ac); }
+.pick[aria-pressed="true"]::before { visibility: visible; }
+.pick:disabled { opacity: 0.35; cursor: default; }
+/* The tile's second action, in the design's top-right round-button treatment. */
+.tile-reveal {
+  position: absolute;
+  z-index: 4;
+  top: 7px;
+  right: 7px;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #ffffff;
+  background: rgba(0, 0, 0, 0.5);
+  border: 0;
   border-radius: 50%;
   cursor: pointer;
 }
-
-/* Keeps the 26px the shared block above sets, so the two corner controls share
-   one vertical centre (at 22px this circle rode 2px higher than .card-dl) and
-   the hit target clears the 24px WCAG 2.5.8 minimum. */
-.pick {
-  left: 8px;
-  border: 2px solid var(--media-muted);
-  background: var(--media-control-soft);
-}
-.pick[aria-pressed="true"] {
-  background-color: var(--media-accent);
-  background-image: url("icons/check.svg");
-  background-repeat: no-repeat;
-  background-position: center;
-  background-size: 12px;
-  border-color: var(--media-accent);
-}
-.pick:disabled { opacity: 0.35; cursor: default; }
-.card-dl {
-  right: 8px;
-  border: 0;
-  background-color: var(--media-control);
-  -webkit-backdrop-filter: blur(6px);
-  backdrop-filter: blur(6px);
-}
-.card-dl::after {
-  content: "";
+.tile-reveal { font-size: 12px; line-height: 1; font-weight: 600; }
+/* Saved's badge, in the accent — every wrapper that paints it must define --onac
+   or the pill inherits body text and drops below AA. */
+.tile-badge {
   position: absolute;
-  inset: 6px;
-  background: var(--media-text);
-  -webkit-mask: url("icons/download.svg") center / contain no-repeat;
-  mask: url("icons/download.svg") center / contain no-repeat;
+  z-index: 4;
+  top: 7px;
+  left: 7px;
+  height: 21px;
+  padding: 0 9px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  border-radius: var(--pill);
+  background: var(--ac);
+  color: var(--onac);
+  font-size: 9.5px;
+  line-height: 1;
+  font-weight: 700;
+  white-space: nowrap;
 }
-.card-dl:disabled { opacity: 0.45; cursor: default; }
-.card-dl.busy::after {
-  inset: 7px;
-  background: none;
-  border: 2px solid var(--media-muted);
-  border-top-color: var(--media-accent);
-  border-radius: 50%;
-  -webkit-mask: none;
-  mask: none;
-  animation: spin 0.7s linear infinite;
+.tile-badge::before {
+  content: "";
+  flex: none;
+  width: 10px;
+  height: 10px;
+  background: currentColor;
+  -webkit-mask: url("icons/check.svg") center / contain no-repeat;
+  mask: url("icons/check.svg") center / contain no-repeat;
 }
-@keyframes spin { to { transform: rotate(360deg); } }
-.card-title,
-.card-meta {
+/* A file whose source post is no longer reachable. */
+.tile-badge.is-gone {
+  background: rgba(0, 0, 0, 0.55);
+  color: rgba(255, 255, 255, 0.9);
+  font-weight: 600;
+}
+.tile-badge.is-gone::before { display: none; }
+.tile-caption {
   position: absolute;
   z-index: 3;
   bottom: 8px;
-  margin: 0;
+  left: 10px;
+  right: 10px;
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 6px;
+}
+.tile-title {
+  min-width: 0;
   overflow: hidden;
+  color: #ffffff;
+  font-size: 12px;
+  line-height: 1.25;
+  font-weight: 700;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.card-title { left: 10px; max-width: 42%; font-size: 12px; line-height: 15px; font-weight: 700; }
-.card-meta { right: 10px; max-width: 54%; color: var(--media-muted); font-size: 9.5px; line-height: 13px; text-align: right; }
-.card-meta .tag { color: var(--media-muted); }
-.card-meta .tag-fail { color: var(--media-danger); }
+.tile-meta {
+  flex: none;
+  max-width: 62%;
+  overflow: hidden;
+  color: rgba(255, 255, 255, 0.78);
+  font-family: var(--mono);
+  font-size: 9.5px;
+  line-height: 1.3;
+  font-weight: 500;
+  text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tile-meta .tag-fail { color: #ffb3ba; }
+/* The rubber band. Fixed so the grid's own overflow cannot clip it, and
+   pointer-events: none so it never becomes the hit target of the drag drawing it. */
+.marquee {
+  position: fixed;
+  z-index: 5;
+  pointer-events: none;
+  border: 1px solid var(--ac);
+  border-radius: var(--r1);
+  background: rgba(var(--acrgb), 0.16);
+}
 
-/* Selection bar: a flat, full-width band above the tab bar (not a floating
-   pill), matching the design's bottom action strip. */
+/* ── Selection tray ───────────────────────────────────────────────────────────*/
 .tray {
   flex: none;
   min-width: 0;
-  margin: 0;
-  padding: 10px 14px;
+  padding: 11px 16px;
   display: flex;
   align-items: center;
-  justify-content: space-between;
   gap: 10px;
-  background: var(--surface);
-  border: 0;
-  border-top: 1px solid var(--line);
-  border-radius: 0;
+  background: var(--sf);
+  border-top: 1px solid var(--ln);
+  box-shadow: var(--e2);
 }
-.tray-text { min-width: 0; }
-.tray-count { margin: 0; font-size: 13px; line-height: 15px; font-weight: 700; white-space: nowrap; }
-.tray-meta { display: none; }
-.tray-btn { width: auto; height: 38px; padding: 0 18px; border-radius: 10px; font-size: 13px; white-space: nowrap; }
-.tray-btn::before { width: 15px; height: 15px; }
+.tray-text { flex: 1; min-width: 0; }
+.tray-count { font-size: 12.5px; line-height: 1.3; font-weight: 700; white-space: nowrap; }
+.tray-meta {
+  margin-top: 2px;
+  overflow: hidden;
+  color: var(--ft);
+  font-family: var(--mono);
+  font-size: 11px;
+  line-height: 1.3;
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ── Settings ─────────────────────────────────────────────────────────────────*/
 .settings-sheet {
   flex: 1;
   min-height: 0;
@@ -910,163 +1385,340 @@ label { -webkit-tap-highlight-color: transparent; }
 }
 .settings-head {
   flex: none;
-  min-height: 47px;
   padding: 14px 16px 10px;
   display: flex;
   align-items: baseline;
-  gap: 8px;
+  gap: 9px;
 }
-.settings-title { min-width: 0; display: flex; align-items: baseline; gap: 8px; }
-.settings-title h2 { margin: 0; font-size: 20px; line-height: 25px; font-weight: 800; }
-.settings-autosave { margin: 0; color: var(--faint); font-size: 11.5px; line-height: 15px; font-weight: 600; }
-.settings-close { display: none; }
+.settings-head h2 { font-size: 19px; line-height: 1.2; font-weight: 700; letter-spacing: -0.025em; }
+.settings-head .head-note { font-size: 11px; font-weight: 500; }
+/* Reachable by its bound key and by Escape, never by the mouse: the nav is what
+   switches away from Settings. */
+.settings-close {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  overflow: hidden;
+  border: 0;
+  clip-path: inset(50%);
+}
+.settings-search { flex: none; padding: 0 16px 10px; }
+.search-field {
+  height: 34px;
+  padding: 0 11px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--fld);
+  border: 1px solid var(--ring);
+  border-radius: var(--r3);
+  box-shadow: var(--ei);
+}
+.search-field::before {
+  content: "";
+  flex: none;
+  width: 14px;
+  height: 14px;
+  background: var(--ft);
+  -webkit-mask: url("icons/search.svg") center / contain no-repeat;
+  mask: url("icons/search.svg") center / contain no-repeat;
+}
+.search-field:focus-within { border-color: var(--ac); }
+.search-field input {
+  flex: 1;
+  min-width: 0;
+  padding: 0;
+  color: var(--tx);
+  background: transparent;
+  border: 0;
+  font-size: 12.5px;
+  line-height: 1;
+  font-weight: 500;
+  outline: none;
+}
+.search-field input::placeholder { color: var(--ft); }
+.search-field input::-webkit-search-cancel-button { display: none; }
+.kbd {
+  flex: none;
+  padding: 2px 7px;
+  color: var(--md);
+  background: var(--sf2);
+  border-radius: var(--r1);
+  font-family: var(--mono);
+  font-size: 9.5px;
+  line-height: 1.2;
+  font-weight: 600;
+  white-space: nowrap;
+}
 .settings-body {
   flex: 1;
   min-height: 0;
   padding: 0 16px;
   display: flex;
   flex-direction: column;
-  gap: 0;
   overflow: hidden auto;
+  -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 26px), transparent);
+  mask-image: linear-gradient(to bottom, #000 calc(100% - 26px), transparent);
 }
-/* The page strip: four short pages rather than one column the user has to remember the order of. */
-.set-tabs {
-  flex: none;
-  margin: 0 16px 12px;
-  padding: 3px;
-  display: flex;
-  gap: 2px;
-  overflow-x: auto;
-  scrollbar-width: none;
-  background: var(--input-deep);
-  border: 1px solid var(--control-line);
-  border-radius: 11px;
-}
-.set-tabs::-webkit-scrollbar { height: 0; }
-/* Sized so all four labels fit on one line at the panel's own width. English is the long one:
-   "General Appearance Shortcuts Advanced" is 34 characters. The strip can scroll, but a scrollable
-   tab bar in a 340px panel reads as a clipped one, not as something to swipe. */
-.set-tab {
-  flex: 1 0 auto;
-  min-width: 0;
-  height: 30px;
-  padding: 0 7px;
-  color: var(--muted);
-  background: transparent;
-  border: 0;
-  border-radius: 8px;
-  font-size: 11px;
-  line-height: 1;
-  font-weight: 700;
-  white-space: nowrap;
-  cursor: pointer;
-}
-/* The active page reads as a raised tile, not a filled accent pill: the accent belongs to what is
-   being chosen on the page, and a lit strip above it competes with that. */
-.set-tab[aria-pressed="true"] { color: var(--text); background: var(--control-surface); }
-.set-tab:not([aria-pressed="true"]):hover { color: var(--text); }
 .set-page { display: flex; flex-direction: column; }
 .set-page[hidden] { display: none; }
-.set-section { flex: none; }
-.set-card { padding: 4px 14px; background: var(--surface); border-radius: var(--r-md); }
 .set-label {
-  line-height: 14px;
+  margin: 0 0 8px 2px;
+  color: var(--ft);
+  font-size: 10px;
+  line-height: 1.2;
+  font-weight: 700;
+  letter-spacing: 0.1em;
   text-transform: uppercase;
+}
+.set-card {
+  margin: 0 0 16px;
+  padding: 0 13px;
+  background: var(--sf);
+  border: 1px solid var(--ln);
+  border-radius: var(--r5);
+  box-shadow: var(--e1);
+}
+/* The one card whose content is prose, not rows. */
+.set-card.is-prose { padding: 13px; }
+.set-prose { color: var(--md); font-size: 11.5px; line-height: 1.55; text-wrap: pretty; }
+.set-prose code {
+  color: var(--ach);
+  font-family: var(--mono);
+  font-size: 11px;
+  font-weight: 500;
 }
 .set-row {
   min-width: 0;
-  min-height: 48px;
-  padding: 13px 0;
+  min-height: 44px;
+  padding: 11px 0;
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 10px;
 }
-.set-row + .set-row { border-top: 1px solid var(--line); }
-.set-row.col { align-items: stretch; flex-direction: column; gap: 8px; }
+.set-row + .set-row,
+.set-row + .keys-grid,
+.keys-grid + .set-row { border-top: 1px solid var(--ln); }
+/* A row whose control needs the full width sits under its own copy. */
+.set-row.col { min-height: 0; flex-direction: column; align-items: stretch; gap: 9px; }
 .set-copy { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
-.set-title { min-width: 0; font-size: 13.5px; line-height: 17px; font-weight: 600; }
-.set-hint { color: var(--faint); font-size: 11.5px; line-height: 15px; }
-.set-note { display: none; }
-.set-input { width: 100%; padding: 0 12px; font-size: 13px; }
-.set-input.mono { color: var(--mono); font-family: var(--font-mono); }
-/* Every control that can land on the right of a settings row is 32px tall, so a
-   column of mixed rows (select, number field, switch, button) reads as one
-   aligned edge. The switch is 26px on purpose — it centres inside the same row. */
-.set-number {
-  width: 74px;
-  height: 32px;
-  flex: 0 0 74px;
-  padding: 0 10px;
-  font-family: var(--font-mono);
-  font-size: 13px;
+.set-title { min-width: 0; font-size: 13px; line-height: 1.35; font-weight: 600; }
+.set-hint { color: var(--ft); font-size: 11px; line-height: 1.4; font-weight: 400; }
+.set-error { color: var(--dg); }
+.set-block { padding: 0 0 11px; }
+.set-actions { flex: none; display: flex; align-items: center; gap: 8px; }
+/* A label that has to look like a button, for the file input it wraps: an
+   <input type="file"> cannot be styled, so the label is the trigger. */
+.btn-quiet[role="button"] { display: inline-flex; }
+.set-input {
+  width: 100%;
+  height: 36px;
+  padding: 0 12px;
+  display: flex;
+  align-items: center;
+  color: var(--ach);
+  background: var(--fld);
+  border: 1px solid var(--ac);
+  border-radius: var(--r3);
+  font-family: var(--mono);
+  font-size: 12.5px;
   line-height: 1;
+  font-weight: 500;
+}
+.set-number {
+  flex: 0 0 70px;
+  width: 70px;
+  height: 30px;
+  padding: 0 10px;
+  color: var(--tx);
+  border-color: var(--ln);
+  border-radius: var(--r2);
+  font-size: 12.5px;
   font-weight: 700;
   font-variant-numeric: tabular-nums;
   text-align: right;
 }
-.set-row .select { width: auto; max-width: 168px; height: 32px; flex: 0 1 auto; }
-/* A paragraph that spans the whole settings card instead of sitting in a two-column
-   row — the keyboard hint and the reason a key was refused. */
-.set-block { padding: 12px 0; }
-.set-error { color: var(--danger); }
-/* Two buttons where a row normally holds one control. */
-.set-actions { flex: none; display: flex; align-items: center; gap: 8px; }
-/* A label that has to look like a button, for the file input it wraps: an <input type="file">
-   cannot be styled, so the label is the trigger and the input stays hidden. */
-.btn-quiet {
-  min-height: 32px;
-  padding: 8px 14px;
-  display: inline-flex;
-  align-items: center;
-  color: var(--text);
-  background: var(--control-surface);
-  border: 1px solid var(--line);
-  border-radius: 9px;
-  font-size: 12.5px;
-  line-height: 15px;
+.set-preview { margin: 9px 0 0; display: flex; align-items: baseline; gap: 7px; }
+.set-preview-tag {
+  flex: none;
+  color: var(--ft);
+  font-size: 9.5px;
+  line-height: 1.2;
   font-weight: 700;
-  cursor: pointer;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
 }
-.btn-quiet:hover { background: var(--select-hover); }
-/* The template's live result, on its own line above the token chips: what is worth seeing is what
-   the real namer adds — the subfolder prefix and the extension. */
-.set-preview { margin: 0; display: flex; align-items: baseline; gap: 7px; font-size: 12px; }
-.set-preview-tag { flex: none; color: var(--faint); font-size: 10px; font-weight: 800; letter-spacing: 0.1em; text-transform: uppercase; }
-#set-template-out { min-width: 0; color: var(--mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.tokens { display: flex; flex-wrap: wrap; gap: 6px; }
-.token {
-  min-height: 26px;
-  padding: 0 9px;
-  color: var(--faint);
-  background: transparent;
-  border: 1px dashed var(--line);
-  border-radius: 999px;
-  font-family: var(--font-mono);
+.set-preview-out {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--ach);
+  font-family: var(--mono);
   font-size: 11px;
+  line-height: 1.4;
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tokens { margin: 10px 0 0; display: flex; flex-wrap: wrap; gap: 6px; }
+.token {
+  height: 24px;
+  padding: 0 9px;
+  color: var(--md);
+  background: transparent;
+  border: 1px dashed var(--ln);
+  border-radius: var(--pill);
+  font-family: var(--mono);
+  font-size: 10.5px;
+  line-height: 1;
+  font-weight: 500;
   cursor: pointer;
 }
-.token:hover { color: var(--text); border-style: solid; border-color: var(--accent); }
-/* The accent row. Circles, so the gradients read as colour and nothing else. */
-.swatches { flex: none; display: flex; flex-wrap: wrap; align-items: center; gap: 7px; }
+.token:hover { color: var(--ach); border-color: var(--ac); }
+
+/* Geometry is driven by the wrapper: the track fills it via inset:0, and the knob's
+   inset (3px) plus its size (18px) must add back up to the track box, or it sits
+   off-centre. Travel = width - knob - 2*inset. Change one, change all. */
+.switch { position: relative; flex: none; width: 40px; height: 24px; }
+.switch input { position: absolute; inset: 0; width: 100%; height: 100%; margin: 0; opacity: 0; cursor: pointer; }
+.track {
+  position: absolute;
+  inset: 0;
+  border-radius: var(--pill);
+  background: var(--off);
+  pointer-events: none;
+  transition: background 0.14s ease-out;
+}
+.track::before {
+  content: "";
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: #ffffff;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
+  transition: transform 0.14s ease-out;
+}
+.switch input:checked + .track { background: var(--ac); }
+.switch input:checked + .track::before { transform: translateX(16px); }
+
+/* The Colour row: three labelled groups of 18px circles. */
+.swatch-groups { display: flex; flex-direction: column; gap: 10px; }
+.swatch-group { display: flex; flex-direction: column; gap: 6px; }
+.swatch-group-label {
+  color: var(--ft);
+  font-size: 10px;
+  line-height: 1.2;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+.swatches { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 .swatch {
-  width: 22px;
-  height: 22px;
+  width: 18px;
+  height: 18px;
   padding: 0;
   border: 0;
   border-radius: 50%;
   cursor: pointer;
 }
-/* A ring OUTSIDE the circle, in the panel's text colour rather than the accent: the chosen swatch
-   has to be findable against six neighbours, several of them near in hue. */
-.swatch[aria-pressed="true"] { box-shadow: 0 0 0 2px var(--canvas), 0 0 0 4px var(--text); }
-/* Two shortcut rows per line where the panel is wide enough, so nine rows and the reset button
-   fit on one screen. */
-.keys-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 0 14px; }
-.key-row { min-width: 0; min-height: 44px; padding: 9px 0; display: flex; align-items: center; justify-content: space-between; gap: 8px; }
-.key-name { min-width: 0; overflow: hidden; font-size: 12.5px; line-height: 16px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
-/* Visible to a screen reader, not on screen: the template input's label is redundant beside its
-   own preview, but the input still needs a name. */
+/* A ring OUTSIDE the circle, in the panel's text colour rather than the accent: the
+   chosen swatch has to be findable against twenty-two neighbours, several near in hue. */
+.swatch[aria-pressed="true"] { box-shadow: 0 0 0 2px var(--cv), 0 0 0 4px var(--tx); }
+/* The tints are near-black or near-white, so an unselected one needs an edge to
+   exist at all. The accents do not. */
+.swatch-tint:not([aria-pressed="true"]) { box-shadow: 0 0 0 1px var(--ln); }
+
+/* Two shortcut rows per line where the panel is wide enough, so nine rows and the
+   reset button fit on one screen. */
+.keys-grid { padding: 9px 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(138px, 1fr)); gap: 0 14px; }
+.key-row { min-width: 0; min-height: 38px; display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.key-name {
+  min-width: 0;
+  overflow: hidden;
+  font-size: 12.5px;
+  line-height: 1.3;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.key-cap {
+  flex: none;
+  min-width: 44px;
+  height: 28px;
+  padding: 0 9px;
+  /* Flex-centred rather than line-height-centred: the label is sometimes a single
+     punctuation glyph, and "," sits on its baseline near the bottom of a 1.0 box. */
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--tx);
+  background: var(--fld);
+  border: 1px solid var(--ln);
+  border-radius: var(--r3);
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 1;
+  font-weight: 700;
+  cursor: pointer;
+}
+/* The two states whose label is a word and not a key — the capture prompt, and "no
+   key at all". Both drop the monospace, or they read as a key named PRESS or NONE. */
+.key-cap.is-armed,
+.key-cap.is-unbound { font-family: var(--font); font-size: 11px; font-weight: 600; }
+.key-cap.is-armed { color: var(--ach); border-color: var(--ac); }
+.key-cap.is-unbound { color: var(--ft); }
+
+.diagnostics summary { cursor: pointer; }
+/* Chromium wraps everything after <summary> in a UA ::details-content box, so this
+   row's column `gap` lands between the summary and that box and never between the
+   counters and the Reset button — measured 8px then 0px, which is the two of them
+   touching. The margins below space them instead: identical with or without that box,
+   so it holds on the Chrome 116 floor (where they ARE flex siblings) and on current
+   Chromium alike. Keeping the gap as well would give 16px in one of the two. */
+.diagnostics details.set-row.col { gap: 0; }
+.diagnostics #diag-counters {
+  width: 100%;
+  height: auto;
+  min-height: 44px;
+  margin: 8px 0 0;
+  padding: 8px;
+  color: var(--tx);
+  background: var(--fld);
+  border: 1px solid var(--ln);
+  border-radius: var(--r2);
+  font-family: var(--mono);
+  font-size: 11px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+}
+.diagnostics #diag-events { margin: 6px 0 0; }
+/* align-self pins the row's width in the flex-sibling case too, where the outer row's
+   align-items: stretch would otherwise blow it to full width. */
+.diagnostics .diag-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 8px;
+  align-self: flex-start;
+}
+.settings-footer {
+  margin-top: auto;
+  padding: 18px 2px 14px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  text-align: center;
+  color: var(--ft);
+}
+.settings-by { font-size: 11.5px; line-height: 1.5; font-weight: 400; }
+.settings-version { font-family: var(--mono); font-size: 11.5px; line-height: 1.5; font-weight: 700; }
+/* Visible to a screen reader, not on screen: the template input's label is redundant
+   beside its own preview, but the input still needs a name. */
 .sr-only {
   position: absolute;
   width: 1px;
@@ -1077,375 +1729,141 @@ label { -webkit-tap-highlight-color: transparent; }
   clip-path: inset(50%);
   white-space: nowrap;
 }
-/* The binding button, on the same 32px edge as every other right-hand control. Fixed
-   width so nine rows line up, monospace so a bound key reads as a key. */
-.key-cap {
-  flex: 0 0 auto;
-  /* Narrow, because two of these share a line with their labels; wide enough for the two
-     word-states to keep their shape. */
-  min-width: 46px;
-  height: 32px;
-  padding: 0 10px;
-  /* Flex-centred rather than line-height-centred: the label is sometimes a single punctuation
-     glyph, and "," sits on its baseline near the bottom of a 1.0 line box. */
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  color: var(--text);
-  background: var(--field);
-  border: 1px solid var(--line);
-  border-radius: 9px;
-  font-family: var(--font-mono);
-  font-size: 12.5px;
-  font-weight: 700;
-  cursor: pointer;
-}
-/* The two states whose label is a word and not a key — the capture prompt, and "no key at all".
-   Both drop the monospace, or they read as a key named PULSA or NINGUNA. */
-.key-cap.is-armed,
-.key-cap.is-unbound {
-  font-family: var(--font);
-  font-size: 11.5px;
-  font-weight: 600;
-}
-.key-cap.is-armed { color: var(--accent-soft); border-color: var(--accent); }
-.key-cap.is-unbound { color: var(--faint); }
-.btn-ghost {
-  min-height: 32px;
-  padding: 8px 16px;
-  color: var(--danger);
-  background: var(--danger-wash);
-  border: 1px solid var(--danger-line);
-  border-radius: 9px;
-  font-size: 12.5px;
-  line-height: 15px;
-  font-weight: 700;
-  cursor: pointer;
-}
 
-/* Geometry is driven by the wrapper: the track fills it via inset:0, and the
-   knob's inset (3px) plus its size (20px) must add back up to the track box, or
-   it sits off-centre. Travel = width - knob - 2*inset. Change one, change all. */
-.switch { position: relative; flex: none; width: 44px; height: 26px; }
-.switch input { position: absolute; inset: 0; width: 100%; height: 100%; margin: 0; opacity: 0; cursor: pointer; }
-.track { position: absolute; inset: 0; border-radius: var(--r-pill); background: var(--track-off); pointer-events: none; transition: background 0.14s ease; }
-.track::before { content: ""; position: absolute; top: 3px; left: 3px; width: 20px; height: 20px; border-radius: 50%; background: var(--knob); box-shadow: 0 1px 3px rgba(0, 0, 0, 0.45); transition: transform 0.14s ease; }
-.switch input:checked + .track { background: var(--accent); }
-.switch input:checked + .track::before { transform: translateX(18px); }
-/* The segmented control: every either/or setting, in one shape. Three or four options are cheaper
-   to read side by side than behind a click, and one shape means one set of states to style. */
-.seg {
-  flex: 0 1 auto;
-  min-width: 0;
-  padding: 3px;
-  display: flex;
-  gap: 2px;
-  background: var(--input-deep);
-  border: 1px solid var(--control-line);
-  border-radius: 9px;
-}
-.seg > button {
-  min-width: 0;
-  height: 26px;
-  padding: 0 9px;
-  color: var(--muted);
-  background: transparent;
-  border: 0;
-  border-radius: 7px;
-  font-size: 12px;
-  line-height: 1;
-  font-weight: 700;
-  white-space: nowrap;
-  cursor: pointer;
-}
-.seg > button[aria-pressed="true"] { color: var(--on-accent); background: var(--accent-grad); }
-.seg > button:not([aria-pressed="true"]):hover { color: var(--text); background: var(--select-hover); }
-/* Four options plus a two-line hint do not fit beside each other at panel widths, so the row
-   wraps: the control drops to its own line only when it has to, and keeps every option's whole
-   word rather than clipping the last one. */
-.set-row:has(> .seg),
-.set-row:has(> .swatches) { flex-wrap: wrap; row-gap: 10px; }
-.set-row:has(> .seg) > .set-copy,
-.set-row:has(> .swatches) > .set-copy { flex: 1 1 150px; }
-.set-row:has(> .seg) > .seg,
-.set-row:has(> .swatches) > .swatches { flex: 0 0 auto; max-width: 100%; margin-left: auto; }
-.diagnostics details { cursor: pointer; }
-.diagnostics pre { height: auto; min-height: 44px; margin: 0; padding: 8px; white-space: pre-wrap; }
-/* The counters panel is the one .set-row.col whose children are NOT flex siblings:
-   Chromium wraps everything after <summary> in a UA ::details-content box, so the
-   column `gap` lands between the summary and that box and never between the
-   counters and the Reset button — measured 8px then 0px, which is the two of them
-   touching. Space them with margins instead: identical with or without that box,
-   so it holds on the Chrome 116 floor (where they ARE flex siblings) and on
-   current Chromium alike. align-self pins the button's width in the flex-sibling
-   case too, where align-items: stretch would otherwise blow it to full width. */
-.diagnostics details.set-row.col { gap: 0; }
-.diagnostics #diag-counters { margin-top: 8px; }
-.diagnostics #diag-reset { margin-top: 8px; align-self: flex-start; }
-/* Centred rights notice with the version on its own line, as the design draws it. */
-.settings-footer { margin-top: 4px; padding: 2px 2px 12px; display: flex; flex-direction: column; align-items: center; gap: 3px; text-align: center; color: var(--faint); }
-.settings-rights,
-.settings-version { margin: 0; font-size: 11.5px; line-height: 17px; }
-.settings-version { flex: none; font-family: var(--font); font-weight: 700; }
+/* ── Bottom nav ───────────────────────────────────────────────────────────────*/
 .views {
   flex: none;
-  min-height: 66px;
-  padding: 10px 12px 12px;
+  height: 62px;
+  padding: 8px 10px 10px;
   display: flex;
   gap: 4px;
-  background: var(--canvas);
-  border-top: 1px solid var(--line);
+  background: var(--sf);
+  border-top: 1px solid var(--ln);
+  box-shadow: var(--e2);
 }
 .view-pill {
+  flex: 1;
   min-width: 0;
-  flex: 1 1 0;
-  padding: 7px 2px 6px;
+  padding: 6px 2px;
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  color: var(--muted);
+  gap: 5px;
+  color: var(--md);
   background: transparent;
   border: 0;
-  border-radius: var(--r-sm);
-  line-height: 11px;
-  text-transform: uppercase;
-  cursor: pointer;
+  border-radius: var(--r4);
+  font-size: 10px;
+  line-height: 1.1;
+  font-weight: 600;
   white-space: nowrap;
-  transition: color 0.15s ease;
+  cursor: pointer;
+  transition: color 0.14s ease-out, background 0.14s ease-out;
 }
-.view-pill[aria-pressed="true"],
-.app.is-settings .settings-nav { color: var(--accent); background: var(--surface); font-weight: 700; }
-.nav-icon { width: 21px; height: 21px; display: block; background: currentColor; -webkit-mask: var(--icon) center / contain no-repeat; mask: var(--icon) center / contain no-repeat; }
+.view-pill:hover { color: var(--tx); }
+.view-pill[aria-pressed="true"] { color: var(--ach); background: var(--nav-wash); font-weight: 700; }
+.nav-icon {
+  width: 19px;
+  height: 19px;
+  display: block;
+  background: currentColor;
+  -webkit-mask: var(--icon) center / contain no-repeat;
+  mask: var(--icon) center / contain no-repeat;
+}
 .nav-now { --icon: url("icons/nav-now.svg"); }
 .nav-library { --icon: url("icons/nav-library.svg"); }
 .nav-saved { --icon: url("icons/nav-saved.svg"); }
 .nav-settings { --icon: url("icons/nav-settings.svg"); }
 
-/* The brand bar is persistent chrome in every view — only the view bodies swap. */
+/* Only the view bodies swap; the header and the nav are persistent chrome. */
 .app.is-settings .view,
 .app.is-settings > .banner { display: none; }
 .app:not(.is-settings) .settings-sheet { display: none; }
-:where(button, input, select, summary):focus-visible {
-  outline: 2px solid var(--text);
+
+/* ── Custom background ────────────────────────────────────────────────────────
+   Replaces .app's flat canvas fill. body keeps painting --cv underneath as a floor,
+   so a transparent PNG or a short image still has something behind it. */
+.app.has-bg {
+  background-image: var(--panel-bg);
+  background-size: cover;
+  background-position: center;
+}
+/* How much of it comes through. Explicit rgba per theme rather than color-mix(): the
+   floor this extension supports is Chrome 116, and these surfaces are the only thing
+   that has to change. Frosted and glass also blur, so a photographic background
+   cannot fight the text sitting on it. */
+#app[data-backdrop="frosted"] { --sf: rgba(21, 23, 27, 0.82); --veil-blur: blur(14px); }
+#app[data-backdrop="glass"] { --sf: rgba(21, 23, 27, 0.55); --veil-blur: blur(22px); }
+:root[data-theme="light"] #app[data-backdrop="frosted"] { --sf: rgba(255, 255, 255, 0.82); }
+:root[data-theme="light"] #app[data-backdrop="glass"] { --sf: rgba(255, 255, 255, 0.6); }
+/* Gated on has-bg: backdrop-filter forces a compositing layer per element it is set
+   on, and with no custom image behind the cards there is nothing to blur. A panel
+   without a background pays nothing.
+   ponytail: one layer per VISIBLE card when a background IS set, which Chrome culls
+   for off-screen tiles. If a dense grid ever stutters, the upgrade is one blurred
+   layer behind the whole grid — at the cost of blurring the gaps, which is where the
+   image shows. */
+#app.has-bg[data-backdrop="frosted"] .set-card,
+#app.has-bg[data-backdrop="glass"] .set-card {
+  -webkit-backdrop-filter: var(--veil-blur);
+  backdrop-filter: var(--veil-blur);
+}
+
+/* ── Focus, motion, forced colours ────────────────────────────────────────────*/
+:where(button, input, select, summary, label):focus-visible {
+  outline: 2px solid var(--tx);
   outline-offset: 2px;
 }
-.select:focus-visible,
-.set-input:focus-visible { border-color: var(--accent); outline-color: var(--accent); }
-.switch input:focus-visible + .track { box-shadow: 0 0 0 2px var(--text); }
+.set-input:focus-visible { border-color: var(--ac); outline-color: var(--ac); }
+.switch input:focus-visible + .track { box-shadow: 0 0 0 2px var(--tx); }
 
 @media (max-width: 335px) {
-  .brand { padding-right: 12px; padding-left: 12px; }
-  /* Tighten the whole view, like .brand and .grid below. On .now itself, not on .now-overlay:
-     an inset there ADDS to this padding and pushes the title, metrics and button further in than
-     the media card above them. */
+  .brand { padding: 0 12px; }
   .now { padding-right: 12px; padding-left: 12px; }
-  .metrics { gap: 7px; }
-  .metric { gap: 2px; }
-  .metric-label { font-size: 9px; }
-  .grid { padding: 0 8px; gap: 6px; }
-  .view-pill { font-size: 9px; letter-spacing: 0.02em; }
+  .grid-head,
+  .grid-tools,
+  .settings-head,
+  .settings-search { padding-right: 12px; padding-left: 12px; }
+  .grid,
+  .settings-body { padding: 0 12px; }
+  .seg-tabs { margin-right: 12px; margin-left: 12px; }
+  .view-pill { font-size: 9px; }
 }
 
 @media (max-height: 650px) {
-  .brand { min-height: 48px; padding-top: 8px; }
-  .views { min-height: 58px; padding-top: 6px; padding-bottom: 8px; }
-  .now-overlay { gap: 7px; padding-bottom: 12px; }
-  #now-qselect { height: 32px; }
-  .btn-primary { height: 40px; }
+  .now { gap: 9px; padding-top: 10px; padding-bottom: 10px; }
+  .preview { min-height: 120px; }
+  .btn-primary { height: 42px; }
+  .views { height: 56px; padding-top: 6px; padding-bottom: 8px; }
 }
 
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,
-  *::after { scroll-behavior: auto !important; transition-duration: 0.01ms !important; animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; }
+  *::after {
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+  }
+  /* The edge light is the panel's one continuous animation; pausing beats blinking
+     it once and freezing on a random angle. */
+  .picker-edge::before { animation: none; }
 }
 
 @media (forced-colors: active) {
-  .select,
   .set-input,
   .btn-primary,
-  .btn-ghost,
+  .btn-accent,
+  .btn-outline,
+  .btn-quiet,
+  .btn-danger,
+  .picker-trigger,
   .view-pill[aria-pressed="true"],
+  .seg > button[aria-pressed="true"],
   .track { border: 1px solid ButtonText; }
   .preview-play,
-  .card-thumb.is-video::after { -webkit-backdrop-filter: none; backdrop-filter: none; }
+  .tile-thumb.is-video::after,
+  .picker-list { -webkit-backdrop-filter: none; backdrop-filter: none; }
 }
-
-/* ─── Design pass ────────────────────────────────────────────────────────────
-   Component treatments layered on the token retheme. Kept at the end of the
-   file so it wins on order without editing the rules other tests pin. */
-
-/* Compact top bar: gradient mark + a live "capturing" pill, with the hairline
-   that separates it from the scrolling content, as in the design. */
-.brand {
-  min-height: 52px;
-  padding: 0 14px;
-  gap: 9px;
-  align-items: center;
-  border-bottom: 1px solid var(--line);
-}
-.brand-text h1 { white-space: nowrap; }
-/* No gradient here any more: logo.svg carries the tile itself, so the CSS only
-   sizes it and keeps the glow. border-radius still matters — it clips the img to
-   the same 8px the SVG's own rx=9 renders to at 28px, so the box-shadow hugs the
-   tile instead of a square. */
-.brand-logo {
-  width: 28px;
-  height: 28px;
-  display: block;
-  border-radius: 8px;
-  box-shadow: 0 2px 8px rgba(47, 125, 255, 0.4);
-}
-.brand-logo img { width: 28px; height: 28px; display: block; }
-.brand-text h1 { font-size: 15px; font-weight: 800; letter-spacing: -0.02em; }
-.brand-live {
-  gap: 6px;
-  padding: 5px 10px;
-  border-radius: var(--r-pill);
-  background: var(--live-wash);
-  border: 1px solid var(--live-line);
-  color: var(--live-text);
-  font-size: 10px;
-  font-weight: 700;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-}
-.live-dot { width: 6px; height: 6px; box-shadow: 0 0 8px var(--live); }
-
-/* Display voice: tight, heavy headings; accent uppercase section labels. */
-.empty h2,
-.grid-title h2,
-.now-title,
-#settings-title { font-weight: 800; letter-spacing: -0.02em; }
-.set-label {
-  /* Muted, not accent-coloured: a section heading is a signpost, and the accent is a user choice
-     that would shout over the controls it labels. */
-  color: var(--faint);
-  font-size: 10.5px;
-  font-weight: 800;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
-}
-
-/* Calm panels: flat surface with a hairline. */
-.set-card { background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-md); }
-
-/* Primary action becomes the gradient pill. */
-.btn-primary,
-.now-overlay .btn-primary {
-  background: var(--accent-grad);
-  color: #ffffff;
-  border-radius: 13px;
-  font-weight: 700;
-  box-shadow: 0 8px 22px rgba(47, 125, 255, 0.35);
-}
-.btn-primary:hover:not(:disabled) { filter: brightness(1.08); }
-.btn-primary:active:not(:disabled) { transform: translateY(1px); }
-
-/* Interaction states the design specifies (style-hover) for every clickable
-   surface: filter/colour nudges on chips and links, a lift on grid cards, and a
-   border highlight on the settings dropdowns — mapped onto theme tokens instead
-   of the mock's fixed dark-only colours, so they hold in both themes. */
-.chip:hover { filter: brightness(1.12); }
-.link-btn:hover { color: var(--accent-soft); }
-.btn-ghost:hover { background: var(--danger-wash-strong); }
-.card:hover { transform: translateY(-2px); }
-.card-dl:hover:not(:disabled) { background-color: var(--media-accent); }
-.view-pill:hover { color: var(--text); }
-.select:not(:disabled):hover { border-color: var(--accent); }
-
-/* Now Playing stacks: heading, media card, then its details on the panel canvas. */
-.now {
-  flex-direction: column;
-  gap: 12px;
-  /* 16px matches .grid and .settings-body, so the heading and the media card line
-     up with the grid cards and the settings rows instead of sitting 2px inside. */
-  padding: 0 16px 14px;
-  overflow: hidden auto;
-}
-
-/* Chromium-only thin scrollbar (see .grid): standard scrollbar-width only lands
-   in Chrome 121 and the extension supports 116+, so style the WebKit
-   pseudo-element and skip the flagged standard properties entirely. */
-/* The media wants a 10:16 story frame, but it must yield height to the details
-   below rather than push the download button past the fold. flex-shrink lets it
-   give up the difference; only under --min-height does the panel start to
-   scroll, so the common case has no scrollbar at all. */
-.preview { flex: 1 1 auto; min-height: 170px; aspect-ratio: 10 / 16; }
-
-/* Section heading for the view, matching the grid's title row. */
-/* Same shape as .grid-title-line: the count sits right after the heading, sharing its baseline,
-   rather than being pushed to the far edge by space-between and hanging away from the title it
-   belongs to. The inset comes from
-   .now's own padding, as the grid's does, so there is no extra 2px here. */
-.now-head {
-  flex: none;
-  min-width: 0;
-  display: flex;
-  align-items: baseline;
-  gap: 8px;
-}
-.now-head h2 { margin: 0; font-size: 20px; line-height: 25px; font-weight: 800; letter-spacing: -0.02em; }
-/* Matches .grid-count exactly: same colour, size and weight, so "1 piece" and
-   "20 found" read as the same kind of label. The copy is deliberately as short as
-   the grid's: sharing a line with a 20px heading, "1 pieza en la publicación" made
-   the Spanish title wrap and then ellipsized itself anyway. */
-.now-pieces {
-  min-width: 0;
-  overflow: hidden;
-  color: var(--muted);
-  font-size: 12.5px;
-  line-height: 16px;
-  font-weight: 700;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-/* Metrics read as one bordered three-up stat card. */
-.metrics {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 0;
-  background: var(--surface);
-  border: 1px solid var(--line);
-  border-radius: var(--r-md);
-  overflow: hidden;
-}
-/* Images have no duration, so the middle cell is hidden and a fixed repeat(3)
-   would leave the last third empty with the divider off-centre. The column
-   count has to follow the number of visible cells; sidepanel.ts sets this
-   alongside the [hidden] toggle on the duration metric. */
-.metrics.is-two-up { grid-template-columns: repeat(2, 1fr); }
-.metric { flex-direction: column; align-items: flex-start; gap: 5px; padding: 12px 14px; }
-.metric + .metric { border-left: 1px solid var(--line); }
-.metric-label { font-size: 10px; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase; }
-.metric-value { font-family: var(--font-mono); font-size: 14px; font-weight: 700; }
-
-/* Pill chips and the uppercase tab bar. (The switch is sized at its own rule —
-   wrapper, track and knob have to move together, so they stay in one place.) */
-.chip { border-radius: var(--r-pill); padding: 8px 16px; font-size: 12.5px; font-weight: 700; }
-.view-pill { gap: 5px; font-size: 9.5px; font-weight: 700; letter-spacing: 0.03em; text-transform: uppercase; }
-
-/* Section labels sit above their card, not inside it, and each section gets the
-   design's 20px breathing room before the next label. */
-.set-section { display: flex; flex-direction: column; margin-bottom: 20px; }
-.set-label { margin: 0 0 9px; padding: 0 0 0 2px; }
-
-/* The active tab is colour only — the design has no filled pill behind it. */
-.view-pill[aria-pressed="true"],
-.app.is-settings .settings-nav { background: none; }
-
-/* Closed dropdowns read one step lighter than the card; the text inputs sit on
-   the deepest surface, as the design draws them. */
-.select { background-color: var(--control-surface); }
-.set-input { background-color: var(--input-deep); }
-.select {
-  height: 32px;
-  padding: 0 30px 0 12px;
-  border-radius: 9px;
-  font-size: 12.5px;
-  font-weight: 700;
-}
-/* The filename template is the one accent-outlined field in the design. */
-#set-template { border-color: rgba(47, 125, 255, 0.55); border-radius: 10px; }

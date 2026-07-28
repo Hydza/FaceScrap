@@ -10,14 +10,14 @@ const controller = panelSource();
 
 test('shows complete media over a blurred cover background', () => {
   const foreground = css.match(
-    /\.preview\s*>\s*img:not\(\.thumb-bg\),\s*\.card-thumb\s*>\s*img:not\(\.thumb-bg\)\s*\{([^}]*)\}/,
+    /\.preview\s*>\s*img:not\(\.thumb-bg\),\s*\.tile-thumb\s*>\s*img:not\(\.thumb-bg\)\s*\{([^}]*)\}/,
   )?.[1];
   assert.ok(foreground, 'missing shared foreground media rule');
   assert.match(foreground, /object-fit:\s*contain/);
   assert.match(foreground, /object-position:\s*center/);
 
   const background = css.match(
-    /\.preview\s*>\s*img\.thumb-bg,\s*\.card-thumb\s*>\s*img\.thumb-bg\s*\{([^}]*)\}/,
+    /\.preview\s*>\s*img\.thumb-bg,\s*\.tile-thumb\s*>\s*img\.thumb-bg\s*\{([^}]*)\}/,
   )?.[1];
   assert.ok(background, 'missing shared background media rule');
   assert.match(background, /display:\s*block/);

@@ -31,10 +31,10 @@ o descomprimes y la cargas sin empaquetar; no está en la Chrome Web Store.
 > Revisa [el código](src/) antes de instalar — de eso se trata autoalojar.
 
 <p align="center">
-  <img src="docs/now-es.png" width="190" alt="Vista Ahora de FaceScrap con un reel activo, su formato, duración y un selector de calidad">
+  <img src="docs/now-es.png" width="190" alt="Vista Ahora de FaceScrap con un reel activo, sus chips de tipo y duración, la línea de formato sobre el medio y el selector de resolución">
   <img src="docs/library-es.png" width="190" alt="Vista Biblioteca de FaceScrap con capturas de ejemplo seleccionadas y la bandeja de descarga abierta">
-  <img src="docs/saved-es.png" width="190" alt="Vista Guardados de FaceScrap con capturas descargadas previamente">
-  <img src="docs/settings-es.png" width="190" alt="Hoja de Ajustes de FaceScrap con preferencias de descarga y del panel">
+  <img src="docs/saved-es.png" width="190" alt="Vista Guardados de FaceScrap con capturas descargadas previamente, cada una con su insignia En disco">
+  <img src="docs/settings-es.png" width="190" alt="Ajustes de FaceScrap con su buscador y las cuatro páginas: General, Aspecto, Teclas y Avanzado">
 </p>
 <p align="center"><i>Ahora · Biblioteca · Guardados · Ajustes</i></p>
 
@@ -52,18 +52,19 @@ o descomprimes y la cargas sin empaquetar; no está en la Chrome Web Store.
 4. El **panel lateral** presenta las capturas de la pestaña activa en tres vistas
    — Ahora, Biblioteca, Guardados — y descarga mediante `chrome.downloads`
    (a los videos HD se les une el audio en un documento offscreen).
-   **Ahora** se centra en el contenido que estás viendo: su portada,
-   formato/resolución, duración en videos, un selector de calidad cuando un
-   video tiene más de una resolución, y un solo botón Descargar. **Biblioteca**
-   es una cuadrícula de
-   tarjetas con todo lo capturado en la pestaña, con subfiltros
-   Todo/Videos/Imágenes, un botón de descarga por tarjeta, y selección múltiple
-   con una bandeja de descargas. **Guardados** es la misma cuadrícula acotada a lo
-   que ya descargaste de la pestaña. El engrane abre Configuración, que también
-   contiene el botón Vaciar y el interruptor de idioma EN|ES. El icono de la barra
-   y el panel se habilitan solo en pestañas de facebook.com. Al ser un panel
-   lateral y no una ventana emergente, permanece abierto mientras los videos se
-   reproducen en la página.
+   **Ahora** se centra en el contenido que estás viendo: su portada bajo los
+   chips de tipo y duración, su contenedor y proporción en la línea sobre el
+   medio, un selector de resolución que flota encima del vídeo y solo lista las
+   representaciones que el manifiesto realmente ofrece, y un único botón Guardar.
+   **Biblioteca** es una cuadrícula de tiles 9:16 con todo lo capturado en la
+   pestaña, con subfiltros Todo/Videos/Imágenes y un control de densidad. Un tile
+   hace una sola cosa —seleccionar— y seleccionar levanta la bandeja que guarda.
+   **Guardados** es la misma cuadrícula acotada a lo que ya descargaste de la
+   pestaña, con cada tile marcado «En disco». Ajustes es el cuarto elemento de la
+   barra: cuatro páginas con buscador, que contienen el botón Vaciar y el
+   interruptor de idioma EN|ES. El icono de la barra y el panel se habilitan solo
+   en pestañas de facebook.com. Al ser un panel lateral y no una ventana
+   emergente, permanece abierto mientras los videos se reproducen en la página.
 
 ### Ahora
 
@@ -78,16 +79,23 @@ pasar al siguiente video o foto lo reemplaza.
 
 ### Configuración
 
-El engrane abre una hoja a panel completo: plantilla de nombre de archivo (tokens
-`{source}`, `{date}`, `{id}`), subcarpeta «FaceScrap/», calidad por defecto (mayor
-/ menor / preguntar — preguntar abre el diálogo Guardar como), descarga directa
-(omite la unión de audio), seguir idioma del navegador, tema del panel
-(Automático sigue la pestaña activa de Facebook y después el dispositivo;
-Claro/Oscuro lo reemplazan), orden de la lista, confirmar antes de vaciar, vista
-de solo videos, filtro de resolución mínima, y un tope editable de números
-enteros por pestaña (por defecto 1500 items, se descartan primero los más viejos;
-0 = sin límite). Diagnóstico añade un contador (desactivado por defecto) de
-capturas descartadas con un control para reiniciarlo.
+El cuarto elemento de la barra abre una hoja a panel completo con un buscador
+(`Ctrl K`) sobre cuatro páginas. **General**: calidad (mayor / menor / preguntar
+— preguntar abre el diálogo Guardar como), subcarpeta «FaceScrap/», descarga
+directa (omite la unión de audio), el botón sobre el vídeo, idioma, tema del
+panel (Automático sigue la pestaña activa de Facebook y después el dispositivo;
+Claro/Oscuro lo reemplazan) y orden de la lista. **Aspecto**: densidad de la
+rejilla, fondo, familia de esquinas, y una fila de Color con tres grupos de
+muestras — 10 acentos sólidos, 13 degradados y 6 tintes de panel que mueven a la
+vez el lienzo, las dos superficies y la línea. **Teclas**: el interruptor maestro
+y una fila por función asignable. **Avanzado**: plantilla de nombre de archivo
+(tokens `{source}`, `{date}`, `{id}`), vista de solo videos, filtro de resolución
+mínima, un tope editable de números enteros por pestaña (por defecto 1500 items,
+se descartan primero los más viejos; 0 = sin límite), confirmar antes de vaciar,
+y el interruptor de **diagnóstico** (desactivado por defecto): contadores de
+capturas descartadas más un registro de lo que hizo cada contexto, con un botón
+Exportar informe que lo escribe todo en un solo archivo JSON
+(ver [Diagnóstico](#diagnóstico)).
 
 ## Qué es confiable y qué no
 
@@ -174,6 +182,44 @@ Referer en las solicitudes a fbcdn.
 > **Tamaño:** ~600 KB sin empaquetar, todo compilado desde `src/` — sin binarios
 > de terceros. La mezcla DASH es `src/shared/mp4-remux.ts`. Normal
 > para uso personal.
+
+## Diagnóstico
+
+Los internos de Facebook cambian, y aquí cada camino de captura se traga sus
+propios fallos a propósito: el hook de la página no puede romper la página en la
+que corre. Eso hace que «no se capturó nada» y «la página se rompió» se vean
+igual. Ajustes → Avanzado → **Registrar diagnóstico** enciende el registro que
+los distingue.
+
+Mientras está encendido, cada contexto anota lo que hizo: qué consulta GraphQL
+devolvió cuántos elementos y cuántos pares DASH (y cuál devolvió un error HTTP),
+qué peticiones de medios a fbcdn se clasificaron, qué video creyó el detector que
+estaba sonando, qué limpió cada navegación y cómo terminó cada descarga y cada
+unión. También anota los errores no capturados de la propia página. Los
+contadores de capturas descartadas —la mitad más antigua de esta función— siguen
+funcionando al lado.
+
+**Exportar informe** escribe un solo archivo JSON en tu carpeta de descargas: los
+contadores, el registro de eventos (como objetos y como líneas legibles), tus
+ajustes y las versiones de la extensión y del navegador.
+
+Lo que deliberadamente NO contiene:
+
+- **Ningún cuerpo de respuesta.** Solo su tamaño, el nombre de la consulta y lo
+  que se extrajo. Tu feed nunca se escribe en disco.
+- **Ninguna firma de fbcdn.** Cada URL se reduce a host + ruta (más el rango de
+  bytes DASH) en el momento en que se anota, así que `oh`, `oe`, `_nc_sid` y
+  `_nc_ohc` nunca llegan al archivo. Los enlaces que lleva no son enlaces
+  utilizables.
+- **Ninguna subida, nunca.** El archivo se escribe en local y no va a ningún
+  lado hasta que tú lo mandes.
+
+El registro está limitado a 2000 eventos y ~700 KB, descartando primero los más
+viejos, y lo dice en el propio registro cuando descarta algo. Apagar el
+interruptor borra tanto los contadores como el registro. Los mismos datos están
+en la consola del worker (`chrome://extensions` → Inspeccionar vistas: service
+worker) con `faceScrapDiag.dump()`, `faceScrapDiag.log()` y
+`faceScrapDiag.report()`.
 
 ## Hoja de ruta
 

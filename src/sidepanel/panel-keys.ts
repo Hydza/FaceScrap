@@ -38,7 +38,7 @@ let cursorId: string | undefined;
 function gridCards(): HTMLElement[] {
   const list = byId('list');
   if (list.offsetParent == null) return [];
-  return [...list.querySelectorAll<HTMLElement>('.card[data-card-id]')];
+  return [...list.querySelectorAll<HTMLElement>('.tile[data-card-id]')];
 }
 
 function cursorCard(): HTMLElement | undefined {

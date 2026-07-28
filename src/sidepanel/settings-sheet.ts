@@ -1,4 +1,5 @@
-// The Settings surface: four pages, their controls, and the diagnostics block.
+// The Settings surface: four pages, a search over all of them, their controls, and the
+// diagnostics block.
 //
 // Every write goes back out through the `apply` callback handed in at setup — this module
 // reads the settings but never owns or persists them. The custom background is the one
@@ -10,8 +11,9 @@
 // exists to forbid.
 
 import { fmt, getLang, t, type Lang, type MsgKey } from '../shared/i18n';
-import { getDiagCounters, resetDiagCounters } from '../shared/diag-store';
-import { ACCENTS, type AccentId } from '../shared/appearance';
+import { diagLogDrain, formatDiagEvent } from '../shared/diag-log';
+import { addDiagEvents, getDiagCounters, getDiagEvents, resetDiagCounters, resetDiagLog } from '../shared/diag-store';
+import { ACCENTS, PANEL_TINTS, type AccentGroup, type AccentId, type PanelTintId } from '../shared/appearance';
 import { downloadFilename } from '../shared/download-naming';
 import { makeItem } from '../shared/media';
 import {
@@ -42,8 +44,12 @@ let focusFrame: number | undefined;
 
 // ── Pages ─────────────────────────────────────────────────────────────────────
 
-/** Show one page. Which one is DOM state, not a setting: reopening Settings on the page
- *  you happened to leave it on is the behaviour, and it should not survive a restart. */
+/** Which page is showing. DOM state, not a setting: reopening Settings on the page you
+ *  happened to leave it on is the behaviour, and it should not survive a restart. */
+let page = 'general';
+
+/** Show one page. A live search query overrides this — it spans all four pages, so the
+ *  strip stays lit on the page you will return to while the results ignore it. */
 function showPage(name: string): void {
   const tabs = byId('set-tabs');
   const tab = tabs.querySelector<HTMLButtonElement>(`[data-tab="${name}"]`);
@@ -55,12 +61,40 @@ function showPage(name: string): void {
     keyRefusal = undefined;
     renderKeymapRows();
   }
+  page = name;
   pressOnly(tabs, tab);
-  for (const page of document.querySelectorAll<HTMLElement>('.set-page')) {
-    page.hidden = page.dataset.page !== name;
-  }
+  applySearch();
   // Back to the top: the pages differ in length, and a preserved scroll offset lands mid-card.
   byId('set-body').scrollTop = 0;
+}
+
+// ── Search ────────────────────────────────────────────────────────────────────
+
+/** Every row the search can match, plus the card and the overline above it — both of
+ *  which have to disappear when every row under them does, or the page fills with
+ *  empty headed cards. */
+function applySearch(): void {
+  const query = byId<HTMLInputElement>('set-search').value.trim().toLowerCase();
+  const searching = query.length > 0;
+  let hits = 0;
+
+  for (const el of document.querySelectorAll<HTMLElement>('.set-page')) {
+    el.hidden = !searching && el.dataset.page !== page;
+  }
+  for (const row of document.querySelectorAll<HTMLElement>('[data-search]')) {
+    const match = !searching || (row.textContent ?? '').toLowerCase().includes(query);
+    row.hidden = !match;
+    if (match && searching) hits += 1;
+  }
+  // A card with nothing left in it, and the overline that introduced it.
+  for (const card of document.querySelectorAll<HTMLElement>('.set-card')) {
+    const empty = [...card.querySelectorAll<HTMLElement>('[data-search]')].every((row) => row.hidden);
+    card.hidden = searching && empty;
+    const label = card.previousElementSibling;
+    if (label instanceof HTMLElement && label.classList.contains('set-label')) label.hidden = card.hidden;
+  }
+  byId('set-search-empty').hidden = !searching || hits > 0;
+  byId('settings-footer').hidden = searching;
 }
 
 // ── Segmented controls ────────────────────────────────────────────────────────
@@ -116,25 +150,34 @@ function withFocusKept(host: HTMLElement, attribute: string, rebuild: () => void
 }
 
 /** What each JS-built group last painted. reflectSettings runs after every settings write, and
- *  these two are 16 nodes and 16 listeners between them, so each repaints only when its own state
+ *  these are 38 nodes and 38 listeners between them, so each repaints only when its own state
  *  differs. */
 let accentPainted = '';
+let tintPainted = '';
 let keysPainted = '';
 
-// ── Accent swatches ───────────────────────────────────────────────────────────
+// ── Colour swatches ───────────────────────────────────────────────────────────
 
-/** Built from ACCENTS rather than written out in the markup, so the palette has one source
- *  and a swatch can never paint a colour the schema would reject. */
-function renderAccents(active: AccentId): void {
-  if (accentPainted === active) return;
-  accentPainted = active;
-  const host = byId('set-accent');
-  withFocusKept(host, 'accent', () => paintAccents(host, active));
+/** Built from ACCENTS and PANEL_TINTS rather than written out in the markup, so each
+ *  palette has one source and a swatch can never paint a colour the schema would reject. */
+function renderSwatches(accent: AccentId, tint: PanelTintId): void {
+  if (accentPainted !== accent) {
+    accentPainted = accent;
+    for (const group of ['solid', 'gradient'] as AccentGroup[]) {
+      const host = byId(`set-accent-${group}`);
+      withFocusKept(host, 'accent', () => paintAccents(host, group, accent));
+    }
+  }
+  if (tintPainted === tint) return;
+  tintPainted = tint;
+  const host = byId('set-tint');
+  withFocusKept(host, 'tint', () => paintTints(host, tint));
 }
 
-function paintAccents(host: HTMLElement, active: AccentId): void {
+function paintAccents(host: HTMLElement, group: AccentGroup, active: AccentId): void {
   host.textContent = '';
   for (const accent of ACCENTS) {
+    if (accent.group !== group) continue;
     const button = document.createElement('button');
     button.type = 'button';
     button.className = 'swatch';
@@ -147,6 +190,34 @@ function paintAccents(host: HTMLElement, active: AccentId): void {
     button.addEventListener('click', () => read?.apply({ accent: accent.id }));
     host.appendChild(button);
   }
+}
+
+/** The tint swatch shows the tint's own CANVAS — that is the colour the choice changes
+ *  most of, and the surfaces beside it are near-white in the light theme anyway. */
+function paintTints(host: HTMLElement, active: PanelTintId): void {
+  host.textContent = '';
+  const light = document.documentElement.dataset.theme === 'light';
+  for (const tint of PANEL_TINTS) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'swatch swatch-tint';
+    button.dataset.tint = tint.id;
+    button.style.background = (light ? tint.light : tint.dark)[0];
+    button.setAttribute('aria-pressed', String(tint.id === active));
+    const label = t(tint.label);
+    button.title = label;
+    button.setAttribute('aria-label', label);
+    button.addEventListener('click', () => read?.apply({ panelTint: tint.id }));
+    host.appendChild(button);
+  }
+}
+
+/** The tint swatches paint the resolved theme's canvas, so a theme flip has to repaint
+ *  them even though the tint itself did not change. */
+export function repaintTintSwatches(): void {
+  tintPainted = '';
+  const settings = read?.settings();
+  if (settings != null) renderSwatches(settings.accent, settings.panelTint);
 }
 
 // ── File-name template ────────────────────────────────────────────────────────
@@ -319,7 +390,6 @@ function onCaptureKey(e: KeyboardEvent): void {
 
 // ── Reflection ────────────────────────────────────────────────────────────────
 
-/** Push the current settings into the sheet's controls. */
 /** Write a text field only when it differs. Assigning .value resets the caret to the end even
  *  for an identical string, and this runs after every settings write — including while the user
  *  is mid-word in the filename template. */
@@ -328,6 +398,31 @@ function reflectField(id: string, value: string): void {
   if (field.value !== value) field.value = value;
 }
 
+/** The two literals the "while browsing" line names. Wrapped rather than substituted so
+ *  the sentence stays one translatable string with its own word order. */
+const CODE_TERMS = ['manifest.json', 'chrome://extensions/shortcuts'];
+
+function renderGlobalKeyHint(): void {
+  const host = byId('set-globalkey');
+  host.textContent = '';
+  let rest = t('settingsGlobalKeyHint');
+  while (rest.length > 0) {
+    const next = CODE_TERMS.map((term) => ({ term, at: rest.indexOf(term) }))
+      .filter((hit) => hit.at >= 0)
+      .sort((a, b) => a.at - b.at)[0];
+    if (next == null) {
+      host.append(rest);
+      return;
+    }
+    host.append(rest.slice(0, next.at));
+    const code = document.createElement('code');
+    code.textContent = next.term;
+    host.appendChild(code);
+    rest = rest.slice(next.at + next.term.length);
+  }
+}
+
+/** Push the current settings into the sheet's controls. */
 export function reflectSettings(settings: Settings): void {
   reflectField('set-template', settings.filenameTemplate);
   byId<HTMLInputElement>('set-subfolder').checked = settings.subfolder;
@@ -347,9 +442,10 @@ export function reflectSettings(settings: Settings): void {
     `[data-lang="${settings.followBrowserLang ? 'auto' : getLang()}"]`,
   );
   if (pressed != null) pressOnly(lang, pressed);
-  renderAccents(settings.accent);
+  renderSwatches(settings.accent, settings.panelTint);
   renderKeymapRows();
   renderTemplatePreview();
+  renderGlobalKeyHint();
 }
 
 /** What the background row says, and why the last attempt was refused if it was. Whether an image
@@ -391,9 +487,9 @@ function setSheetOpen(open: boolean, restoreFocus = true): void {
     pressOnly(nav, trigger);
     focusFrame = window.requestAnimationFrame(() => {
       focusFrame = undefined;
-      // The first tab, not a control: with four pages the tab strip is where you are, and
-      // focusing a field on page one skipped past the way to reach the other three.
-      if (!sheet.hidden) byId('set-tabs').querySelector<HTMLButtonElement>('[data-tab]')?.focus();
+      // The search field, not the first tab: it is the fastest way to any of the four
+      // pages, and Tab from it reaches the strip immediately.
+      if (!sheet.hidden) byId('set-search').focus();
     });
     return;
   }
@@ -424,22 +520,75 @@ export function toggleSettingsSheet(): void {
  *  maintenance terms whose whole value is grepping straight to the discard site, and a
  *  localized label would break that link. */
 export async function renderDiag(): Promise<void> {
-  const counters = await getDiagCounters();
+  const [counters, events] = await Promise.all([getDiagCounters(), getDiagEvents()]);
   const rows = Object.entries(counters).filter(([, n]) => n > 0);
   const pre = byId('diag-counters');
   if (rows.length === 0) {
     pre.textContent = t('diagEmpty');
-    return;
+  } else {
+    const width = Math.max(...rows.map(([reason]) => reason.length));
+    pre.textContent = rows
+      .sort((a, b) => b[1] - a[1])
+      .map(([reason, n]) => `${reason.padEnd(width)}  ${n}`)
+      .join('\n');
   }
-  const width = Math.max(...rows.map(([reason]) => reason.length));
-  pre.textContent = rows
-    .sort((a, b) => b[1] - a[1])
-    .map(([reason, n]) => `${reason.padEnd(width)}  ${n}`)
-    .join('\n');
+  // The trace itself is not rendered: it runs to thousands of lines, and the
+  // panel is 340 px wide. The count is what tells you there is something to
+  // export; the export is where it gets read.
+  byId('diag-events').textContent =
+    events.length === 1 ? t('diagEventCountOne') : fmt('diagEventCount', { n: events.length });
 }
 
 export function isDiagOpen(): boolean {
   return byId<HTMLDetailsElement>('diag-details').open;
+}
+
+/** Everything a maintainer needs to read a bug report, in one file.
+ *
+ *  Deliberately NOT uploaded anywhere: it is written to the user's Downloads
+ *  folder, and they decide who sees it. It carries no fbcdn tokens (redactUrl
+ *  strips them where each event is recorded, in diag-log.ts) and no response
+ *  bodies — only sizes, query names and outcomes — so it can be read before it is
+ *  shared. Settings ride along because half of what looks like a capture bug is a
+ *  setting: videosOnly, minResolution, directDownload. */
+async function buildDiagReport(settings: Settings): Promise<string> {
+  // The panel's own events have nowhere else to go: it has no flush timer of its
+  // own, so drain them into the store first or they die with the export.
+  await addDiagEvents(diagLogDrain()).catch(() => {});
+  const [counters, events] = await Promise.all([getDiagCounters(), getDiagEvents()]);
+  const manifest = chrome.runtime.getManifest();
+  return JSON.stringify(
+    {
+      report: 'facescrap-diagnostics',
+      version: 1,
+      generatedAt: new Date().toISOString(),
+      extension: { version: manifest.version, name: manifest.name },
+      browser: navigator.userAgent,
+      lang: getLang(),
+      settings,
+      counters,
+      eventCount: events.length,
+      // Both shapes on purpose: the objects are what a script reads, the lines
+      // are what a person reads without a JSON viewer.
+      events,
+      lines: events.map(formatDiagEvent),
+    },
+    null,
+    2,
+  );
+}
+
+function saveDiagReport(text: string): void {
+  const stamp = new Date().toISOString().replace(/[:T]/g, '-').slice(0, 16);
+  const url = URL.createObjectURL(new Blob([text], { type: 'application/json' }));
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = `facescrap-diagnostics-${stamp}.json`;
+  link.click();
+  // Same reason the offscreen document revokes its mux blobs: a side panel is
+  // long-lived, and an un-revoked blob is retained for its whole lifetime. The
+  // delay lets the download start first.
+  setTimeout(() => URL.revokeObjectURL(url), 60_000);
 }
 
 // ── Setup ─────────────────────────────────────────────────────────────────────
@@ -474,6 +623,18 @@ export function setupSettingsSheet(inputs: SheetInputs): void {
     apply(spec.patch(button.dataset.value));
   });
 
+  const search = byId<HTMLInputElement>('set-search');
+  search.addEventListener('input', applySearch);
+  search.addEventListener('keydown', (e) => {
+    if (e.key !== 'Escape' || search.value === '') return;
+    // Clear before the document handler sees it, so the first Escape empties the box
+    // rather than closing the whole sheet.
+    e.preventDefault();
+    e.stopPropagation();
+    search.value = '';
+    applySearch();
+  });
+
   const onCheck = (id: string, key: keyof Settings): void => {
     byId<HTMLInputElement>(id).addEventListener('change', (e) => {
       apply({ [key]: (e.target as HTMLInputElement).checked } as SettingsPatch);
@@ -500,7 +661,7 @@ export function setupSettingsSheet(inputs: SheetInputs): void {
     const chip = document.createElement('button');
     chip.type = 'button';
     chip.className = 'token';
-    chip.textContent = `+ ${token}`;
+    chip.textContent = token;
     chip.addEventListener('click', () => insertToken(token));
     tokens.appendChild(chip);
   }
@@ -557,7 +718,20 @@ export function setupSettingsSheet(inputs: SheetInputs): void {
   });
 
   byId('diag-reset').addEventListener('click', () => {
-    void resetDiagCounters().then(renderDiag);
+    void Promise.all([resetDiagCounters(), resetDiagLog()]).then(renderDiag);
+  });
+  const exportButton = byId<HTMLButtonElement>('diag-export');
+  exportButton.addEventListener('click', () => {
+    // Disabled across the await: the report is one storage read plus a JSON
+    // serialization of up to 2 000 events, and a double click would write the
+    // same file twice.
+    exportButton.disabled = true;
+    void buildDiagReport(settings())
+      .then(saveDiagReport)
+      .catch((error) => console.error('[FaceScrap] diagnostics export failed', error))
+      .finally(() => {
+        exportButton.disabled = false;
+      });
   });
   // Only when opened: the counters are a maintenance detail, not worth a storage read on
   // every settings render.
@@ -567,4 +741,15 @@ export function setupSettingsSheet(inputs: SheetInputs): void {
 
   showPage('general');
   reflectSettings(settings());
+}
+
+/** Ctrl/Cmd K — open Settings if it is closed, then put the caret in the search box. */
+export function focusSettingsSearch(): void {
+  if (!isSettingsOpen()) byId('settings-open').click();
+  const search = byId<HTMLInputElement>('set-search');
+  // After setSheetOpen's own rAF focus, or it would be stolen back.
+  window.requestAnimationFrame(() => {
+    search.focus();
+    search.select();
+  });
 }

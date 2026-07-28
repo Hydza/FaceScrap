@@ -2,7 +2,10 @@
 
 ## Design target
 
-- Direction: `#2b` — dark immersive mode.
+- Direction: the `design_handoff_facescrap_panel` redesign, integrated verbatim —
+  its tokens, its geometry and its copy, including the places its own measured
+  values fall short of AA (recorded in `tests/sidepanel-theme-contrast.test.ts`
+  rather than silently corrected).
 - Surfaces: Now, Library, Saved, and Settings.
 - QA viewport: 340 × 780 CSS px at device scale factor 1.
 - The design reference is supplied locally when a comparison is needed; its
@@ -44,7 +47,8 @@ Automatic checks can establish that:
 - Expected surfaces, navigation states, controls, and selected layout metrics
   are present in the deterministic fixture scenario.
 - Play placement is geometrically valid for portrait, landscape, and square
-  video cards before and after a viewport resize.
+  video tiles before and after a viewport resize.
+- The resolution list opens over the media without resizing the frame under it.
 - Captures and evidence files are produced at the expected dimensions.
 
 Manual review is still required to establish that:

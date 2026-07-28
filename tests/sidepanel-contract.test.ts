@@ -71,7 +71,7 @@ test('names every settings control, whatever kind of control it is', () => {
   // groups, so half of these are now a <div role="group"> rather than an <input>/<select>,
   // and a group needs the name just as much.
   const labelledInputs = [
-    'now-qselect',
+    'set-search',
     'set-template',
     'set-subfolder',
     'set-direct',
@@ -82,10 +82,21 @@ test('names every settings control, whatever kind of control it is', () => {
     'set-keysenabled',
   ];
   for (const id of labelledInputs) {
-    const tag = html.match(new RegExp(`<(?:input|select)\\b[^>]*id="${id}"[^>]*>`))?.[0];
+    const tag = html.match(new RegExp(`<input\\b[^>]*id="${id}"[^>]*>`, 's'))?.[0];
     assert.ok(tag, `missing #${id}`);
-    const labelId = attributes(tag!).get('aria-labelledby');
-    assert.ok(labelId, `#${id} must have aria-labelledby`);
+    const attrs = attributes(tag!);
+    // Either form of the name is fine — the search box is its own label, the rest point
+    // at the row title beside them — but one of the two has to be there.
+    const labelId = attrs.get('aria-labelledby');
+    if (labelId != null) assert.match(html, new RegExp(`\\bid="${labelId}"`), `missing label #${labelId}`);
+    else assert.ok(attrs.get('aria-label'), `#${id} must carry a name`);
+  }
+
+  // The resolution control is a button that opens a listbox, not a form field: its name
+  // is the row's "Resolution" label plus the value it currently shows.
+  const trigger = html.match(/<button\b[^>]*id="now-qtrigger"[^>]*>/s)?.[0];
+  assert.ok(trigger, 'missing #now-qtrigger');
+  for (const labelId of attributes(trigger!).get('aria-labelledby')!.split(' ')) {
     assert.match(html, new RegExp(`\\bid="${labelId}"`), `missing label #${labelId}`);
   }
 
@@ -98,10 +109,16 @@ test('names every settings control, whatever kind of control it is', () => {
     assert.ok(labelId, `${name} must have aria-labelledby`);
     assert.match(html, new RegExp(`\\bid="${labelId}"`), `missing label #${labelId}`);
   }
-  // The accent row has no text of its own at all, so its group name is the only one there is.
-  const accent = html.match(/<div\b[^>]*id="set-accent"[^>]*>/)?.[0];
-  assert.ok(accent, 'missing #set-accent');
-  assert.match(html, new RegExp(`\\bid="${attributes(accent!).get('aria-labelledby')}"`));
+  // The three colour rows have no text of their own at all, so each group's name is the
+  // only one there is — and there are three, because "Solid", "Gradient" and "Panel
+  // tint" are not interchangeable and a single "Colour" name would say nothing.
+  for (const id of ['set-accent-solid', 'set-accent-gradient', 'set-tint']) {
+    const group = html.match(new RegExp(`<div\\b[^>]*id="${id}"[^>]*>`))?.[0];
+    assert.ok(group, `missing #${id}`);
+    const attrs = attributes(group!);
+    assert.equal(attrs.get('role'), 'group', `${id} must be a labelled group`);
+    assert.match(html, new RegExp(`\\bid="${attrs.get('aria-labelledby')}"`), `missing label for ${id}`);
+  }
 
   // Auto/EN/ES is one control over two stored facts, and exactly one of the three is lit.
   const langMatch = html.match(/<div\b[^>]*id="lang"[^>]*>([\s\S]*?)<\/div>/);

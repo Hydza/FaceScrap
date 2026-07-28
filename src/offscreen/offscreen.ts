@@ -13,9 +13,35 @@
 // document's memory at all.
 
 import { createJobChain } from '../shared/async';
+import { diagLog, diagLogDrain, errorText, redactUrl, setDiagContext, setDiagLogEnabled } from '../shared/diag-log';
+import { addDiagEvents } from '../shared/diag-store';
 import { MUX_PORT, MUX_PROGRESS_MS, type MuxProgress, type MuxResponse, type RuntimeMessage } from '../shared/messages';
 import { remux } from '../shared/mp4-remux';
+import { loadSettings } from '../shared/settings';
 import { fetchDashTracks, MAX_DASH_OUTPUT_BYTES } from '../shared/track-fetch';
+
+// Diagnostics (see shared/diag-log.ts). This document is where an HD download
+// actually happens — the two track fetches and the remux — so a failure here is
+// the one the user reports as "saving does nothing". It writes its own events
+// rather than routing them through the worker: it already holds chrome.storage,
+// and its answer to the worker is a one-shot sendMessage with no room for them.
+setDiagContext('offscreen');
+function refreshDiagFlag(): void {
+  void loadSettings()
+    .then((s) => setDiagLogEnabled(s.diagEnabled))
+    .catch(() => setDiagLogEnabled(false));
+}
+refreshDiagFlag();
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area === 'local' && 'settings' in changes) refreshDiagFlag();
+});
+
+/** Persist this document's trace. Called at each job boundary — an offscreen
+ *  document can be torn down by the worker the moment its answer is sent. */
+function flushDiag(): void {
+  const events = diagLogDrain();
+  if (events.length > 0) void addDiagEvents(events).catch(() => {});
+}
 /** Opens a progress port to the worker for ONE job. Jobs are serialized on both
  *  sides (muxQueue here, dashChain there), so at most one is ever open. */
 function progressPort(): { report: (p: MuxProgress) => void; close: () => void } {
@@ -72,8 +98,13 @@ async function mux(videoUrl: string, audioUrl: string, report: (p: MuxProgress) 
   // video — so it finishes in one step rather than streaming progress. Report the
   // phase change so a worker watching the port sees the fetch end, not a gap.
   report({ phase: 'remux', bytes: 0 });
+  // Both track sizes, at the one moment both are known. A merge that produces a
+  // file the player refuses is almost always visible here first — an audio track
+  // of a few hundred bytes, or a video track that stopped short.
+  diagLog('muxFetched', { video: v.size, audio: a.size });
   const merged = await remux(v, a);
   report({ phase: 'remux', bytes: 100 });
+  diagLog('muxRemuxed', { bytes: merged.blob.size });
 
   // A merge cannot legitimately exceed its combined inputs. Checked before a blob
   // URL is published, as with the wasm path.
@@ -117,10 +148,18 @@ function enqueueMux(videoUrl: string, audioUrl: string): Promise<string> {
   // otherwise look idle.
   return muxQueue(async () => {
     const port = progressPort();
+    const startedAt = Date.now();
+    diagLog('muxStart', { video: redactUrl(videoUrl), audio: redactUrl(audioUrl) });
     try {
-      return await mux(videoUrl, audioUrl, port.report);
+      const url = await mux(videoUrl, audioUrl, port.report);
+      diagLog('muxDone', { ms: Date.now() - startedAt });
+      return url;
+    } catch (error) {
+      diagLog('muxFailed', { ms: Date.now() - startedAt, error: errorText(error) }, 'error');
+      throw error;
     } finally {
       port.close();
+      flushDiag();
     }
   });
 }

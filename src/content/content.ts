@@ -124,11 +124,16 @@ if (!startContentInstance) {
   const diag = setupDiagChannel(runtime);
   const scheduleTheme = setupThemeSignal(runtime, usesAnimation);
   const media = setupMediaRelay(runtime, isPrerendering);
-  const playing = setupPlayingDetection(runtime, usesAnimation, { relay: media.relay, scheduleTheme });
+  const playing = setupPlayingDetection(runtime, usesAnimation, {
+    relay: media.relay,
+    scheduleTheme,
+    note: diag.note,
+  });
   setupDomScan(runtime, {
     relay: media.relay,
     scheduleTheme,
     reportDiag: diag.report,
+    note: diag.note,
     onImageLoaded: playing.requestDetect,
   });
   setupPageHookIngress(runtime, {

@@ -14,7 +14,14 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import test from 'node:test';
 
-import { ACCENTS, accentById, DEFAULT_ACCENT } from '../src/shared/appearance';
+import {
+  ACCENTS,
+  accentById,
+  DEFAULT_ACCENT,
+  DEFAULT_TINT,
+  PANEL_TINTS,
+  tintById,
+} from '../src/shared/appearance';
 import { DEFAULT_SETTINGS, normalizeSettings } from '../src/shared/settings';
 
 function luminance(hex: string): number {
@@ -44,14 +51,99 @@ test('every accent carries text that clears WCAG AA on it', () => {
 
 test('the flat entries state one colour twice and the gradients state a real ramp', () => {
   for (const accent of ACCENTS) {
-    // `solid` is what borders, focus rings and 1px outlines take — none of those can carry a
-    // gradient — so it must always be a plain hex, even on a gradient entry.
+    // `solid` is what borders, focus rings, 1px outlines and the logo's SVG fill take —
+    // none of those can carry a gradient — so it must always be a plain hex, even on a
+    // gradient entry.
     assert.match(accent.solid, /^#[0-9a-f]{6}$/, `${accent.id}: solid must be a flat hex`);
-    if (accent.grad === accent.solid) continue;
-    assert.match(accent.grad, /^linear-gradient\(/, `${accent.id}: grad must be flat or a gradient`);
-    // Every stop a real colour, and the flat fallback among them: a gradient whose stops
-    // wandered off the flat colour would make the button and its own border disagree.
-    assert.ok(accent.grad.includes(accent.solid), `${accent.id}: the ramp must include its flat colour`);
+    assert.equal(
+      accent.group === 'solid',
+      accent.grad === accent.solid,
+      `${accent.id}: the solid group states one colour twice, the gradient group a ramp`,
+    );
+    if (accent.group === 'solid') continue;
+    assert.match(accent.grad, /^linear-gradient\(/, `${accent.id}: grad must be a gradient`);
+    // Two real stops at least. How the flat fallback relates to them is a judgement no
+    // cheap metric captures — messenger's is one stop of a four-stop rainbow, dusk's is a
+    // hue midpoint that is darker than either end — so what is asserted is that the ramp
+    // IS a ramp. That the fallback is readable is test one's job, and it covers every
+    // entry either way.
+    const stops = [...accent.grad.matchAll(/#[0-9a-f]{6}/g)];
+    assert.ok(stops.length >= 2, `${accent.id}: a ramp needs at least two stops`);
+  }
+});
+
+test('every tint moves all four surfaces, in both themes', () => {
+  const ids = PANEL_TINTS.map((tint) => tint.id);
+  assert.equal(new Set(ids).size, ids.length, 'duplicate tint id');
+  const labels = PANEL_TINTS.map((tint) => tint.label);
+  assert.equal(new Set(labels).size, labels.length, 'two tints share a label');
+
+  const i18n = readFileSync(join(process.cwd(), 'src', 'shared', 'i18n.ts'), 'utf8');
+  const css = readFileSync(join(process.cwd(), 'src', 'sidepanel', 'sidepanel.css'), 'utf8');
+  for (const tint of PANEL_TINTS) {
+    // A swatch has no text, so its label IS its accessible name.
+    const declared = [...i18n.matchAll(new RegExp(`^\\s+${tint.label}: '([^']+)'`, 'gm'))];
+    assert.equal(declared.length, 2, `${tint.label} must be translated in both languages`);
+
+    for (const theme of ['dark', 'light'] as const) {
+      const [cv, sf, sf2, ln] = tint[theme];
+      for (const colour of [cv, sf, sf2, ln]) {
+        assert.match(colour, /^#[0-9a-f]{6}$/, `${tint.id}/${theme}: every surface is a flat hex`);
+      }
+      // Four DISTINCT steps. A tint whose canvas and surface collapsed to one colour
+      // would erase the card edges the whole panel is built on.
+      assert.equal(new Set([cv, sf, sf2, ln]).size, 4, `${tint.id}/${theme}: four distinct surfaces`);
+    }
+
+    // The stylesheet, not applyAppearance, resolves the tint — it depends on the theme,
+    // which arrives from its own async path. Both halves of the pair must exist, or
+    // picking the tint would persist and change nothing in one of the two themes.
+    assert.match(css, new RegExp(`:root\\[data-tint="${tint.id}"\\]`), `no dark rule for ${tint.id}`);
+    assert.match(
+      css,
+      new RegExp(`:root\\[data-theme="light"\\]\\[data-tint="${tint.id}"\\]`),
+      `no light rule for ${tint.id}`,
+    );
+  }
+
+  assert.equal(tintById('no-such-tint').id, DEFAULT_TINT);
+  for (const bad of ['slate ', 'SLATE', 42, null, {}]) {
+    assert.equal(normalizeSettings({ panelTint: bad }).panelTint, DEFAULT_SETTINGS.panelTint);
+  }
+  for (const tint of PANEL_TINTS) {
+    assert.equal(normalizeSettings({ panelTint: tint.id }).panelTint, tint.id);
+  }
+});
+
+test('the stylesheet carries every accent the schema accepts, per theme', () => {
+  const css = readFileSync(join(process.cwd(), 'src', 'sidepanel', 'sidepanel.css'), 'utf8');
+  for (const accent of ACCENTS) {
+    assert.match(css, new RegExp(`:root\\[data-accent="${accent.id}"\\]`), `no rule for ${accent.id}`);
+    // --ach is the ONLY place an accent is allowed to be text, and it needs the darker
+    // step on the light canvas. A missing light rule leaves the dark step there, which is
+    // exactly the pairing that fails AA.
+    assert.match(
+      css,
+      new RegExp(`:root\\[data-theme="light"\\]\\[data-accent="${accent.id}"\\]`),
+      `no light --ach for ${accent.id}`,
+    );
+    assert.ok(css.includes(accent.solid), `${accent.id}: --ac missing from the stylesheet`);
+    assert.ok(css.includes(accent.softDark), `${accent.id}: dark --ach missing from the stylesheet`);
+    assert.ok(css.includes(accent.softLight), `${accent.id}: light --ach missing from the stylesheet`);
+  }
+});
+
+test('the accent-as-text step clears WCAG AA on the canvas it is used on', () => {
+  // --ach carries the picker's selected row, the "Save as…" hover, the active nav label
+  // and the filename preview. Each theme gets its own step because no single colour
+  // clears 4.5:1 against both canvases.
+  for (const accent of ACCENTS) {
+    for (const tint of PANEL_TINTS) {
+      const dark = contrast(accent.softDark, tint.dark[0]);
+      assert.ok(dark >= 4.5, `${accent.id} on ${tint.id} (dark): ${dark.toFixed(2)}:1`);
+      const light = contrast(accent.softLight, tint.light[0]);
+      assert.ok(light >= 4.5, `${accent.id} on ${tint.id} (light): ${light.toFixed(2)}:1`);
+    }
   }
 });
 

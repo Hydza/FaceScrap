@@ -33,6 +33,8 @@ interface DomScanDeps {
   relay: (items: MediaItem[]) => void;
   scheduleTheme: () => void;
   reportDiag: (counters: unknown) => void;
+  /** Record one traced event (see content-diag.ts's `note`). */
+  note: (ev: string, data?: Record<string, string | number | boolean>) => void;
   /** A fresh image load can also change what is playing. */
   onImageLoaded: () => void;
 }
@@ -102,8 +104,15 @@ export function setupDomScan(runtime: ContentRuntime, deps: DomScanDeps): () => 
     });
 
     diagBump('captureDom', out.length);
+    const relayed = changedOnly(out);
+    // Only when the scan found something, and only the two counts: this runs on
+    // every mutation burst, and a line per empty scan would be the loudest and
+    // least informative thing in the trace. `relayed` below `found` is the normal
+    // steady state (the dedupe is doing its job); `found` high with `relayed`
+    // always 0 is what a stuck scan looks like.
+    if (out.length > 0) deps.note('domScan', { found: out.length, relayed: relayed.length });
     deps.reportDiag(diagDrain());
-    deps.relay(changedOnly(out));
+    deps.relay(relayed);
   };
 
   const throttledScan = (): void => {

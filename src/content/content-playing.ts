@@ -23,7 +23,12 @@ import {
   type ShortcutResultMsg,
 } from '../shared/messages';
 import { isStoryDomId, isStoryPath, storyCardMark as formatStoryCardMark } from '../shared/story-mark';
-import { discardPlaceholderCoverEvidence, pickBestVideoIndex, type VideoCandidate } from '../shared/centre-video';
+import {
+  coverSharesVideoCard,
+  discardPlaceholderCoverEvidence,
+  pickBestVideoIndex,
+  type VideoCandidate,
+} from '../shared/centre-video';
 import { combineVideoMark, createVideoMarkFactory } from '../shared/video-mark';
 import { createFrameCoalescer } from './detection-frame';
 import { loadSettings } from '../shared/settings';
@@ -154,6 +159,8 @@ interface CentreMedia {
 interface PlayingDeps {
   relay: (items: MediaItem[]) => void;
   scheduleTheme: () => void;
+  /** Record one traced event (see content-diag.ts's `note`). */
+  note: (ev: string, data?: Record<string, string | number | boolean>) => void;
 }
 
 interface PlayingDetector {
@@ -236,7 +243,14 @@ export function setupPlayingDetection(
       videoEl = el;
       const src = el.currentSrc || el.src;
       mark = videoMark(el);
-      if (overCover) discardPlaceholderCoverEvidence(ids, covers, coverIds);
+      if (overCover) {
+        discardPlaceholderCoverEvidence(
+          ids,
+          covers,
+          coverIds,
+          coverSharesVideoCard(el, coverEl, (ancestor, node) => (ancestor as Element).contains(node as Node)),
+        );
+      }
       if (src && !src.startsWith('blob:') && isFbcdn(src)) ids.add(mediaId(src));
       if (el.poster && isFbcdn(el.poster)) {
         ids.add(mediaId(el.poster));
@@ -375,6 +389,11 @@ export function setupPlayingDetection(
       documentToken: runtime.documentToken,
     } satisfies NowPlayingMsg;
     if (!delivery.offer(key, message)) return;
+    // Only accepted boundaries reach here (offer() dedupes on `key`), so this is one
+    // line per real slide change, not per poll tick. It is the answer to the most
+    // common report of all — "Now Playing is showing the wrong video": the id this
+    // detector believed, and whether it came from the DOM or the URL.
+    deps.note('playing', { vid: vid ?? '', ids: ids.length, hasVideo, covers: covers.length });
     // The slide identity WITHOUT the id set: ids keep growing as more representations of
     // the same video are captured, and closing an open resolution menu on that would
     // fight the user mid-pick. mark and vid move only on a real slide.
