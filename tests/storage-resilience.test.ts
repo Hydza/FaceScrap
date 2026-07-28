@@ -7,21 +7,20 @@ import { storyCardMark } from '../src/shared/story-mark';
 
 const {
   addMedia,
-  addSaved,
   clearTab,
-  ensureCaptureHeadroom,
   facebookThemeKey,
   getFacebookTheme,
   getMedia,
   getPlaying,
   getRecent,
-  getSaved,
   playingRetentionIdentity,
   setFacebookTheme,
   setPlaying,
   setPlayingMediaPin,
   setRecent,
 } = await import('../src/shared/storage');
+const { addSaved, getSaved } = await import('../src/shared/saved');
+const { ensureCaptureHeadroom } = await import('../src/shared/session-write');
 
 let nextTab = 8_000;
 

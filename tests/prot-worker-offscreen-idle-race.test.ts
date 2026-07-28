@@ -40,8 +40,8 @@ const readSrc = (rel: string): string => readFileSync(join(process.cwd(), rel), 
 // changes (same technique tests/config.test.ts uses for its own mirrored
 // constants).
 const OFFSCREEN_IDLE_MS = (() => {
-  const m = readSrc('src/background/service-worker.ts').match(/const OFFSCREEN_IDLE_MS = ([\d_]+);/);
-  assert.ok(m, 'could not find OFFSCREEN_IDLE_MS in service-worker.ts');
+  const m = readSrc('src/background/dash-download.ts').match(/const OFFSCREEN_IDLE_MS = ([\d_]+);/);
+  assert.ok(m, 'could not find OFFSCREEN_IDLE_MS in dash-download.ts');
   return Number(m![1].replace(/_/g, ''));
 })();
 

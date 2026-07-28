@@ -6,11 +6,20 @@
 // Now Playing is the live video, in focus, with its own quality picker and one
 // Download. Library and Saved share a card grid: per-card download, multi-select,
 // a bulk tray.
+//
+// This file is the controller: it owns the panel's state, builds the card model, and
+// decides when to repaint. The surfaces around it own no state — each is handed what
+// to paint and calls back on click, so the state lives in exactly one place:
+//
+//   card-view / now-view     paint a card, paint the live post
+//   settings-sheet           the Settings overlay and its controls
+//   download                 hand one item to the worker, report whether it landed
+//   panel-theme              which theme is painted, and the signals that change it
+//   media-play               thumbnail pairs and where the play glyph sits
+//   tab-state, format        per-tab memory; presentation vocabulary
 
 import {
   fbAssetKeys,
-  fileExtensionFor,
-  imageDimensionsLabel,
   imagePixelArea,
   legacyMediaId,
   mediaId,
@@ -18,42 +27,23 @@ import {
   videoGroupKey,
   type MediaItem,
   type MediaKind,
-  type MediaSource,
 } from '../shared/media';
-import { downloadFilename, itemCardId, savedEntryForItem, videoCardId } from '../shared/download-naming';
+import { itemCardId, savedEntryForItem, videoCardId } from '../shared/download-naming';
 import { defaultTarget, isDownloadable, videoOptions, willHaveAudio } from '../shared/video-options';
 import { fmt, getLang, LANG_KEY, resolveLang, saveLang, setLang, t, type Lang, type MsgKey } from '../shared/i18n';
-import {
-  getCaps,
-  getDiagCounters,
-  getFacebookTheme,
-  getMedia,
-  getSaved,
-  facebookThemeKey,
-  resetDiagCounters,
-  type SavedEntry,
-} from '../shared/storage';
+import { getCaps, getMedia } from '../shared/storage';
+import { getSaved, type SavedEntry } from '../shared/saved';
 import {
   DEFAULT_SETTINGS,
   loadSettings,
-  parseMaxItemsInput,
-  sanitizeMaxItemsInput,
+  normalizeSettings,
   saveSettings,
   writeSettingOptimistically,
+  type KeyAction,
   type Settings,
+  type SettingsPatch,
 } from '../shared/settings';
-import { resolveEffectiveTheme, type EffectiveTheme } from '../shared/theme';
-import { dashDownloadKey } from '../shared/download-settlement';
-import {
-  DASH_UI_HARD_CAP_MS,
-  DASH_UI_IDLE_MS,
-  withRearmableHardCap,
-  type ClearTabMsg,
-  type DownloadDirectMsg,
-  type DownloadDirectResponse,
-  type DownloadDashMsg,
-  type DownloadDashResponse,
-} from '../shared/messages';
+import type { ClearTabMsg } from '../shared/messages';
 import {
   flushBindingsNow,
   getGroupCover,
@@ -61,7 +51,29 @@ import {
   purgeTabBindings,
   selectPlaying,
 } from '../shared/now-playing';
-import { computePlayCenterY, createPlayPositionBatcher } from './play-position';
+import { schedulePlayPositions, setupPlayPositioning } from './media-play';
+import { cardBusy, failReason, pruneTabState, resetGen, tabKey } from './tab-state';
+import { byId, composeLine, pressOnly, tn } from './format';
+import { downloadOne } from './download';
+import { applyEffectiveTheme, setupPanelTheme } from './panel-theme';
+import {
+  closeSettingsSheet,
+  isDiagOpen,
+  isSettingsOpen,
+  reflectPanelBackground,
+  reflectSettings,
+  renderDiag,
+  setupSettingsSheet,
+  toggleSettingsSheet,
+} from './settings-sheet';
+import { applyPanelBackground, loadPanelBackground } from './panel-background';
+import { accentById } from '../shared/appearance';
+import { restoreKeyCursor, setupPanelKeys } from './panel-keys';
+import { setupMarquee } from './marquee';
+import { paintCardPicked, renderCard, stubCard, type Card } from './card-view';
+import { paintNow, type NowState } from './now-view';
+
+// ── Panel state ───────────────────────────────────────────────────────────────
 
 // Top-level view (the pill switch) and the Library/Saved sub-filter.
 type View = 'now' | 'library' | 'saved';
@@ -70,39 +82,6 @@ type MediaFilter = 'all' | 'video' | 'image';
 // User settings (loaded at startup, updated by the settings sheet). Behaviour reads
 // this synchronously; the sheet writes it through applySetting() → saveSettings().
 let settings: Settings = { ...DEFAULT_SETTINGS };
-let systemThemeQuery: MediaQueryList | undefined;
-let themeUpdateRevision = 0;
-
-const SOURCE_KEY: Record<MediaSource, MsgKey> = {
-  reel: 'sourceReel',
-  story: 'sourceStory',
-  highlight: 'sourceHighlight',
-  video: 'sourceVideo',
-  page: 'sourcePage',
-};
-
-function presentationKey(kind: MediaKind, source: MediaSource): MsgKey {
-  return kind === 'image' && source === 'video' ? 'kindImage' : SOURCE_KEY[source];
-}
-
-const KIND_KEY: Record<MediaKind, MsgKey> = {
-  video: 'kindVideo',
-  image: 'kindImage',
-  audio: 'kindAudio',
-};
-
-const KIND_ICON: Record<MediaKind, string> = {
-  video: 'icons/nav-now.svg',
-  image: 'icons/nav-library.svg',
-  audio: 'icons/nav-saved.svg',
-};
-
-// Composition words for the tray's "video + image" line.
-const COMPOSE_KEY: Record<MediaKind, MsgKey> = {
-  video: 'composeVideo',
-  image: 'composeImage',
-  audio: 'composeAudio',
-};
 
 let view: View = 'now';
 let mediaFilter: MediaFilter = 'all';
@@ -116,15 +95,6 @@ const ownPanelUrl = chrome.runtime.getURL('sidepanel/sidepanel.html');
 // grid, and a badge read back off the node would be lost. Cleared on tab switch:
 // the cart points at the outgoing tab's cards.
 const selected = new Set<string>();
-// The per-tab state below is keyed `${tabId}:${cardId|groupKey}` (tabKey):
-// content-derived ids collide across tabs (the same reel open twice), and
-// namespacing lets the state SURVIVE tab switches — wiping it on onActivated
-// used to repaint an in-flight download as idle, inviting a duplicate run.
-const tabKey = (tid: number | undefined, id: string): string => `${tid ?? -1}:${id}`;
-// A single card/Now-Playing download in flight, so its spinner and disabled
-// state survive re-render AND tab switches. Any entry — any tab's — holds this
-// panel's bulk tray closed; both paths drive the same offscreen document.
-const cardBusy = new Set<string>();
 // A bulk (tray) run is in flight IN THIS PANEL: render() must not paint over the
 // button's progress label, and a second run must not start here. Cross-window and
 // cross-card ordering is not this flag's job — the service worker serializes every
@@ -133,76 +103,19 @@ const cardBusy = new Set<string>();
 // decides who owns the button's label.
 let bulkRunning = false;
 let bulkTab: number | undefined;
-/** This panel is already driving the offscreen document — a bulk run, or any
- *  single download whichever tab started it — so the tray must not start more.
- *  The one predicate shared by the tray's enablement and runBulk's entry guard. */
-function offscreenBusyHere(): boolean {
-  return bulkRunning || cardBusy.size > 0;
-}
-// Cards whose last download attempt failed. There is no retry button in the
-// grid, so this only puts an honest tag on the card; the Now Playing button
-// turns into "Retry". The value is the specific reason (expired URL, ffmpeg
-// exit, timeout), shown as a tooltip on the tag — presence as a KEY already
-// means "last attempt failed": every producer of a reason (downloadCard,
-// runBulk) returns a non-empty string, so there is no failed-with-no-reason
-// state a separate membership Set could ever distinguish.
-const failReason = new Map<string, string>();
 
-/** Drop one tab's entries from the tab-namespaced state: its media was wiped
- *  (navigation reset), its list was cleared, or the tab closed — a later
- *  recapture of the same content-derived id must not inherit a stale failure
- *  tag or quality pick. cardBusy is deliberately left alone: an in-flight
- *  download owns its entry and removes it when it settles. */
-function pruneTabState(tid: number): void {
-  tabResetGen.set(tid, (tabResetGen.get(tid) ?? 0) + 1);
-  const prefix = `${tid}:`;
-  for (const k of [...failReason.keys()]) if (k.startsWith(prefix)) failReason.delete(k);
-  for (const k of [...qualityChoice.keys()]) if (k.startsWith(prefix)) qualityChoice.delete(k);
-}
-// Bumped by pruneTabState. A download that settles AFTER its tab's state was
-// pruned must not re-seed failReason: the failure belongs to wiped content
-// (the navigation that pruned is often what killed the merge — expired fbcdn
-// URLs), and the tag would resurface as a phantom on the next recapture of the
-// same content-derived id. Settle paths snapshot the generation at start and
-// skip their add when it moved. One counter per tab, never deleted: a closed
-// tab's bump must stay visible to a download still draining.
-const tabResetGen = new Map<number, number>();
-const resetGen = (tid: number | undefined): number => (tid === undefined ? 0 : (tabResetGen.get(tid) ?? 0));
-// Tabs closed while this panel document lived. A download or bulk queue that
-// snapshotted its tid keeps draining after the tab closes, and writing its
-// receipts would recreate the saved_ key purgeTab just removed — the serial
-// chain orders enqueued tasks, not future ones. Consulted before every addSaved.
-// Chosen quality per video (tabKey(tab, videoGroupKey) → item id), so a re-render
-// (every storage change + the 2s tick) doesn't reset the Now Playing selector to
-// the best — and a pick made in one tab never leaks into another.
-const qualityChoice = new Map<string, string>();
 // False only on a Chromium browser without the offscreen API: DASH remux is then
-// impossible, so those options degrade to a direct video-only download. Defaults
-// true; corrected once the SW's caps flag is read at startup, and again by the
-// storage listener below whenever the worker republishes it (a panel opened on
-// the same click that wakes a cold worker only ever sees the startup default
-// until then).
+// impossible, so those options degrade to a direct video-only download. Defaults true;
+// corrected once the SW's caps flag is read at startup, and again whenever the worker
+// republishes it — a panel opened on the same click that wakes a cold worker only ever
+// sees the startup default until then.
 let offscreenAvailable = true;
 
-/** A count string: `{n}` is substituted, and one is a different string entirely. */
-function tn(one: MsgKey, many: MsgKey, n: number): string {
-  return fmt(n === 1 ? one : many, { n });
-}
-
-/** "video + image" — only the kinds actually present, in a fixed order so the line
- *  doesn't reshuffle as items arrive. */
-function composeLine(kinds: Iterable<MediaKind>): string {
-  const present = new Set(kinds);
-  return (['video', 'image', 'audio'] as const)
-    .filter((k) => present.has(k))
-    .map((k) => t(COMPOSE_KEY[k]))
-    .join(' + ');
-}
-
-function byId<T extends HTMLElement>(id: string): T {
-  const el = document.getElementById(id);
-  if (!el) throw new Error(`Missing #${id}`);
-  return el as T;
+/** This panel is already driving the offscreen document — a bulk run, or any single
+ *  download whichever tab started it — so nothing here may start more. The one
+ *  predicate behind every download button's enablement and every entry guard. */
+function offscreenBusyHere(): boolean {
+  return bulkRunning || cardBusy.size > 0;
 }
 
 /** Resolve the active tab of the window this panel is docked in. */
@@ -219,139 +132,40 @@ async function resolveActiveTab(): Promise<void> {
   setTrackedTab(tab?.id);
 }
 
-function getSystemTheme(): EffectiveTheme {
-  // Keep the established dark appearance on stripped/older Chromium forks
-  // where matchMedia is unavailable. Manual light/dark still resolves above it.
-  return systemThemeQuery == null || systemThemeQuery.matches ? 'dark' : 'light';
-}
-
-/** Resolve the preference into the one effective theme painted on <html>.
- * Revision + tab guards prevent a slow read for the outgoing tab from winning
- * after a tab switch or a manual preference change. */
-// themeChoice defaults to the committed setting; the optimistic write path passes
-// the pending value so the panel reflects a theme change before the durable write
-// resolves (module-level `settings` is only reassigned once the write lands).
-async function applyEffectiveTheme(themeChoice: Settings['theme'] = settings.theme): Promise<void> {
-  const revision = ++themeUpdateRevision;
-  const trackedTab = tabId;
-
-  if (themeChoice !== 'auto') {
-    document.documentElement.dataset.theme = resolveEffectiveTheme(themeChoice, undefined, getSystemTheme());
-    return;
-  }
-
-  const facebookTheme = trackedTab === undefined ? null : await getFacebookTheme(trackedTab);
-  if (revision !== themeUpdateRevision || trackedTab !== tabId || themeChoice !== 'auto') return;
-  document.documentElement.dataset.theme = resolveEffectiveTheme(
-    themeChoice,
-    facebookTheme?.theme,
-    getSystemTheme(),
-  );
-}
-
-function setupSystemTheme(): void {
-  if (typeof window.matchMedia !== 'function') return;
-  systemThemeQuery = window.matchMedia('(prefers-color-scheme: dark)');
-  const handleSystemThemeChange = (): void => {
-    if (settings.theme === 'auto') void applyEffectiveTheme();
-  };
-  if (typeof systemThemeQuery.addEventListener === 'function') {
-    systemThemeQuery.addEventListener('change', handleSystemThemeChange);
-  } else if (typeof systemThemeQuery.addListener === 'function') {
-    systemThemeQuery.addListener(handleSystemThemeChange);
-  }
-  // Unlike content.ts's mirrored listener (which tears down through its own
-  // page-lifecycle teardown()), nothing ever unsubscribed this one — the query
-  // (and the closure it holds) lived for as long as the panel document's JS
-  // realm did. Drop it on the same best-effort pagehide hook this file already
-  // uses for flushBindingsNow, with the same addEventListener/addListener
-  // fallback the subscribe above uses.
-  window.addEventListener('pagehide', () => {
-    if (typeof systemThemeQuery?.removeEventListener === 'function') {
-      systemThemeQuery.removeEventListener('change', handleSystemThemeChange);
-    } else if (typeof systemThemeQuery?.removeListener === 'function') {
-      systemThemeQuery.removeListener(handleSystemThemeChange);
-    }
-  });
-}
-
-/** Register before the first storage read so a theme signal persisted during
- * startup cannot fall into a read/listener gap. applyEffectiveTheme's revision
- * guard makes overlapping initial/event reads settle on the newest result. */
-function setupFacebookThemeStorageListener(): void {
-  chrome.storage.session.onChanged.addListener((changes) => {
-    if (settings.theme === 'auto' && tabId !== undefined && facebookThemeKey(tabId) in changes) {
-      void applyEffectiveTheme();
-    }
-  });
-}
-
-/** Localize every static [data-i18n]/[data-i18n-title]/[data-i18n-aria] node and
- *  reflect the active language on the toggle. Dynamic nodes are (re)built by render(). */
+/** Localize every static [data-i18n]/[data-i18n-title]/[data-i18n-aria] node. Dynamic nodes are
+ *  (re)built by render(), and the Settings sheet's JS-built rows by reflectSettings — including
+ *  which language pill is lit, which only reflectSettings can decide: Auto is a choice getLang()
+ *  cannot express, since while it is on getLang() holds the browser's language, not the pick. */
 function localize(): void {
-  document.querySelectorAll<HTMLElement>('[data-i18n]').forEach((el) => {
-    const key = el.dataset.i18n as MsgKey | undefined;
-    if (key) el.textContent = t(key);
-  });
-  document.querySelectorAll<HTMLElement>('[data-i18n-title]').forEach((el) => {
-    const key = el.dataset.i18nTitle as MsgKey | undefined;
-    if (key) el.title = t(key);
-  });
-  document.querySelectorAll<HTMLElement>('[data-i18n-aria]').forEach((el) => {
-    const key = el.dataset.i18nAria as MsgKey | undefined;
-    if (key) el.setAttribute('aria-label', t(key));
-  });
-  document.querySelectorAll<HTMLButtonElement>('#lang [data-lang]').forEach((b) => {
-    const active = b.dataset.lang === getLang();
-    b.classList.toggle('is-active', active);
-    b.setAttribute('aria-pressed', String(active));
-  });
+  const nodes = document.querySelectorAll<HTMLElement>('[data-i18n], [data-i18n-title], [data-i18n-aria]');
+  for (const el of nodes) {
+    const { i18n, i18nTitle, i18nAria } = el.dataset;
+    if (i18n) el.textContent = t(i18n as MsgKey);
+    if (i18nTitle) el.title = t(i18nTitle as MsgKey);
+    if (i18nAria) el.setAttribute('aria-label', t(i18nAria as MsgKey));
+  }
   // Keep the document language in sync so screen readers announce in the right one.
   document.documentElement.lang = getLang();
 }
 
-function setupLangToggle(): void {
-  byId('lang').addEventListener('click', (e) => {
-    if (settings.followBrowserLang) return; // manual toggle inert while following the browser
-    const btn = (e.target as HTMLElement).closest<HTMLButtonElement>('[data-lang]');
-    if (!btn) return;
-    const lang: Lang = btn.dataset.lang === 'es' ? 'es' : 'en';
-    if (lang === getLang()) return;
-    setLang(lang);
-    void saveLang(lang);
-    localize();
-    void render(); // the language is a signature term; render() sees the change
-  });
-}
-
-/** Push the current settings into the sheet's controls. */
-function reflectSettings(): void {
-  byId<HTMLInputElement>('set-template').value = settings.filenameTemplate;
-  byId<HTMLInputElement>('set-subfolder').checked = settings.subfolder;
-  byId<HTMLSelectElement>('set-quality').value = settings.defaultQuality;
-  byId<HTMLInputElement>('set-direct').checked = settings.directDownload;
-  byId<HTMLInputElement>('set-followlang').checked = settings.followBrowserLang;
-  byId<HTMLSelectElement>('set-theme').value = settings.theme;
-  byId<HTMLSelectElement>('set-order').value = settings.listOrder;
-  byId<HTMLInputElement>('set-confirmclear').checked = settings.confirmClear;
-  byId<HTMLInputElement>('set-videosonly').checked = settings.videosOnly;
-  byId<HTMLSelectElement>('set-minres').value = String(settings.minResolution);
-  byId<HTMLInputElement>('set-maxitems').value = String(settings.maxItems);
-  byId<HTMLInputElement>('set-diag').checked = settings.diagEnabled;
-  // The manual EN/ES toggle is inert while the language follows the browser.
-  const langToggle = byId('lang');
-  langToggle.classList.toggle('is-disabled', settings.followBrowserLang);
-  langToggle.setAttribute('aria-disabled', String(settings.followBrowserLang));
-  langToggle.querySelectorAll<HTMLButtonElement>('[data-lang]').forEach((button) => {
-    button.disabled = settings.followBrowserLang;
-  });
+/** Auto / EN / ES, which is one control over two stored facts: whether to follow the
+ *  browser, and the manual choice underneath. Auto leaves that choice on record, so turning
+ *  Auto back off returns to the language the user actually picked. */
+async function chooseLang(choice: 'auto' | Lang): Promise<void> {
+  if (choice !== 'auto') {
+    setLang(choice);
+    await saveLang(choice);
+  }
+  // Through applySetting, so the write is durable-or-rolled-back like every other setting,
+  // and so its onCommitted re-resolves the language and repaints the sheet.
+  await applySetting({ followBrowserLang: choice === 'auto' });
 }
 
 /** Persist one setting, then re-apply anything it affects (language + re-render).
- * The rollback contract (a rejected durable write must not leave the panel
- * showing an unsaved value) lives in writeSettingOptimistically, unit-tested
- * without a DOM; this adapter only wires it to the renderer. */
-async function applySetting(patch: Partial<Settings>): Promise<void> {
+ * The rollback contract (a rejected durable write must not leave the panel showing an
+ * unsaved value) lives in writeSettingOptimistically, unit-tested without a DOM; this
+ * adapter only wires it to the sheet and the renderer. */
+async function applySetting(patch: SettingsPatch): Promise<void> {
   settings = await writeSettingOptimistically(settings, patch, {
     save: saveSettings,
     applyOptimistic: async (next) => {
@@ -359,15 +173,20 @@ async function applySetting(patch: Partial<Settings>): Promise<void> {
     },
     onRolledBack: async (previous) => {
       if ('theme' in patch) await applyEffectiveTheme(previous.theme);
-      reflectSettings();
+      reflectSettings(settings);
     },
     onError: (error) => console.error('[FaceScrap] setting write failed', error),
-    onCommitted: async () => {
+    onCommitted: async (next) => {
+      // Adopted here, not at the assignment below: `settings = await writeSettingOptimistically(…)`
+      // only lands once that promise resolves, and this hook runs inside it. Everything below
+      // reads `settings`, and applyAppearance in particular has to see the new value.
+      settings = next;
       if ('followBrowserLang' in patch) {
         setLang(await resolveLang(settings.followBrowserLang));
         localize();
       }
-      reflectSettings();
+      reflectSettings(settings);
+      applyAppearance();
       // No signature reset: every render-relevant setting is already a signature
       // term, so render() rebuilds exactly when something visible changed.
       await render();
@@ -375,288 +194,27 @@ async function applySetting(patch: Partial<Settings>): Promise<void> {
   });
 }
 
-let settingsFocusFrame: number | undefined;
-
-/** Treat Settings as the fourth panel surface and keep keyboard focus inside it. */
-function setSettingsOpen(open: boolean, restoreFocus = true): void {
-  const sheet = byId('settings');
-  const trigger = byId<HTMLButtonElement>('settings-open');
-  const nav = byId('views');
-  const hadFocus = sheet.contains(document.activeElement);
-  if (settingsFocusFrame !== undefined) {
-    window.cancelAnimationFrame(settingsFocusFrame);
-    settingsFocusFrame = undefined;
-  }
-  sheet.hidden = !open;
-  byId('app').classList.toggle('is-settings', open);
-  trigger.setAttribute('aria-expanded', String(open));
-  if (open) {
-    pressOnly(nav, trigger);
-    settingsFocusFrame = window.requestAnimationFrame(() => {
-      settingsFocusFrame = undefined;
-      if (!sheet.hidden) byId<HTMLInputElement>('set-template').focus();
-    });
-    return;
-  }
-  const route = nav.querySelector<HTMLButtonElement>(`[data-view="${view}"]`);
-  if (route != null) pressOnly(nav, route);
-  if (restoreFocus && hadFocus) trigger.focus();
-}
-
-/** Open/close the settings surface and wire every control to applySetting(). */
-function setupSettings(): void {
-  byId('settings-open').addEventListener('click', () => setSettingsOpen(true));
-  byId('settings-close').addEventListener('click', () => setSettingsOpen(false));
-  document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape' && !byId('settings').hidden) {
-      e.preventDefault();
-      setSettingsOpen(false);
-    }
-  });
-
-  const onCheck = (id: string, key: keyof Settings): void => {
-    byId<HTMLInputElement>(id).addEventListener('change', (e) => {
-      void applySetting({ [key]: (e.target as HTMLInputElement).checked } as Partial<Settings>);
-    });
-  };
-  const onSelect = (id: string, apply: (v: string) => Partial<Settings>): void => {
-    byId<HTMLSelectElement>(id).addEventListener('change', (e) => {
-      void applySetting(apply((e.target as HTMLSelectElement).value));
-    });
-  };
-
-  byId<HTMLInputElement>('set-template').addEventListener('change', (e) => {
-    void applySetting({ filenameTemplate: (e.target as HTMLInputElement).value });
-  });
-  onCheck('set-subfolder', 'subfolder');
-  onSelect('set-quality', (v) => ({ defaultQuality: v as Settings['defaultQuality'] }));
-  onCheck('set-direct', 'directDownload');
-  onCheck('set-followlang', 'followBrowserLang');
-  onSelect('set-theme', (v) => ({ theme: v as Settings['theme'] }));
-  onSelect('set-order', (v) => ({ listOrder: v as Settings['listOrder'] }));
-  onCheck('set-confirmclear', 'confirmClear');
-  onCheck('set-videosonly', 'videosOnly');
-  onSelect('set-minres', (v) => ({ minResolution: Number(v) }));
-  const maxItemsInput = byId<HTMLInputElement>('set-maxitems');
-  maxItemsInput.addEventListener('input', () => {
-    const digits = sanitizeMaxItemsInput(maxItemsInput.value);
-    if (digits !== maxItemsInput.value) maxItemsInput.value = digits;
-  });
-  maxItemsInput.addEventListener('change', () => {
-    const maxItems = parseMaxItemsInput(maxItemsInput.value);
-    if (maxItems === undefined) {
-      maxItemsInput.value = String(settings.maxItems);
-      return;
-    }
-    maxItemsInput.value = String(maxItems);
-    if (maxItems !== settings.maxItems) void applySetting({ maxItems });
-  });
-  maxItemsInput.addEventListener('keydown', (e) => {
-    if (e.key !== 'Enter') return;
-    e.preventDefault();
-    maxItemsInput.blur();
-  });
-  onCheck('set-diag', 'diagEnabled');
-
-  byId('diag-reset').addEventListener('click', () => {
-    void resetDiagCounters().then(renderDiag);
-  });
-  // Only when opened: the counters are a maintenance detail, not worth a
-  // storage read on every settings render.
-  byId('diag-details').addEventListener('toggle', () => {
-    if ((byId('diag-details') as HTMLDetailsElement).open) void renderDiag();
-  });
-
-  reflectSettings();
-}
-
-/** Counter names are printed RAW (jsonLineTooLarge, …) rather than translated:
- *  they are maintenance terms whose whole value is grepping straight to the
- *  discard site in the code, and a localized label would break that link. */
-async function renderDiag(): Promise<void> {
-  const counters = await getDiagCounters();
-  const rows = Object.entries(counters).filter(([, n]) => n > 0);
-  const pre = byId('diag-counters');
-  if (rows.length === 0) {
-    pre.textContent = t('diagEmpty');
-    return;
-  }
-  const width = Math.max(...rows.map(([reason]) => reason.length));
-  pre.textContent = rows
-    .sort((a, b) => b[1] - a[1])
-    .map(([reason, n]) => `${reason.padEnd(width)}  ${n}`)
-    .join('\n');
-}
-
-/** Seconds → "M:SS" (or "H:MM:SS" past an hour). */
-function formatDuration(sec: number): string {
-  const s = Math.round(sec);
-  const pad = (n: number): string => String(n).padStart(2, '0');
-  const h = Math.floor(s / 3600);
-  const m = Math.floor((s % 3600) / 60);
-  return h > 0 ? `${h}:${pad(m)}:${pad(s % 60)}` : `${m}:${pad(s % 60)}`;
-}
-
-function filenameFor(item: MediaItem): string {
-  return downloadFilename(item, settings);
-}
+// ── Downloads ─────────────────────────────────────────────────────────────────
 
 /** The two panel-only inputs shared/video-options.ts takes as parameters: the
- *  audio-stripping setting, and the on-screen cover cache, which only exists in
- *  this process. */
-function videoOptionsContext(tid: number | undefined): { stripAudio: boolean; groupCover: (gkey: string) => string | undefined } {
+ *  audio-stripping setting (see VideoOptionsContext there for why it is re-applied
+ *  per download) and the on-screen cover cache, which only exists in this process. */
+function videoOptionsContext(tid: number | undefined): {
+  stripAudio: boolean;
+  groupCover: (gkey: string) => string | undefined;
+} {
   return {
-    stripAudio: stripAudio(),
+    stripAudio: !offscreenAvailable || settings.directDownload,
     groupCover: (gkey) => (tid !== undefined ? getGroupCover(tid, gkey) : undefined),
   };
 }
 
-/** Whether downloads should open the browser's Save-As dialog (quality = 'ask'). */
-function askOnSave(): boolean {
-  return settings.defaultQuality === 'ask';
-}
-
-/** Append " · tag" to a card's meta line. The separator is the caller's because
- *  the meta line owns its own punctuation. */
-function appendTag(meta: HTMLElement, text: string, cls?: string, title?: string): void {
-  const s = document.createElement('span');
-  s.className = cls ? `tag ${cls}` : 'tag';
-  s.textContent = text;
-  if (title) s.title = title;
-  meta.append(' · ', s);
-}
-
-/** DASH pairs lose their audio track — and with it the remux — when the browser
- *  can't remux at all, or the user asked for direct downloads. Everything
- *  downstream already handles audio-less items: they pick up the "may lack audio"
- *  tag. It is a setting, not a property of the item, so it has to be re-applied
- *  wherever a stored item is turned back into a download. */
-function stripAudio(): boolean {
-  return !offscreenAvailable || settings.directDownload;
-}
-
-/** Remux a DASH pair via the offscreen doc. The SW dedups by track pair. Resolves
- *  either way — a bulk run must survive one bad item — and reports whether it
- *  landed. Failure/saved bookkeeping is the caller's: it is keyed by CARD, and an
- *  item does not know which card is downloading it. */
-// DASH_UI_IDLE_MS (shared, messages.ts) is a UI hang backstop only — it fires
-// if the SW dies without closing the message port. Correctness timeouts live in
-// the SW. It counts IDLE time, not elapsed: the worker forwards mux progress
-// (FACESCRAP_MUX_PROGRESS) and every report restarts this clock, so a download
-// that legitimately runs for many minutes is never tagged failed here while the
-// worker is still finishing it — which is exactly what a fixed deadline did.
-// Jobs are serialized worker-side, and a queued job reports no progress yet;
-// the window is wide enough to cover that wait, and offscreenBusyHere() gates
-// every download entry point so this panel can only ever have one job pending.
-
-/** Beat function of the download currently awaiting a merge, if any. Only one
- *  can exist at a time (see offscreenBusyHere), so a single slot suffices. */
-let muxBeat: (() => void) | null = null;
-/** Key (dashDownloadKey) of the DASH job THIS panel is currently waiting on, and
- *  the function that rebases its hard-cap clock once that job actually starts
- *  (see withRearmableHardCap, DASH_UI_HARD_CAP_MS in messages.ts). Matching by
- *  key means a FACESCRAP_DASH_JOB_STARTED for some OTHER window's queued job
- *  can never rebase this wait — unlike FACESCRAP_MUX_PROGRESS below, which
- *  intentionally beats on ANY job's progress (fine for an idle timer, wrong
- *  for a hard-cap rebase). Only one job can be pending here at a time
- *  (offscreenBusyHere), so a single slot suffices, same as muxBeat. */
-let pendingDashJobKey: string | null = null;
-let armDashJobHardCap: (() => void) | null = null;
-chrome.runtime.onMessage.addListener((msg) => {
-  const m = msg as { type?: string; key?: unknown } | undefined;
-  if (m?.type === 'FACESCRAP_MUX_PROGRESS') {
-    muxBeat?.();
-  } else if (m?.type === 'FACESCRAP_DASH_JOB_STARTED' && m.key === pendingDashJobKey) {
-    armDashJobHardCap?.();
-  }
-});
-
-async function startDashDownload(tid: number, item: MediaItem, receipt: SavedEntry): Promise<string | null> {
-  const audioUrl = item.audioUrl;
-  if (audioUrl == null) return t('errNoAudioTrack'); // callers gate on audioUrl; narrow it for the typed message
-  const filename = filenameFor(item);
-  const saveAs = askOnSave();
-  // Same fields, same shape as service-worker.ts's own dashDownloadKey(request)
-  // call in downloadDash() — computing it here lets this wait match its OWN
-  // FACESCRAP_DASH_JOB_STARTED signal (see DASH_UI_HARD_CAP_MS, messages.ts)
-  // without any extra round trip to ask the worker what its key was.
-  const key = dashDownloadKey({ tabId: tid, receiptId: receipt.id, videoUrl: item.url, audioUrl, filename, saveAs });
-  try {
-    const guarded = withRearmableHardCap(
-      chrome.runtime.sendMessage({
-        type: 'FACESCRAP_DOWNLOAD_DASH',
-        tabId: tid,
-        videoUrl: item.url,
-        audioUrl,
-        filename,
-        saveAs,
-        receipt,
-      } satisfies DownloadDashMsg),
-      DASH_UI_IDLE_MS,
-      DASH_UI_HARD_CAP_MS,
-      t('errMergeTimedOut'),
-    );
-    muxBeat = guarded.beat;
-    pendingDashJobKey = key;
-    armDashJobHardCap = guarded.armStarted;
-    let r: DownloadDashResponse | undefined;
-    try {
-      r = (await guarded.promise) as DownloadDashResponse | undefined;
-    } finally {
-      muxBeat = null;
-      armDashJobHardCap = null;
-      pendingDashJobKey = null;
-    }
-    if (!r?.ok) throw new Error(r?.error || t('errMergeFailed'));
-    return null;
-  } catch (e: unknown) {
-    console.error('[FaceScrap]', e);
-    return (e as Error)?.message || t('errMergeFailed');
-  }
-}
-
-/** Direct download of a progressive/complete media URL (already has audio).
- *  Resolves either way, for the same reason as startDashDownload. Returns null
- *  on success, or the failure reason to surface on the card. */
-async function startDirectDownload(tid: number, item: MediaItem, receipt: SavedEntry): Promise<string | null> {
-  try {
-    const response = (await chrome.runtime.sendMessage({
-      type: 'FACESCRAP_DOWNLOAD_DIRECT',
-      tabId: tid,
-      url: item.url,
-      filename: filenameFor(item),
-      saveAs: askOnSave(),
-      receipt,
-    } satisfies DownloadDirectMsg)) as DownloadDirectResponse | undefined;
-    if (!response?.ok) throw new Error(response?.error || t('errDownloadFailed'));
-    return null;
-  } catch (e) {
-    console.error('[FaceScrap]', e);
-    return (e as Error)?.message || t('errDownloadFailed');
-  }
-}
-
-/** Freeze a download receipt at click time: the download can await minutes
- *  (DASH_UI_TIMEOUT_MS), during which a tab switch or navigation wipe may
- *  rebuild `cardsById` with other content — the receipt must describe what was
- *  actually saved. */
+/** Freeze a download receipt at click time: the download can await minutes, during
+ *  which a tab switch or navigation wipe may rebuild `cardsById` with other content —
+ *  the receipt must describe what was actually saved. */
 function savedEntryFor(cardId: string, item: MediaItem): SavedEntry {
   const card = cardsById.get(cardId);
   return savedEntryForItem(cardId, item, { thumbUrl: card?.thumbUrl, durationSec: card?.durationSec });
-}
-
-/** The one download core shared by single-card and bulk paths. Both routes go
- * through the worker, which waits for Chrome's terminal state and persists the
- * receipt only on `complete`; closing this panel cannot lose that bookkeeping. */
-async function downloadOne(
-  tid: number | undefined,
-  item: MediaItem,
-  receipt: SavedEntry,
-): Promise<string | null> {
-  if (tid === undefined) return t('errInvalidTab');
-  return item.audioUrl != null
-    ? startDashDownload(tid, item, receipt)
-    : startDirectDownload(tid, item, receipt);
 }
 
 /** Download one item (a card's or Now Playing's chosen target). Sequential with
@@ -676,84 +234,25 @@ async function downloadCard(cardId: string, item: MediaItem): Promise<void> {
   const gen = resetGen(tid);
   cardBusy.add(bkey);
   failReason.delete(bkey);
-  // try/finally, matching runBulk: `render()` reaches an unguarded
-  // chrome.storage.session.get, so a dead extension context ('Extension context
-  // invalidated' — reachable in a long-lived panel, more so under
-  // load-unpacked) would throw straight past the cleanup below. Since
-  // offscreenBusyHere() is global, leaking one busy key disables EVERY download
-  // button in the panel until it is reopened, and pruneTabState deliberately
-  // never clears cardBusy.
+  // try/finally is mandatory, not tidiness: render() reaches an unguarded
+  // storage.session.get, and a dead extension context throws straight past the
+  // cleanup. offscreenBusyHere() is global, so one leaked busy key disables EVERY
+  // download button until the panel is reopened — and pruneTabState never clears it.
   try {
     await render(); // busy/failed are signature terms; render() sees them flip
-    const err = await downloadOne(tid, item, receipt);
-    const ok = err === null;
-    // Busy/failed are tab-namespaced, so this bookkeeping can never tag another
-    // tab's card (the old clear-on-switch model instead dropped it, leaving a
-    // phantom busy entry). The failure tag additionally checks the reset
-    // generation: a prune during the await (nav reset, Clear, tab close) means
-    // this failure belongs to wiped content and must not re-seed the tag it just
-    // removed.
-    if (!ok && resetGen(tid) === gen) {
-      if (err) failReason.set(bkey, err);
-    }
+    const err = await downloadOne(tid, item, receipt, settings);
+    // The reset generation gates the tag: a prune during the await (nav reset,
+    // Clear, tab close) means this failure belongs to content that is now wiped.
+    if (err && resetGen(tid) === gen) failReason.set(bkey, err);
   } finally {
-    // The repaint always targets the panel's VIEWED tab, not `tid`: render()
-    // reads module `tabId` itself, so a settle for a backgrounded tab still has
-    // to run it — offscreenBusyHere() is global, and a viewed grid's per-card
-    // buttons must unstick the moment it flips even though this bookkeeping
-    // lives under the download's own tab.
+    // The repaint targets the VIEWED tab, not `tid`: offscreenBusyHere() is global,
+    // so a settle on a backgrounded tab still has to unstick the visible buttons.
     cardBusy.delete(bkey);
     await render();
   }
 }
 
 // ── Card model (Library / Saved grid) ────────────────────────────────────────
-
-/** One grid card: an image/audio item, or a whole video collapsed to the single
- *  representation the quality setting picks. */
-interface Card {
-  /** The card's identity in `selected`, `failReason`, `cardBusy` and the saved
-   *  list. For a video this is the GROUP key, never `target.id`: which
-   *  representation wins is recomputed every render, so it moves when a better one
-   *  is captured or when the quality/direct-download settings flip — and a pick, a
-   *  failure tag or a saved mark keyed to it would evaporate under a card still on
-   *  screen. Prefixed because a group key and an item id are different namespaces
-   *  that must never be able to collide. */
-  id: string;
-  /** Newest capture in the card, for the list order. */
-  at: number;
-  kind: MediaKind;
-  source: MediaSource;
-  /** Absent when nothing here is downloadable (an MSE blob:, a non-fbcdn URL). */
-  target?: MediaItem;
-  thumbUrl?: string;
-  /** mediaId of thumbUrl — lets doRender drop an image card that is only a shown
-   *  video's cover. */
-  thumbId?: string;
-  resLabel?: string;
-  durationSec?: number;
-  /** The target is a video-only DASH track: it will download muted. */
-  mayLackAudio: boolean;
-  /** This card is what the tab is playing right now. */
-  live: boolean;
-  /** Hidden from the LIBRARY grid by a declutter setting (videosOnly,
-   *  minResolution). A flag, not a drop: the Saved history and the cart must
-   *  keep seeing the card. */
-  libraryHidden?: boolean;
-  /** This image is the cover of a Library-visible video: a dupe under "All"
-   *  (the video card already wears it), but the real, downloadable item under
-   *  the explicit "Images" sub-filter — hiding it there would make a captured
-   *  cover unreachable in every view. */
-  coverOfShown?: boolean;
-  /** A Saved receipt with no live capture behind it (media_ was wiped). Renders
-   *  with honest disabled controls; revives when a replay re-captures the same
-   *  content-derived id. */
-  stale?: boolean;
-}
-
-/** Card-id scheme — a persisted format: saved_ receipts store these ids, so it
- *  changes only with a migration (see SavedEntry in storage.ts). Prefixed
- *  because group keys and item ids are namespaces that must never collide. */
 
 function buildVideoCard(group: MediaItem[], tid: number | undefined, playing: Set<string>): Card {
   const { options, gkey, thumbUrl, durationSec } = videoOptions(group, videoOptionsContext(tid));
@@ -773,6 +272,15 @@ function buildVideoCard(group: MediaItem[], tid: number | undefined, playing: Se
   };
 }
 
+/** Does the minimum-resolution setting hide this video group? One predicate, because
+ *  the Library grid and Now Playing must agree on what it hides. A group with no
+ *  known height is never hidden — an unmeasured video is not a low-quality one. */
+function belowMinResolution(group: MediaItem[]): boolean {
+  if (settings.minResolution <= 0) return false;
+  const maxH = Math.max(0, ...group.map((i) => i.height ?? 0));
+  return maxH > 0 && maxH < settings.minResolution;
+}
+
 /** Card for a non-video item. Videos always go through buildVideoCard — doRender
  *  splits them off before reaching here. */
 function buildItemCard(item: MediaItem, playing: Set<string>): Card {
@@ -789,276 +297,7 @@ function buildItemCard(item: MediaItem, playing: Set<string>): Card {
   };
 }
 
-/** The card's second line: "0:14 · 720p" for a video, "Photo" (with dimensions
- *  when known) for an image, plus any tag it has earned. */
-function cardMeta(card: Card): HTMLElement {
-  const meta = document.createElement('p');
-  meta.className = 'card-meta';
-  let base: string;
-  if (card.kind === 'video') {
-    const parts = [
-      card.durationSec != null ? formatDuration(card.durationSec) : undefined,
-      card.resLabel ?? undefined,
-    ].filter((p): p is string => p != null);
-    base = parts.length > 0 ? parts.join(' · ') : t('kindVideo');
-  } else if (card.kind === 'image') {
-    base = t('cardPhoto');
-  } else {
-    base = t('kindAudio');
-  }
-  meta.textContent = base;
-
-  if (card.target == null) appendTag(meta, t(card.stale ? 'tagSavedGone' : 'unavailable'));
-  if (card.kind === 'audio') appendTag(meta, t('tagAudioTrack'));
-  if (card.mayLackAudio) appendTag(meta, t('tagMayLackAudio'));
-  // No retry button in the grid, so a dead download would otherwise vanish
-  // silently. The pick stays put; the card's own Download button re-tries.
-  // Never on a stub: a receipt IS a success, and a failure recorded under the
-  // same content-derived id belongs to the live card, not the history row.
-  if (!card.stale && failReason.has(tabKey(tabId, card.id)))
-    appendTag(meta, t('tagFailed'), 'tag-fail', failReason.get(tabKey(tabId, card.id)));
-  return meta;
-}
-
-const PORTRAIT_COVER_MAX_ASPECT = 0.7;
-const PREVIEW_PLAY_SIZE = 50;
-const CARD_PLAY_SIZE = 30;
-const PLAY_CLEARANCE = 12;
-let playResizeObserver: ResizeObserver | undefined;
-
-interface MediaPlayTarget {
-  container: HTMLElement,
-  image: HTMLImageElement | null,
-  obstruction: HTMLElement | null,
-  badgeSize: number,
-}
-
-interface MediaPlayMeasurement {
-  container: HTMLElement;
-  centerY: number | null;
-}
-
-function measureMediaPlay(target: MediaPlayTarget): MediaPlayMeasurement {
-  const { container, image, obstruction, badgeSize } = target;
-  const frame = container.getBoundingClientRect();
-  const obstructionRect = obstruction?.getBoundingClientRect();
-  const centerY = computePlayCenterY({
-    frameWidth: frame.width,
-    frameHeight: frame.height,
-    mediaWidth: image?.naturalWidth,
-    mediaHeight: image?.naturalHeight,
-    fit: image == null || image.classList.contains('media-fit-cover') ? 'cover' : 'contain',
-    unobscuredBottom:
-      obstructionRect != null && obstructionRect.height > 0 ? obstructionRect.top - frame.top : undefined,
-    badgeSize,
-    clearance: PLAY_CLEARANCE,
-  });
-
-  return { container, centerY };
-}
-
-function applyMediaPlay({ container, centerY }: MediaPlayMeasurement): void {
-  container.classList.toggle('play-obstructed', centerY == null);
-  if (centerY == null) container.style.removeProperty('--play-y');
-  else container.style.setProperty('--play-y', `${centerY.toFixed(2)}px`);
-}
-
-function describeMediaPlay(container: HTMLElement): MediaPlayTarget | null {
-  if (!container.isConnected) return null;
-  if (container.id === 'now-preview') {
-    return {
-      container,
-      image: container.querySelector<HTMLImageElement>(':scope > img:not(.thumb-bg)'),
-      obstruction: document.getElementById('now-title'),
-      badgeSize: PREVIEW_PLAY_SIZE,
-    };
-  }
-  if (!container.matches('.card-thumb.is-video')) return null;
-  return {
-    container,
-    image: container.querySelector<HTMLImageElement>(':scope > img:not(.thumb-bg)'),
-    obstruction: container.closest('.card')?.querySelector<HTMLElement>('.card-title') ?? null,
-    badgeSize: CARD_PLAY_SIZE,
-  };
-}
-
-function updatePlayPositions(requested: readonly HTMLElement[] | null): void {
-  const containers =
-    requested ??
-    [
-      document.getElementById('now-preview'),
-      ...document.querySelectorAll<HTMLElement>('.card-thumb.is-video'),
-    ].filter((element): element is HTMLElement => element instanceof HTMLElement);
-  const targets = containers
-    .map(describeMediaPlay)
-    .filter((target): target is MediaPlayTarget => target != null);
-  // All geometry reads complete before any class/style mutation, preventing a
-  // read-write-read layout cascade during global resize passes.
-  const measurements = targets.map(measureMediaPlay);
-  measurements.forEach(applyMediaPlay);
-}
-
-const playPositionBatcher = createPlayPositionBatcher<HTMLElement>(
-  (callback) => window.requestAnimationFrame(callback),
-  updatePlayPositions,
-);
-
-function schedulePlayPositions(container?: HTMLElement): void {
-  playPositionBatcher.schedule(container);
-}
-
-function setupPlayPositioning(): void {
-  playResizeObserver = new ResizeObserver(() => schedulePlayPositions());
-  for (const element of [
-    document.getElementById('now-preview'),
-    document.querySelector('.now-overlay'),
-    document.getElementById('list'),
-  ]) {
-    if (element instanceof Element) playResizeObserver.observe(element);
-  }
-  window.addEventListener('resize', () => schedulePlayPositions());
-  void document.fonts.ready.then(() => schedulePlayPositions());
-  schedulePlayPositions();
-}
-
-/** Keep Story-like portrait art immersive, but preserve the full composition
- *  of square, 4:5 and landscape posts. The blurred sibling fills any bars. */
-function applyMediaFit(image: HTMLImageElement, container: HTMLElement): void {
-  if (image.naturalWidth <= 0 || image.naturalHeight <= 0) return;
-  image.classList.toggle('media-fit-cover', image.naturalWidth / image.naturalHeight <= PORTRAIT_COVER_MAX_ASPECT);
-  schedulePlayPositions(container);
-}
-
-/** Blurred cover-fit underlay + sharp contain-fit image: the thumbnail pair
- *  shared by every preview surface (.card-thumb, #now-preview) so a vertical
- *  story shows whole instead of cropped. `container` is what applyMediaFit
- *  measures against once the sharp image loads. `onLoad`/`onError` let each
- *  call site layer its own behaviour on top of the shared load/error wiring —
- *  the grid's icon fallback, Now Playing's live resolution readout — without
- *  re-diverging the two copies this replaces. */
-function buildThumbPair(
-  url: string,
-  container: HTMLElement,
-  options: { lazy?: boolean; onLoad?: (img: HTMLImageElement) => void; onError?: () => void } = {},
-): { bg: HTMLImageElement; img: HTMLImageElement } {
-  const bg = document.createElement('img');
-  bg.className = 'thumb-bg';
-  bg.alt = '';
-  if (options.lazy) bg.loading = 'lazy';
-  bg.addEventListener('error', () => bg.remove());
-
-  const img = document.createElement('img');
-  img.alt = '';
-  if (options.lazy) img.loading = 'lazy';
-  img.addEventListener('load', () => {
-    applyMediaFit(img, container);
-    options.onLoad?.(img);
-  });
-  img.addEventListener('error', () => {
-    img.remove();
-    bg.remove();
-    options.onError?.();
-  });
-  bg.src = url;
-  img.src = url;
-  return { bg, img };
-}
-
-function renderCard(card: Card): HTMLElement {
-  const el = document.createElement('article');
-  el.className = 'card';
-  if (card.live) el.classList.add('is-live');
-
-  const thumb = document.createElement('div');
-  thumb.className = 'card-thumb';
-  if (card.kind === 'video') thumb.classList.add('is-video');
-
-  // The fallback is an external SVG mask, never `thumb.textContent`: the pick and
-  // download controls live inside the thumb and must survive a broken preview.
-  const icon = document.createElement('span');
-  icon.className = 'kind-fallback';
-  icon.style.setProperty('--kind-icon', `url("${KIND_ICON[card.kind]}")`);
-  const showIcon = (): void => {
-    thumb.classList.remove('is-video'); // the play badge is ::after on .is-video
-    thumb.prepend(icon);
-  };
-
-  if (card.thumbUrl != null) {
-    // Blurred cover-fit underlay + sharp contain-fit image: vertical stories
-    // show whole in the portrait thumb instead of cropped (see .card-thumb).
-    const { bg, img } = buildThumbPair(card.thumbUrl, thumb, { lazy: true, onError: showIcon });
-    thumb.append(bg, img);
-  } else {
-    showIcon();
-  }
-
-  // Selection check (top-right) — feeds the tray.
-  const pick = document.createElement('button');
-  pick.className = 'pick';
-  pick.type = 'button';
-  pick.setAttribute('aria-pressed', String(selected.has(card.id)));
-  if (card.target != null) {
-    pick.title = t('selectItem');
-    pick.setAttribute('aria-label', t('selectItem'));
-    pick.addEventListener('click', () => {
-      if (selected.has(card.id)) selected.delete(card.id);
-      else selected.add(card.id);
-      // Paint in place instead of re-rendering: a rebuild would tear this very
-      // button out from under the click and drop keyboard focus with it.
-      pick.setAttribute('aria-pressed', String(selected.has(card.id)));
-      paintTray();
-    });
-  } else {
-    // Two distinct honest excuses: a stub is a downloaded receipt whose capture
-    // is gone (replaying revives it); anything else is undownloadable media.
-    pick.disabled = true;
-    const why = t(card.stale ? 'titleSavedGone' : 'titleBlobUnavailable');
-    pick.title = why;
-    pick.setAttribute('aria-label', why);
-  }
-  thumb.appendChild(pick);
-
-  // Per-card download (bottom-right) — downloads this one immediately.
-  const dl = document.createElement('button');
-  dl.className = 'card-dl';
-  dl.type = 'button';
-  const busy = cardBusy.has(tabKey(tabId, card.id));
-  if (card.target != null) {
-    dl.title = t('downloadItem');
-    dl.setAttribute('aria-label', t('downloadItem'));
-    dl.classList.toggle('busy', busy);
-    // Any in-flight download gates every button (not just this card's): the SW
-    // serializes jobs, so a stack of singles would outrun the UI backstop.
-    dl.disabled = offscreenBusyHere();
-    const target = card.target;
-    dl.addEventListener('click', () => void downloadCard(card.id, target));
-  } else {
-    dl.disabled = true;
-    dl.title = t(card.stale ? 'titleSavedGone' : 'titleBlobUnavailable');
-    dl.setAttribute('aria-label', t(card.stale ? 'tagSavedGone' : 'unavailable'));
-  }
-  thumb.appendChild(dl);
-
-  const title = document.createElement('h3');
-  title.className = 'card-title';
-  title.textContent = t(presentationKey(card.kind, card.source));
-
-  el.append(thumb, title, cardMeta(card));
-  return el;
-}
-
 // ── Now Playing model ─────────────────────────────────────────────────────────
-
-interface NowState {
-  id: string; // the card id (v:gkey / i:id), so a Now Playing save shows in the grid
-  kind: MediaKind;
-  source: MediaSource;
-  thumbUrl?: string;
-  durationSec?: number;
-  pieces: number; // total captured pieces in this post
-  options: MediaItem[]; // quality options (video); a single entry for image/audio
-  gkey: string; // qualityChoice key
-}
 
 /** The playing item, focused. Prefers a playing video group (with its full quality
  *  ladder); falls back to a playing image. Null when nothing downloadable plays. */
@@ -1081,12 +320,7 @@ function buildNowState(
   if (playingVideo) {
     const key = videoGroupKey(playingVideo);
     const group = groups.get(key) ?? [playingVideo];
-    // The declutter settings apply here exactly as in the Library grid — the
-    // two views must agree on what the minimum-resolution filter hides.
-    if (settings.minResolution > 0) {
-      const maxH = Math.max(0, ...group.map((i) => i.height ?? 0));
-      if (maxH > 0 && maxH < settings.minResolution) return null;
-    }
+    if (belowMinResolution(group)) return null;
     const { options, gkey, thumbUrl, durationSec } = videoOptions(group, videoOptionsContext(tid));
     if (options.length === 0) return null;
     return {
@@ -1129,111 +363,6 @@ function buildNowState(
   };
 }
 
-/** Format the Now Playing / card download label, e.g. "Download MP4 · 1080p". */
-function downloadLabel(target: MediaItem): string {
-  const ext = fileExtensionFor(target).toUpperCase();
-  const res = resolutionOf(target).label;
-  const label = target.kind === 'video' && res !== 'Video' ? `${ext} · ${res}` : ext;
-  return fmt('downloadKind', { label });
-}
-
-/** Paint the Now Playing view from a NowState. Wires the quality selector (which
- *  repaints the metadata + button in place) and the single Download button. */
-function paintNow(now: NowState | null): void {
-  byId('now-empty').hidden = now != null;
-  byId('now-content').hidden = now == null;
-  byId('now-live').hidden = now == null;
-  if (now == null) return;
-
-  const isImage = now.kind === 'image';
-  // Chosen representation: the user's pick for this video in this tab, else the setting.
-  let target =
-    now.options.find((o) => o.id === qualityChoice.get(tabKey(tabId, now.gkey))) ?? defaultTarget(now.options, settings.defaultQuality)!;
-  let imageResolutionLabel = imageDimensionsLabel(target);
-  const paintImageResolution = (image: HTMLImageElement): void => {
-    if (now.kind !== 'image' || !image.isConnected || image.naturalWidth <= 0 || image.naturalHeight <= 0) return;
-    imageResolutionLabel = `${image.naturalWidth}×${image.naturalHeight}`;
-    byId('m-resolution').textContent = imageResolutionLabel;
-  };
-
-  const preview = byId('now-preview');
-  preview.classList.toggle('is-video', now.kind === 'video');
-  // A real poster as an <img> pair — a blurred cover-fit underlay plus the
-  // sharp contain-fit image, so a vertical story shows whole instead of
-  // cropped (an expired/blocked fbcdn URL falls back to the gradient wash on
-  // error); rebuilt each paint.
-  preview.querySelectorAll('img').forEach((el) => el.remove());
-  if (now.thumbUrl != null) {
-    const { bg, img } = buildThumbPair(now.thumbUrl, preview, { onLoad: paintImageResolution });
-    preview.prepend(bg, img);
-    if (img.complete) paintImageResolution(img);
-  }
-  byId('now-badge').textContent = t(presentationKey(now.kind, now.source));
-  byId('now-dur').textContent = isImage ? '' : now.durationSec != null ? formatDuration(now.durationSec) : '';
-
-  byId('now-title').textContent = t(presentationKey(now.kind, now.source));
-  // The post-piece count belongs to the view heading; the line under the title
-  // describes the media itself ("Video · downloadable").
-  byId('now-pieces').textContent = tn('piecesInPostOne', 'piecesInPost', now.pieces);
-  byId('now-sub').textContent = `${t(KIND_KEY[now.kind])} · ${t('nowDownloadable')}`;
-
-  byId('m-format').textContent = fileExtensionFor(target).toUpperCase();
-  byId('m-duration-metric').hidden = isImage;
-  // Hiding a cell does not remove its grid column, so the track count has to
-  // follow the visible cells or the card keeps an empty third and an off-centre
-  // divider on images.
-  byId('metrics').classList.toggle('is-two-up', isImage);
-  byId('m-duration').textContent = isImage ? '' : now.durationSec != null ? formatDuration(now.durationSec) : '—';
-
-  const dl = byId<HTMLButtonElement>('now-download');
-  const paintMeta = (): void => {
-    byId('m-resolution').textContent =
-      target.kind === 'video' ? resolutionOf(target).label : imageResolutionLabel ?? '—';
-    const busy = cardBusy.has(tabKey(tabId, now.id));
-    dl.disabled = offscreenBusyHere(); // same gate as the grid: one download at a time
-    dl.textContent = busy
-      ? target.audioUrl != null
-        ? t('downloadMerging')
-        : t('downloadSaving')
-      : failReason.has(tabKey(tabId, now.id))
-        ? t('downloadRetry')
-        : downloadLabel(target);
-  };
-
-  // Quality selector — a native select, present for every video (disabled when
-  // there is only one representation) and hidden for images/audio.
-  const quality = byId('now-quality');
-  const select = byId<HTMLSelectElement>('now-qselect');
-  quality.hidden = now.kind !== 'video';
-  if (now.kind === 'video') {
-    byId('now-qcount').textContent = now.options.length > 1
-      ? tn('qualityOptionsOne', 'qualityOptions', now.options.length)
-      : '';
-    byId('now-qcount').hidden = now.options.length <= 1;
-    quality.classList.toggle('is-single-option', now.options.length <= 1);
-    select.classList.toggle('is-single-option', now.options.length <= 1);
-    select.textContent = '';
-    for (const opt of now.options) {
-      const o = document.createElement('option');
-      o.value = opt.id;
-      o.textContent = resolutionOf(opt).label;
-      select.appendChild(o);
-    }
-    select.value = target.id;
-    select.disabled = now.options.length <= 1;
-    select.onchange = (): void => {
-      target = now.options.find((o) => o.id === select.value) ?? now.options[0];
-      qualityChoice.set(tabKey(tabId, now.gkey), target.id);
-      paintMeta();
-      finishQualityPickerInteraction();
-    };
-  }
-
-  dl.onclick = (): void => void downloadCard(now.id, target);
-  paintMeta();
-  schedulePlayPositions();
-}
-
 // ── Selection tray (Library / Saved) ──────────────────────────────────────────
 
 // The last render's cards, keyed by card id. The pick handler and the bulk run
@@ -1242,11 +371,9 @@ function paintNow(now: NowState | null): void {
 const cardsById = new Map<string, Card>();
 // The grid cards currently on screen, for the Select all toggle.
 let visibleCards: Card[] = [];
-// Whether the last render saw any live card. The live bit decays by CLOCK
-// (selectPlaying's freshness/grace windows), not by storage event — playback
-// stopping on a quiet tab writes nothing — so while any card glows, the 2s
-// tick must keep re-evaluating even in the grid views or the ring never
-// turns off. Updated every doRender, before any early return.
+// Whether the last render saw a live card. The live bit decays by CLOCK, not by
+// storage event, so while any card glows the tick has to keep re-evaluating even in
+// the grid views or the ring never turns off.
 let anyLiveCards = false;
 
 /** Paint the tray, which reads `selected`. Deliberately NOT part of the render
@@ -1280,6 +407,16 @@ function paintTray(): void {
   syncSelectAll();
 }
 
+/** Toggle one card's pick and repaint the tray. Returns the new state for the button
+ *  that was clicked, which repaints itself rather than forcing a grid rebuild. */
+function togglePick(cardId: string): boolean {
+  const picked = !selected.has(cardId);
+  if (picked) selected.add(cardId);
+  else selected.delete(cardId);
+  paintTray();
+  return picked;
+}
+
 /** Downloadable visible cards and whether every one is already picked — shared
  *  by the Select-all label and its click handler so the two can't drift. */
 function pickableState(): { targets: Card[]; allPicked: boolean } {
@@ -1298,14 +435,11 @@ function syncSelectAll(): void {
  *  counts a queue, not a race. */
 async function runBulk(): Promise<void> {
   if (offscreenBusyHere()) return;
-  // Snapshot the tab. The queue below can await minutes per item, and onActivated
-  // flips module `tabId` on a tab switch — these picks, and the saved marks they
-  // earn, belong to the tab that made them.
+  // Snapshot the tab, and freeze every receipt now: the queue can await minutes per
+  // item, and by an item's turn a tab switch or a navigation wipe may have rebuilt
+  // cardsById. These picks belong to the tab that made them.
   const tid = tabId;
   const gen = resetGen(tid);
-  // Receipts freeze at queue-build time too: by the time an item's turn comes,
-  // a navigation wipe may have rebuilt cardsById empty and the receipt would
-  // lose its thumb/duration.
   const queue: { id: string; item: MediaItem; receipt: SavedEntry }[] = [];
   for (const id of selected) {
     const target = cardsById.get(id)?.target;
@@ -1327,29 +461,25 @@ async function runBulk(): Promise<void> {
       if (bulkTab === tabId && view !== 'now') {
         btn.textContent = fmt('bulkBusy', { i: i + 1, n: queue.length });
       }
-      const err = await downloadOne(tid, item, receipt);
+      const err = await downloadOne(tid, item, receipt, settings);
       if (err === null) done.push(id);
       else failed.push({ id, err });
     }
   } finally {
     bulkRunning = false;
     bulkTab = undefined;
-    // Unpick only what landed — a failure keeps its pick, so pressing Download
-    // again retries exactly the items that didn't make it — and only while the
-    // panel still shows the tab that ran this queue: `selected` is NOT
-    // tab-namespaced and content-derived ids collide across tabs, so after a
-    // switch these deletes would silently empty picks the user just made in the
-    // OTHER tab. Failure tags are tab-namespaced (always safe to delete), but
-    // their adds check the reset generation: a nav reset/Clear mid-queue means
-    // the failures belong to wiped content — see tabResetGen.
+    // Unpick only what landed, so pressing Download again retries exactly what
+    // didn't — and only while the panel still shows this queue's tab: `selected` is
+    // NOT tab-namespaced and content-derived ids collide across tabs, so after a
+    // switch these deletes would empty picks just made in the OTHER tab. Failure
+    // tags are tab-namespaced and always safe to delete; adding one checks the reset
+    // generation (see tabResetGen).
     for (const id of done) {
       if (tid === tabId) selected.delete(id);
       failReason.delete(tabKey(tid, id));
     }
     if (resetGen(tid) === gen) {
-      for (const { id, err } of failed) {
-        failReason.set(tabKey(tid, id), err);
-      }
+      for (const { id, err } of failed) failReason.set(tabKey(tid, id), err);
     }
     if (tid === tabId) {
       lastRenderSig = ''; // the saved list and the failure tags feed the cards
@@ -1371,18 +501,14 @@ let renderRunning = false;
 let renderQueued = false;
 let lastRenderSig = '';
 // Cheap proxy for `sig` (see doRender), computed from raw inputs alone so an
-// unchanged tick can bail before the card-model rebuild. Reset everywhere
-// lastRenderSig is — the two must never fall out of step, or this short-
-// circuit would stand in for a forced rebuild it never actually proved.
+// unchanged tick can bail before the card-model rebuild. Must be reset everywhere
+// lastRenderSig is: out of step, it would short-circuit a forced rebuild.
 let lastCheapSig = '';
-// Hold signature-changing DOM rebuilds only while the QUALITY picker is open:
-// paintNow rebuilds its options, tearing them out from under the popup, and
-// capture bursts churn the signature exactly while the user is picking.
-// Current Chromium exposes `:open`; the gesture flag is the conservative
-// fallback for older supported builds that do not parse it. Blur, Escape and a
-// committed change release that fallback immediately instead of leaving a
-// focused-but-closed selector stale; its shorter cap also covers a native
-// picker that closes without emitting any observable value or focus event.
+// Hold signature-changing rebuilds while the QUALITY picker is open — paintNow
+// rebuilds its options, tearing them out from under the popup, and capture bursts
+// churn the signature exactly while the user is picking. `:open` is the real test;
+// the gesture flag below is the fallback for builds that do not parse it, with a
+// shorter cap because a native picker can close emitting no observable event.
 let renderBlockedSince = 0;
 let renderRetryTimer: number | undefined;
 let qualityPickerFallbackEngaged = false;
@@ -1460,25 +586,6 @@ async function render(): Promise<void> {
   }
 }
 
-/** A Saved card rendered from its receipt alone — the live capture is gone.
- *  No target on purpose: receipts store no media URLs (fbcdn signatures rotate),
- *  so there is nothing truthful for a download button to fetch. */
-function stubCard(e: SavedEntry): Card {
-  return {
-    id: e.id,
-    at: e.savedAt,
-    kind: e.kind,
-    source: e.source,
-    target: undefined,
-    thumbUrl: e.thumbUrl,
-    resLabel: e.resLabel,
-    durationSec: e.durationSec,
-    mayLackAudio: false,
-    live: false,
-    stale: true,
-  };
-}
-
 async function doRender(): Promise<void> {
   // Snapshot the tab once: doRender yields at every await, and onActivated can flip
   // module `tabId` mid-render — reading it twice would mix tab A's items with tab
@@ -1493,20 +600,14 @@ async function doRender(): Promise<void> {
   const playing =
     tid === undefined ? new Set<string>() : new Set((await selectPlaying(tid, items)).map((i) => i.id));
 
-  // Cheap early-out, BEFORE the expensive card-model build below: every value
-  // sig/nowSig can end up holding is a pure function of items, playing,
-  // savedEntries, the settings subset, view/mediaFilter/lang, the busy/
-  // offscreen flags, and the learned group-cover memory selectPlaying just
-  // refreshed (now-playing.ts's getGroupCover — the only piece of the model
-  // that reads state THIS function doesn't already hold). So when none of
-  // those moved since the last committed render, re-running groups/cards/
-  // buildNowState would only reproduce the sig already on screen — bail here
-  // instead of paying for that rebuild. This does NOT touch the storage reads
-  // above: selectPlaying's time-decayed windows must still re-evaluate every
-  // tick (see the comment on the tick interval below); only the CPU-bound
-  // model build is skipped. Reset alongside lastRenderSig everywhere it
-  // resets (grep both together) — this can only stand in for a forced
-  // rebuild if the two can never fall out of step.
+  // Cheap early-out BEFORE the card-model build below. Every value `sig` can hold is
+  // a pure function of the raw inputs listed here — items, playing, savedEntries, the
+  // settings subset, view/filter/lang, the busy flags, and getGroupCover, the only
+  // model input this function doesn't already hold. Unchanged inputs therefore mean
+  // an unchanged sig, so the rebuild would only reproduce what is on screen.
+  //
+  // The storage reads above still run: selectPlaying's time-decayed windows must
+  // re-evaluate every tick (see the tick interval). Only the CPU work is skipped.
   const tabPrefix = tabKey(tid, '');
   const settingsSig = JSON.stringify([
     settings.listOrder,
@@ -1517,6 +618,7 @@ async function doRender(): Promise<void> {
   ]);
   const coveredGroupKeys = new Set<string>();
   for (const it of items) if (it.kind === 'video') coveredGroupKeys.add(videoGroupKey(it));
+  const savedSig = view === 'saved' ? savedEntries.map((e) => e.id).join(',') : '';
   const cheapSig = [
     tabPrefix,
     view,
@@ -1536,17 +638,15 @@ async function doRender(): Promise<void> {
     [...playing].sort().join(','),
     [...coveredGroupKeys]
       .sort()
-      .map((k) => `${k}=${tid !== undefined ? getGroupCover(tid, k) ?? '' : ''}`)
+      .map((k) => `${k}=${tid !== undefined ? (getGroupCover(tid, k) ?? '') : ''}`)
       .join(','),
-    view === 'saved' ? savedEntries.map((e) => e.id).join(',') : '',
+    savedSig,
     [...cardBusy].filter((k) => k.startsWith(tabPrefix)).sort().join(','),
     [...failReason.keys()].filter((k) => k.startsWith(tabPrefix)).sort().join(','),
   ].join('\n');
   if (cheapSig === lastCheapSig) {
-    // Same outcome the sig compare further down would reach — including
-    // `pruned` staying false, since nothing in `selected` can have gone stale
-    // without `items` moving cheapSig — just reached before paying for the
-    // rebuild it would have skipped anyway.
+    // The same outcome the sig compare below would reach, including `pruned` staying
+    // false: nothing in `selected` can go stale without `items` moving cheapSig.
     renderBlockedSince = 0;
     return;
   }
@@ -1555,12 +655,14 @@ async function doRender(): Promise<void> {
   const groups = new Map<string, MediaItem[]>();
   const others: MediaItem[] = [];
   for (const it of items) {
-    if (it.kind === 'video') {
-      const key = videoGroupKey(it);
-      (groups.get(key) ?? groups.set(key, []).get(key)!).push(it);
-    } else {
+    if (it.kind !== 'video') {
       others.push(it);
+      continue;
     }
+    const key = videoGroupKey(it);
+    const group = groups.get(key);
+    if (group) group.push(it);
+    else groups.set(key, [it]);
   }
 
   // The declutter settings (videosOnly, minResolution) and the cover dedupe hide
@@ -1570,16 +672,12 @@ async function doRender(): Promise<void> {
   const cards: Card[] = [];
   for (const group of groups.values()) {
     const card = buildVideoCard(group, tid, playing);
-    if (settings.minResolution > 0) {
-      const maxH = Math.max(0, ...group.map((i) => i.height ?? 0));
-      if (maxH > 0 && maxH < settings.minResolution) card.libraryHidden = true;
-    }
+    if (belowMinResolution(group)) card.libraryHidden = true;
     cards.push(card);
   }
-  // An image card that is only the cover of a Library-VISIBLE video is a dupe
-  // under "All" — but only there: it stays reachable under the "Images"
-  // sub-filter (its own flag below), its receipt still renders in Saved, and a
-  // cover whose video is itself hidden keeps its Library slot exactly as before.
+  // An image that is only a Library-VISIBLE video's cover is a dupe under "All" — but
+  // only there. It stays reachable under the "Images" sub-filter, its receipt still
+  // renders in Saved, and a cover whose video is hidden keeps its own Library slot.
   const shownCovers = new Set(
     cards.filter((c) => !c.libraryHidden).map((c) => c.thumbId).filter((x): x is string => x != null),
   );
@@ -1624,11 +722,10 @@ async function doRender(): Promise<void> {
   // whole tab's capture count. Now Playing state is only built for its own view.
   const now =
     view === 'now' ? buildNowState(items, groups, tid, playing, cards.filter((c) => c.live).length) : null;
-  // Library hides the declutter-flagged cards. Saved renders the receipt ledger
-  // in download order: the live card when the capture still exists (a real
-  // re-download with fresh URLs), a stub frozen from the receipt when it does
-  // not — the stub revives by itself once a replay re-captures the same
-  // content-derived id. Both views then narrow by the media sub-filter.
+  // Library hides the declutter-flagged cards. Saved renders the ledger in download
+  // order: the live card while the capture exists (a real re-download with fresh
+  // URLs), else a stub frozen from the receipt, which revives once a replay
+  // re-captures the same id. Both views then narrow by the media sub-filter.
   const orderedSaved = settings.listOrder === 'oldest' ? savedEntries : [...savedEntries].reverse();
   const base =
     view === 'saved'
@@ -1637,13 +734,11 @@ async function doRender(): Promise<void> {
   const gridCards =
     view === 'now' ? [] : base.filter((c) => mediaFilter === 'all' || c.kind === mediaFilter);
 
-  // Skip the DOM rebuild when nothing visible changed: tearing the grid or the
-  // Now Playing selector down every ≤2s drops focus and re-announces the aria-live
-  // region. The signature covers everything painted — except `selected` (paints in
-  // place, see paintTray) and the chosen quality (paints in place, see paintNow).
-  // (cheapSig above already bailed out of the model build for the common case
-  // where nothing changed; this compare also catches the rarer case where the
-  // model build ran — cheapSig differed — but the visible result didn't.)
+  // Skip the DOM rebuild when nothing VISIBLE changed: tearing the grid down every
+  // ≤2s drops focus and re-announces the aria-live region. Covers everything painted
+  // except `selected` and the chosen quality, which paint in place (paintTray,
+  // paintNow). cheapSig above catches the common no-op earlier; this catches the
+  // rarer case where the model build ran but produced the same visible result.
   const nowSig =
     now == null
       ? 'none'
@@ -1655,15 +750,13 @@ async function doRender(): Promise<void> {
     mediaFilter,
     getLang(),
     String(offscreenAvailable),
-    // The whole busy predicate, not just bulkRunning: EVERY download button's
-    // enablement gates on it, so a single download settling while its own card
-    // is filtered out of the view must still move the signature — otherwise the
-    // visible buttons (and the tray doRender repaints) stay stuck in the busy
-    // era on a quiet tab.
+    // The whole busy predicate, not just bulkRunning: every download button gates on
+    // it, so a download settling while its own card is filtered out of the view must
+    // still move the signature, or the visible buttons stay stuck on a quiet tab.
     String(offscreenBusyHere()),
-    settingsSig, // computed above, alongside cheapSig — the two must never drift apart
+    settingsSig, // shared with cheapSig above — the two must never drift apart
     view === 'now' ? nowSig : '',
-    view === 'saved' ? savedEntries.map((e) => e.id).join(',') : '',
+    savedSig,
     view === 'now'
       ? ''
       : gridCards
@@ -1711,7 +804,13 @@ async function doRender(): Promise<void> {
   byId('view-grid').hidden = view === 'now';
 
   if (view === 'now') {
-    paintNow(now);
+    paintNow(now, {
+      tid,
+      defaultQuality: settings.defaultQuality,
+      downloadsDisabled: offscreenBusyHere(),
+      onDownload: (cardId, target) => void downloadCard(cardId, target),
+      onQualityCommitted: finishQualityPickerInteraction,
+    });
     paintTray();
     return;
   }
@@ -1732,49 +831,86 @@ async function doRender(): Promise<void> {
     byId('grid-empty-body').textContent = view === 'saved' ? t('savedEmptyBody') : t('libraryEmptyBody');
   }
 
-  // ponytail: full teardown/rebuild on every sig change, including a single
-  // card's busy bit flipping twice per download. Cheap at this list size, and no
-  // longer audible now that #list is not a live region (the count is). Upgrade
-  // path if it ever matters: paint busy/disabled per card in place, the way
-  // paintTray() already does for selection, and reconcile instead of replacing.
+  // ponytail: full teardown/rebuild on every sig change, including a single card's
+  // busy bit flipping twice per download. Cheap at this list size, and no longer
+  // audible now that #list is not a live region (the count is). Upgrade path if it
+  // ever matters: paint busy/disabled per card in place, the way paintTray() already
+  // does for selection, and reconcile instead of replacing.
   const list = byId('list');
   list.textContent = '';
-  for (const c of gridCards) list.appendChild(renderCard(c));
+  const downloadsDisabled = offscreenBusyHere();
+  for (const c of gridCards) {
+    const key = tabKey(tid, c.id);
+    list.appendChild(
+      renderCard(c, {
+        picked: selected.has(c.id),
+        busy: cardBusy.has(key),
+        downloadsDisabled,
+        // Never on a stub: a receipt IS a success, and a failure recorded under the
+        // same content-derived id belongs to the live card, not the history row.
+        failure: c.stale ? undefined : failReason.get(key),
+        onPick: () => togglePick(c.id),
+        onDownload: (target) => void downloadCard(c.id, target),
+      }),
+    );
+  }
 
   paintTray();
+  restoreKeyCursor();
   schedulePlayPositions();
 }
 
 // ── View + filter wiring ──────────────────────────────────────────────────────
 
-function pressOnly(nav: HTMLElement, active: HTMLElement): void {
-  nav.querySelectorAll<HTMLButtonElement>('[aria-pressed]').forEach((b) => {
-    b.setAttribute('aria-pressed', String(b === active));
+/** Delegate one nav's clicks: adopt the pressed button's `data-<attr>`, mark it
+ *  pressed, re-render. Both the view and the sub-filter are signature terms, so the
+ *  render always sees the change. */
+function setupNav(navId: string, attr: 'view' | 'filter', adopt: (value: string | undefined) => void): void {
+  const nav = byId(navId);
+  nav.addEventListener('click', (e) => {
+    const btn = (e.target as HTMLElement).closest<HTMLButtonElement>(`[data-${attr}]`);
+    if (btn == null || !nav.contains(btn)) return;
+    adopt(btn.dataset[attr]);
+    pressOnly(nav, btn);
+    void render();
   });
+}
+
+/** Push every appearance choice into CSS. None of these is a render signature term: they retune
+ *  layout vars and colours on the DOM already on screen without changing the card model.
+ *
+ *  The accent covers what the Settings hint promises and no more — selection, progress and the
+ *  primary button. Never text: no single colour clears 4.5:1 against both canvases, so a runtime
+ *  accent used as text would put half the palette below AA. */
+function applyAppearance(): void {
+  const app = byId('app');
+  app.dataset.cols = String(settings.columns);
+  app.dataset.corners = settings.panelCorners;
+  app.dataset.backdrop = settings.panelBackdrop;
+  // On the ROOT, not on #app: the marquee is appended to <body>, a sibling of #app, so a custom
+  // property set on #app would never reach it. The three data-* attributes above stay on #app
+  // because the stylesheet selects them there.
+  const root = document.documentElement;
+  const accent = accentById(settings.accent);
+  root.style.setProperty('--accent', accent.solid);
+  root.style.setProperty('--accent-grad', accent.grad);
+  root.style.setProperty('--on-accent', accent.onAccent);
+  // The card rings, the pick check and the marquee are media chrome, which carries its own
+  // fixed-dark token family; selection there has to follow the accent too.
+  root.style.setProperty('--media-accent', accent.solid);
+  root.style.setProperty('--media-on-accent', accent.onAccent);
 }
 
 function setupViews(): void {
-  const nav = byId('views');
   byId('app').dataset.view = view;
-  nav.addEventListener('click', (e) => {
-    const btn = (e.target as HTMLElement).closest<HTMLButtonElement>('[data-view]');
-    if (btn == null || !nav.contains(btn)) return;
-    view = (btn.dataset.view as View | undefined) ?? 'now';
+  applyAppearance();
+  setupNav('views', 'view', (value) => {
+    view = (value as View | undefined) ?? 'now';
     byId('app').dataset.view = view;
-    setSettingsOpen(false, false);
-    pressOnly(nav, btn);
-    void render(); // the view is a signature term
+    closeSettingsSheet();
   });
-}
-
-function setupFilters(): void {
-  const nav = byId('filters');
-  nav.addEventListener('click', (e) => {
-    const btn = (e.target as HTMLElement).closest<HTMLButtonElement>('[data-filter]');
-    if (btn == null || !nav.contains(btn)) return;
-    mediaFilter = (btn.dataset.filter as MediaFilter | undefined) ?? 'all';
-    pressOnly(nav, btn);
-    void render(); // the sub-filter is a signature term
+  setupNav('filters', 'filter', (value) => {
+    mediaFilter = (value as MediaFilter | undefined) ?? 'all';
   });
 }
 
@@ -1791,9 +927,59 @@ function setupSelectAll(): void {
   });
 }
 
-// A browser missing an API the panel needs (e.g. chrome.storage.session on a
-// stripped Chromium fork) would otherwise leave the panel blank with no clue.
-// Show a readable, hardcoded message instead — i18n may not have loaded yet.
+// ── Keyboard ──────────────────────────────────────────────────────────────────
+
+/** Run one bound key's action. Every case routes through the control the mouse would
+ *  have clicked, rather than reimplementing what that control does — a second path to
+ *  "switch view" or "open Settings" is a second path to get out of step with the first.
+ *
+ *  The two exceptions are the per-card actions, which have no control to click because
+ *  the card under the cursor is not the card under the pointer. */
+function runKeyAction(action: KeyAction, cursor: HTMLElement | undefined): void {
+  const cursorCard = cursor?.dataset.cardId != null ? cardsById.get(cursor.dataset.cardId) : undefined;
+  switch (action) {
+    case 'togglePick':
+      if (cursor == null || cursorCard?.target == null) return;
+      paintCardPicked(cursor, togglePick(cursorCard.id));
+      return;
+    case 'downloadCard':
+      if (cursorCard?.target == null || offscreenBusyHere()) return;
+      void downloadCard(cursorCard.id, cursorCard.target);
+      return;
+    case 'selectAll':
+      byId('select-all').click();
+      return;
+    case 'downloadPicks':
+      // Only when the tray is actually up: the bound key must not start a bulk run the
+      // button would have refused, and the button is hidden when nothing is picked.
+      if (!byId('tray').hidden) byId('bulk-dl').click();
+      return;
+    case 'viewNow':
+    case 'viewLibrary':
+    case 'viewSaved': {
+      const target = { viewNow: 'now', viewLibrary: 'library', viewSaved: 'saved' }[action];
+      byId('views').querySelector<HTMLButtonElement>(`[data-view="${target}"]`)?.click();
+      return;
+    }
+    case 'cycleFilter': {
+      // Only where the filter is on screen: the chips sit inside the grid view, and a
+      // programmatic click reaches a hidden button perfectly well.
+      if (byId('view-grid').hidden) return;
+      const chips = [...byId('filters').querySelectorAll<HTMLButtonElement>('[data-filter]')];
+      const at = chips.findIndex((chip) => chip.getAttribute('aria-pressed') === 'true');
+      chips[(at + 1) % chips.length]?.click();
+      return;
+    }
+    case 'openSettings':
+      toggleSettingsSheet();
+      return;
+  }
+}
+
+// ── Boot ──────────────────────────────────────────────────────────────────────
+
+/** Hand the app over to the user, or to showFatal. Boot leaves #app inert so a
+ *  half-initialised panel cannot be clicked; both outcomes must release it. */
 function finishPanelBoot(state: 'ready' | 'error'): void {
   document.documentElement.dataset.boot = state;
   const app = document.getElementById('app');
@@ -1803,15 +989,16 @@ function finishPanelBoot(state: 'ready' | 'error'): void {
   app.removeAttribute('aria-busy');
 }
 
+/** A browser missing an API the panel needs (chrome.storage.session on a stripped
+ *  fork) would otherwise leave it blank with no clue. */
 function showFatal(e: unknown): void {
   finishPanelBoot('error');
   const el = document.getElementById('fatal');
   if (el) {
     el.hidden = false;
     const v = chrome.runtime?.getManifest?.().version;
-    // Localised, because a boot failure is when the message matters most. If the
-    // throw beat setLang() in init(), t()/fmt() fall back to English — still no
-    // worse than the hardcoded string this replaced.
+    // Localised — a boot failure is when the message matters most. A throw that beat
+    // setLang() falls back to English.
     el.textContent =
       fmt('fatalStartup', { message: (e as Error)?.message ?? String(e) }) +
       (v ? fmt('fatalStartupVersion', { version: v }) : '');
@@ -1825,9 +1012,10 @@ async function init(): Promise<void> {
   try {
     ownPanelTabId = (await chrome.tabs.getCurrent())?.id;
     await resolveActiveTab();
-    setupFacebookThemeStorageListener();
+    // Before the first storage read: a theme signal persisted during startup must not
+    // fall into a read/listener gap.
+    setupPanelTheme({ theme: () => settings.theme, trackedTab: () => tabId });
     settings = await loadSettings();
-    setupSystemTheme();
     await applyEffectiveTheme();
     setLang(await resolveLang(settings.followBrowserLang));
     localize();
@@ -1835,10 +1023,32 @@ async function init(): Promise<void> {
     offscreenAvailable = caps?.offscreen ?? true;
     byId('degraded').hidden = offscreenAvailable;
     setupViews();
-    setupFilters();
     setupSelectAll();
-    setupLangToggle();
-    setupSettings();
+    setupPanelKeys({
+      // Read per keypress, not captured: the master switch and the bindings are both live
+      // settings, so flipping either takes effect without re-registering anything.
+      enabled: () => settings.keysEnabled,
+      keymap: () => settings.keymap,
+      settingsOpen: isSettingsOpen,
+      run: runKeyAction,
+    });
+    setupMarquee((card) => {
+      const id = card.dataset.cardId;
+      const model = id != null ? cardsById.get(id) : undefined;
+      // Already picked, or nothing to pick: the band adds, it never toggles.
+      if (model?.target == null || selected.has(model.id)) return;
+      paintCardPicked(card, togglePick(model.id));
+    });
+    setupSettingsSheet({
+      settings: () => settings,
+      currentView: () => view,
+      apply: (patch) => void applySetting(patch),
+      chooseLang: (choice) => void chooseLang(choice),
+    });
+    // After the sheet is wired, so its Remove button and its state line reflect what was
+    // stored. storage.local, so this is the image from before the browser was last closed.
+    applyPanelBackground(await loadPanelBackground());
+    reflectPanelBackground();
     setupQualityPickerRenderHold();
     setupPlayPositioning();
 
@@ -1878,17 +1088,13 @@ async function init(): Promise<void> {
     // New media captured (or cleared) for the tracked tab → re-render live. Only keys
     // for OUR tab force a render — but hard resets are honored for EVERY tab.
     chrome.storage.session.onChanged.addListener((changes) => {
-      // A nav/close reset (clearTab) removes media_/playing_/recent_/bind_ for a
-      // tab (newValue undefined) — and it hits BACKGROUND tabs too: any top-level
-      // Facebook navigation (a tab-strip reload, a redirect) wipes a tab the user
-      // isn't looking at. Treat every such deletion as a hard reset for ITS tab,
-      // not just the tracked one: purge that tab's in-memory bindings + last-live
-      // and cancel any pending flush, so a debounced write can't resurrect bind_
-      // after it was wiped — and drop its failure tags and quality picks, because
-      // a recapture of the same content-derived id after the navigation is a NEW
-      // item and a phantom "failed" tag or stale pick lies. This state survives
-      // tab switches by design, so a background wipe missed here would resurface
-      // when the user switches back.
+      // A clearTab reset removes a tab's keys, and it hits BACKGROUND tabs too — any
+      // top-level Facebook navigation wipes a tab nobody is looking at. Treat every
+      // such deletion as a hard reset for ITS tab: purge its bindings (so a debounced
+      // write cannot resurrect bind_) and its failure tags and picks, because a
+      // recapture of the same id after a navigation is a NEW item and a phantom
+      // "failed" tag lies. This state survives tab switches, so a wipe missed here
+      // resurfaces when the user switches back.
       const wipedTabs = new Set<number>();
       for (const [key, ch] of Object.entries(changes)) {
         const captureRemoval = ch.newValue === undefined ? /^(?:media|playing)_(\d+)$/.exec(key) : null;
@@ -1906,14 +1112,9 @@ async function init(): Promise<void> {
         // instead of being discarded as an old-generation conflict.
         void loadBindings(wiped);
       }
-      // caps is global (published once the worker resolves it, which can lag a
-      // panel opened on the same click that wakes a cold worker — see
-      // offscreenAvailable's declaration), so it is handled ahead of the
-      // tab-scoped gate below: re-read it exactly like init() does, so a later
-      // flip is never stuck showing the startup default. Listing 'caps' in that
-      // gate instead was a dead trigger — it re-ran render(), but doRender never
-      // re-read caps, so offscreenAvailable could not change and the signature
-      // check short-circuited the render away.
+      // caps is global, so it is handled ahead of the tab-scoped gate below. Re-read
+      // it exactly as init() does: render() alone would not help, because doRender
+      // never reads caps and the signature check would skip the repaint.
       if ('caps' in changes) {
         void getCaps().then((caps) => {
           offscreenAvailable = caps?.offscreen ?? true;
@@ -1950,7 +1151,7 @@ async function init(): Promise<void> {
     chrome.storage.local.onChanged.addListener((changes) => {
       // Live-update the counters while the section is open, so a scroll session in
       // the Facebook tab shows discards accumulating without reopening settings.
-      if ('diag_counters' in changes && (byId('diag-details') as HTMLDetailsElement).open) void renderDiag();
+      if ('diag_counters' in changes && isDiagOpen()) void renderDiag();
       const next = changes[LANG_KEY]?.newValue;
       if ((next === 'en' || next === 'es') && next !== getLang()) {
         setLang(next);
@@ -1958,13 +1159,17 @@ async function init(): Promise<void> {
         void render(); // language is a signature term
       }
       if ('settings' in changes) {
+        // Where a change made anywhere else arrives: a second panel, or another extension page.
+        // This panel's own writes are already applied by applySetting's onCommitted, and their
+        // echo carries a value identical to what is in memory — skipped, so one change costs one
+        // render rather than two.
+        const echo = changes.settings?.newValue;
+        if (echo != null && JSON.stringify(normalizeSettings(echo)) === JSON.stringify(settings)) return;
         void (async () => {
           settings = await loadSettings();
           await applyEffectiveTheme();
-          reflectSettings();
-          // No signature reset: the render-relevant settings are signature terms,
-          // so the echo of this panel's own applySetting() write stays a cheap
-          // no-op instead of a full rebuild.
+          reflectSettings(settings);
+          applyAppearance();
           await render();
         })();
       }
@@ -1985,22 +1190,18 @@ async function init(): Promise<void> {
       // when it is opened as one (for diagnostics/QA) so it cannot replace the
       // Facebook tab the panel is meant to observe.
       if (activatedTab?.url === ownPanelUrl || activatedTab?.pendingUrl === ownPanelUrl) return;
-      // Some Chromium forks expose activation events but transiently reject
-      // tabs.get() during a rapid switch. The event's tabId is still authoritative;
-      // ownPanelTabId above already excludes the only extension tab we must ignore.
-      // Falling through keeps capture/Now Playing attached to the real active tab
-      // instead of silently freezing on the previous one.
+      // A failed tabs.get is NOT a reason to bail: some forks transiently reject it
+      // during a rapid switch, and the event's tabId is still authoritative. Freezing
+      // on the previous tab would be worse than trusting it.
       flushBindingsNow(); // persist the OUTGOING tab's learning before switching
       setTrackedTab(info.tabId);
       await applyEffectiveTheme();
       if (revision !== activationRevision || tabId !== info.tabId) return;
-      // Only the cart empties: it points at the outgoing tab's cards. Busy, failure
-      // and quality state STAY — they are tab-namespaced (tabKey), so the incoming
-      // tab renders its own entries and an in-flight download keeps its spinner for
-      // when the user switches back (clearing it here used to repaint a running
-      // merge as idle and invite a duplicate). lastRenderSig goes: two empty tabs
-      // share a signature, and a skipped render would leave the outgoing tab's
-      // grid on screen.
+      // Only the cart empties — it points at the outgoing tab's cards. Busy, failure
+      // and quality state STAY: they are tab-namespaced, so an in-flight download
+      // keeps its spinner for when the user switches back. lastRenderSig goes because
+      // two empty tabs share a signature, and a skipped render would leave the
+      // outgoing tab's grid on screen.
       selected.clear();
       lastRenderSig = '';
       lastCheapSig = '';
@@ -2020,23 +1221,17 @@ async function init(): Promise<void> {
       }
     }
 
-    // Safety net for time-decayed state: now-playing inference carries clock-based
-    // windows (freshness gates, grace, takeover timers) that must re-evaluate even
-    // when no storage event fires — playback stopping on a quiet tab writes
-    // nothing. That state feeds Now Playing AND the grid cards' live ring, so the
-    // tick runs for the live view and for any grid currently showing a live card
-    // (until the ring expires and turns itself off). Otherwise the grids are
-    // storage-driven — ticking them too would re-read the tab's keys for nothing.
+    // Safety net for clock-decayed state: now-playing's freshness gates, grace and
+    // takeover timers expire BETWEEN storage events — playback stopping on a quiet tab
+    // writes nothing — so only a tick observes the expiry. It runs for the live view,
+    // and for a grid while a live ring is still lit; otherwise the grids are
+    // storage-driven and ticking them would re-read the tab's keys for nothing.
     //
-    // Now Playing ticks at 500ms, the grids every 4th tick (2s): selectPlaying's
-    // relay holds (the 1.5s pre-slide-evidence hold, the 4s capture wait) expire
-    // BETWEEN storage events, so the tick is what observes the expiry — a slow
-    // tick stretches a 1.5s hold well past 2.5s of perceived handover, which is
-    // exactly where rapid story/reel switching felt laggy. The cost is two
-    // storage reads and a cheap signature compute per tick, only while the live
-    // view is open; that cheap signature short-circuits the card-model rebuild
-    // AND the DOM work on an unchanged tick (see doRender). The grids paint
-    // nothing that decays faster than the live ring, so their cadence stays 2s.
+    // 500ms for Now Playing because selectPlaying's shortest relay hold is 1.5s, and
+    // a slower tick stretched it past 2.5s of perceived handover — that is what made
+    // rapid story switching feel laggy. The grids paint nothing that decays faster
+    // than the ring, so every 4th tick (2s) is enough. An unchanged tick costs two
+    // storage reads and cheapSig, which then skips the rebuild AND the DOM work.
     let tickN = 0;
     window.setInterval(() => {
       tickN++;

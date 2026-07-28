@@ -1,25 +1,27 @@
-// In-page download button: save the reel/story/highlight you are watching
-// without opening the side panel, picking a resolution first.
+// In-page download button: save the reel/story/highlight you are watching, at a
+// resolution you pick, without opening the side panel.
 //
-// Two deliberate constraints shape everything here.
+// Three constraints shape everything here:
 //
-// 1. The host element hangs off document.documentElement, NOT off Facebook's
-//    tree, and its contents live in a closed shadow root. Facebook re-renders
-//    its viewer constantly; a node parented inside it would be thrown away, and
-//    an unshadowed node would both inherit their CSS and leak ours.
+// 1. The host hangs off document.documentElement in a CLOSED shadow root. Facebook
+//    re-renders its viewer constantly, so a node parented inside it gets thrown away;
+//    an unshadowed node would inherit their CSS and leak ours.
 //
-// 2. This module never learns a media URL and never asks for one. It asks the
-//    worker "what could the media in my tab be downloaded as?" and gets back
-//    resolution LABELS; it sends a label back to start the download. The worker
-//    resolves the URL from its own capture state, because a content script
-//    shares a process with the page and must not be able to aim the downloader
-//    (see the FACESCRAP_DOWNLOAD_DASH handler's sender.tab rejection).
+// 2. This module never learns a media URL. It asks the worker what the tab could
+//    download and gets back resolution LABELS; the worker resolves the URL from its
+//    own capture state. A content script shares a process with the page and must not
+//    be able to aim the downloader.
 //
-// Positioning is geometric, not selector-based: it tracks the bounding box of
-// the biggest media element under the viewport centre, then sits immediately
-// left of Facebook's own control row (mute / play / more) so it reads as one
-// more control in that row instead of covering it. Facebook's class names churn
-// roughly monthly (ARCHITECTURE.md); element geometry does not.
+// 3. Positioning is geometric, never selector-based. Facebook's class names churn
+//    monthly (ARCHITECTURE.md); the bounding box of the media under the viewport
+//    centre does not.
+//
+//    Where a foreground viewer draws its own controls over the media — a reel, a
+//    video story, a highlight — the button joins that row (mute / play / more) and
+//    reads as one more control in it. Everywhere else it takes the media's
+//    top-right corner. The split is not cosmetic: in a feed post the only row is
+//    the post's header, which leaves the viewport well before the image does, and a
+//    button anchored to it hopped from row to corner mid-scroll.
 
 import { t, type MsgKey } from '../shared/i18n';
 import { isFbcdn, isStaticFbAsset } from '../shared/media';
@@ -30,8 +32,7 @@ import type {
 
 /** Below this, an <img> is chrome — avatars, reaction icons, story-tray thumbs. */
 const MIN_IMAGE_PX = 180;
-/** Corner offset for the fallback placement, used only when the control row
- *  cannot be found. */
+/** Corner offset, used wherever there is no row for the button to join. */
 const INSET_PX = 12;
 /** Facebook spaces its own viewer controls this far apart. */
 const GAP_PX = 4;
@@ -64,7 +65,7 @@ interface DownloadOverlayPorts {
   win?: Window;
 }
 
-export interface DownloadOverlay {
+interface DownloadOverlay {
   /** Re-ask the worker what is playing and show/hide/reposition accordingly.
    *
    *  Pass `mediaChanged` when the caller knows the slide itself moved on. An open
@@ -72,75 +73,91 @@ export interface DownloadOverlay {
    *  has to close — the labels alone cannot detect this, two videos routinely
    *  offer the same ladder. */
   refresh: (options?: { mediaChanged?: boolean }) => Promise<void>;
+  /** Show the result of a download this overlay did not start — the global shortcut's. Holds the
+   *  glyph the same RESULT_HOLD_MS a click would, so the two read identically. */
+  showResult: (ok: boolean) => void;
   dispose: () => void;
 }
 
 interface Anchor {
   rect: DOMRect;
+  /** The media itself, and the viewer card holding the control row when one was
+   *  found — place() hit-tests against them before drawing. */
+  el: Element;
+  card?: Element;
   /** The leftmost control of Facebook's own row, when one was found. */
   control?: DOMRect;
+  /** That control's own computed background — the circle we sit next to. Copied
+   *  rather than guessed at: the value differs between the reel viewer, the story
+   *  viewer and the two themes, and Facebook re-tunes it. */
+  chrome?: string;
 }
 
-/** Facebook's viewer controls (mute, play, more) sit in the top-right corner of
- *  the VIEWER CARD — which is not the same box as the media. A video story fills
- *  its card, so the controls land inside the video's own rect; a photo story is a
- *  letterboxed image with the controls well above it. Searching the media's rect
- *  alone therefore worked on videos and failed on photos, where the button fell
- *  back to the photo's corner and drifted with it.
+/** Find Facebook's control row (mute / play / more), which sits in the top-right of the
+ *  VIEWER CARD — not of the media. A video story fills its card, so the row lands inside
+ *  the video's rect; a photo story is letterboxed, with the row well above the image.
+ *  Walking up from the media until an ancestor's top band holds the row finds the card
+ *  itself, so both shapes work with no distance constants.
  *
- *  So walk up from the media until an ancestor's top band holds the row. That
- *  ancestor IS the viewer card, by construction — no distance constants, and it
- *  works the same for both shapes.
- *
- *  Geometric on purpose: an aria-label match would need every locale Facebook
- *  ships, and a class match would break on the next rebrand. Three filters keep
- *  it honest: icon-sized (a text button like Follow is wider), the right half of
- *  the band (the left half is the author's avatar and name), and an ancestor no
- *  wider than the media — above that we would be reading the page's own top nav,
- *  which is also a row of icon buttons. */
-export function pickControlAnchor(doc: Document, win: Window, media: Element): DOMRect | undefined {
+ *  No aria-label match (needs every locale Facebook ships) and no class match (breaks on
+ *  the next rebrand). Three filters keep the geometry honest: icon-sized, so a text
+ *  button like Follow is out; the right half of the band, because the left half is the
+ *  author's avatar; and an ancestor no wider than the media, or we would be reading the
+ *  page's own top nav, which is also a row of icon buttons. */
+export function pickControlAnchor(
+  doc: Document,
+  win: Window,
+  media: Element,
+): { card: Element; control?: { rect: DOMRect; el: Element } } | undefined {
   const mediaRect = media.getBoundingClientRect();
-  const icons: DOMRect[] = [];
+  const icons: { rect: DOMRect; el: Element }[] = [];
   for (const el of doc.querySelectorAll('[role="button"], button')) {
     const r = el.getBoundingClientRect();
     if (r.width < CONTROL_MIN_PX || r.height < CONTROL_MIN_PX) continue;
     if (r.width > CONTROL_MAX_PX || r.height > CONTROL_MAX_PX) continue;
     if (r.bottom < 0 || r.top > win.innerHeight || r.right < 0 || r.left > win.innerWidth) continue;
-    icons.push(r);
+    icons.push({ rect: r, el });
   }
-  if (icons.length === 0) return undefined;
-
+  // The widest ancestor still narrow enough to be the card rather than the page. Reported even
+  // when it holds no control row — Facebook auto-hides the reel controls after a few seconds of
+  // stillness, and an empty icon list is normal — because place() hit-tests against the card, and
+  // the bare media is the wrong target: the scrim a viewer stacks over a reel is not inside the
+  // <video>.
+  let card: Element | undefined;
   let node: Element | null = media.parentElement;
   for (let depth = 0; node != null && depth < ANCESTOR_LIMIT; depth++, node = node.parentElement) {
     const box = node.getBoundingClientRect();
     if (box.width > mediaRect.width * CARD_WIDTH_SLACK) break;
+    card = node;
     const bandBottom = box.top + Math.min(box.height / 4, 200);
     const centreX = box.left + box.width / 2;
     const row = icons.filter(
-      (r) => r.left >= centreX && r.right <= box.right + GAP_PX && r.top >= box.top - 1 && r.bottom <= bandBottom,
+      ({ rect: r }) =>
+        r.left >= centreX && r.right <= box.right + GAP_PX && r.top >= box.top - 1 && r.bottom <= bandBottom,
     );
-    if (row.length > 0) return row.reduce((left, r) => (r.left < left.left ? r : left));
+    // The ancestor that holds the row IS the viewer card. The control element goes
+    // back too — its own computed colour is what our circle copies.
+    if (row.length > 0) {
+      return { card: node, control: row.reduce((left, r) => (r.rect.left < left.rect.left ? r : left)) };
+    }
   }
-  return undefined;
+  return card != null ? { card } : undefined;
 }
 
 type Glyph = 'idle' | 'done' | 'failed';
 
-/** Solid shapes on a 24 grid, no stroke — Facebook's viewer controls are filled
- *  glyphs, so an outlined one reads as a graft however well it is placed.
+/** Filled shapes on a 24 grid, no stroke: Facebook's viewer controls are filled, and
+ *  an outline reads as a graft however well it is placed.
  *
- *  The size was matched by MEASUREMENT, not by eye, because eyeing it got it wrong
- *  twice. Rasterising each path at 10x and counting covered pixels puts Facebook's
- *  play, pause and speaker glyphs at 16.3%, 16.4% and 16.3% ink over the 24 grid,
- *  all ~15 units tall — a tight family. The first attempt here was 13.6% ink at
- *  16.2 units: TALLER than theirs and still reading smaller, because what carries
- *  weight at 20px is ink, not extent. These are 16.3% at 15.5 units, which is the
- *  family's own number. Keep them there if you redraw: thin the stem or stretch
- *  the glyph and it goes back to looking like someone else's icon.
+ *  Hold these two numbers if you redraw — 16.3% ink over the grid, 15.5 units tall.
+ *  They are what Facebook's own play (16.3%), pause (16.4%) and speaker (16.3%)
+ *  measure, by rasterising each path at 10x and counting covered pixels. Ink is what
+ *  carries weight at 20px, not extent: a taller, thinner glyph reads SMALLER beside
+ *  them.
  *
- *  Drawn as <path> elements rather than assigned as innerHTML: an isolated world
- *  is exempt from the page's Trusted Types policy today, but a TypeError there
- *  would silently cost the button its icon. */
+ *  Built with <path> elements, not innerHTML: an isolated world is exempt from the
+ *  page's Trusted Types policy today, but a TypeError there costs the button its icon
+ *  silently. */
 const GLYPHS: Record<Glyph, string[]> = {
   // Arrow (stem 4.0 wide, head 11.6) over its tray. 16.3% ink, 15.5 tall.
   idle: [
@@ -260,35 +277,46 @@ button {
      bright frame. */
   filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.6));
 }
+/* The circle Facebook draws behind its own controls, copied off the one we sit
+   next to (--chrome, set by place()). The fallback is only for a row whose buttons
+   paint no background at all; guessing a value here is how the button ended up a
+   pale disc beside their dark ones. */
+.trigger { background: var(--chrome, rgba(0, 0, 0, 0.4)); }
+/* Lighten whatever that colour turned out to be, without having to know it. */
 .trigger:hover,
-.trigger[aria-expanded="true"] { background: rgba(255, 255, 255, 0.18); }
+.trigger[aria-expanded="true"] { box-shadow: inset 0 0 0 999px rgba(255, 255, 255, 0.16); }
 .trigger[data-busy] { opacity: 0.55; }
-/* A set of options, not a list: they wrap into rows of chips, so six
-   resolutions read as a small palette instead of a column tall enough to cover
-   the story. The backdrop stays light enough to see the frame through it. */
+/* A set of options, not a list: a fixed two-column grid, so six resolutions read
+   as a small palette instead of a column tall enough to cover the reel. GRID and
+   not wrapped flex — flex sizes each chip to its own text, so "2560p" next to
+   "720p" left ragged columns and a stray last chip. Every cell is one width now,
+   and the backdrop takes the same colour as the controls so the two read as one
+   set of chrome. */
 .menu {
   display: none;
-  flex-wrap: wrap;
-  justify-content: flex-end;
+  grid-template-columns: repeat(2, 1fr);
   gap: 4px;
-  max-width: 168px;
+  width: 164px;
   padding: 5px;
   border-radius: 14px;
-  background: rgba(15, 17, 20, 0.42);
+  background: var(--chrome, rgba(0, 0, 0, 0.4));
   -webkit-backdrop-filter: blur(10px);
   backdrop-filter: blur(10px);
   border: 1px solid rgba(255, 255, 255, 0.14);
 }
-.menu[data-open="1"] { display: flex; }
+.menu[data-open="1"] { display: grid; }
 .menu button {
   min-height: 28px;
-  padding: 5px 11px;
+  padding: 5px 4px;
   border: 1px solid rgba(255, 255, 255, 0.22);
   border-radius: 999px;
   background: rgba(255, 255, 255, 0.08);
   text-align: center;
   white-space: nowrap;
 }
+/* An odd number of resolutions would leave a half-empty last row; the last chip
+   takes the whole width instead of sitting in a ragged gap. */
+.menu button:last-child:nth-child(odd) { grid-column: 1 / -1; }
 .menu button:hover { background: rgba(255, 255, 255, 0.28); }
 :focus-visible { outline: 2px solid #fff; outline-offset: 2px; }
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
@@ -303,21 +331,21 @@ export function createDownloadOverlay(ports: DownloadOverlayPorts): DownloadOver
   let trigger: HTMLButtonElement | undefined;
   let menu: HTMLElement | undefined;
   let anchor: Anchor | undefined;
+  /** Where the control row was last seen for `el`, as an offset from its top-right. */
+  let rowSlot: { el: Element; dx: number; dy: number; size: number } | undefined;
   let labels: string[] = [];
   let busy = false;
   let disposed = false;
   let frame: number | undefined;
   let holdUntil = 0;
-  // Bumped by every refresh(); `settled` is the newest one that actually wrote.
-  // Two refreshes are routinely in flight at once — the 750ms poll and the one a
-  // slide change fires — and their promises resolve in either order, because a
-  // message to a sleeping service worker costs a wake-up and one to a warm worker
-  // does not. The loser used to write show/place/labels anyway.
+  // Bumped by every refresh(); `settled` is the newest one that actually wrote. Two refreshes are
+  // routinely in flight at once — the 750ms poll and the one a slide change fires — and their
+  // promises resolve in either order, because a message to a sleeping worker costs a wake-up.
   //
-  // The test is `settled > mine`, NOT `mine !== generation`: a slide's first second
-  // fires refreshes faster than the worker answers, and dropping every response
-  // that merely had a newer refresh START behind it means none of them ever paints.
-  // Only a newer answer that already DECIDED may veto an older one.
+  // The test is `settled > mine`, NOT `mine !== generation`: a slide's first second fires refreshes
+  // faster than the worker answers, so dropping every response that merely has a newer refresh
+  // STARTED behind it would leave none of them painting. Only a newer answer that already DECIDED
+  // may veto an older one.
   let generation = 0;
   let settled = 0;
 
@@ -362,7 +390,24 @@ export function createDownloadOverlay(ports: DownloadOverlayPorts): DownloadOver
   }
 
   function measure(el: Element): Anchor {
-    return { rect: el.getBoundingClientRect(), control: pickControlAnchor(doc, win, el) };
+    const found = pickControlAnchor(doc, win, el);
+    return {
+      rect: el.getBoundingClientRect(),
+      el,
+      card: found?.card,
+      control: found?.control?.rect,
+      chrome: found?.control != null ? controlBackground(found.control.el) : undefined,
+    };
+  }
+
+  /** The neighbouring control's circle, or nothing if it paints none. A button
+   *  Facebook renders with no background of its own leaves CSS's fallback in
+   *  charge; anything else and we would be inventing a colour next to theirs. */
+  function controlBackground(el: Element): string | undefined {
+    if (typeof win.getComputedStyle !== 'function') return undefined;
+    const colour = win.getComputedStyle(el).backgroundColor;
+    if (!colour || colour === 'transparent' || /,\s*0\s*\)$/.test(colour)) return undefined;
+    return colour;
   }
 
   function toggleMenu(): void {
@@ -444,23 +489,73 @@ export function createDownloadOverlay(ports: DownloadOverlayPorts): DownloadOver
     }
   }
 
-  function place(): void {
-    if (!wrap || !anchor) return;
-    const { rect, control } = anchor;
-    if (control) {
-      // Left of the row's first control, at its size, so the button lands in the
-      // gap Facebook already leaves between controls.
-      wrap.style.left = `${Math.round(control.left - GAP_PX)}px`;
-      wrap.style.top = `${Math.round(control.top)}px`;
-      wrap.style.setProperty('--size', `${Math.round(control.height)}px`);
-    } else {
-      wrap.style.left = `${Math.round(rect.right - INSET_PX)}px`;
-      wrap.style.top = `${Math.round(rect.top + INSET_PX)}px`;
-      wrap.style.setProperty('--size', `${FALLBACK_SIZE_PX}px`);
+  /** Does the media's own card still own the pixel we are about to draw on?
+   *
+   *  The wrap is position:fixed at a z-index above everything on the page, and it
+   *  tracks the control row. Scroll the feed and that row slides under Facebook's
+   *  sticky top bar — the row goes under, our button does not, so it ends up drawn
+   *  ON the navbar. Hit-testing the point settles it without having to know the
+   *  bar's height, or which of Facebook's overlays are sticky this month.
+   *
+   *  Tested against the CARD, not the media: a letterboxed photo's control row sits
+   *  above the image, and the story viewer stacks its own scrim over the video —
+   *  both are inside the card, neither is inside the media. */
+  function ownsPoint(x: number, y: number): boolean {
+    if (!anchor || typeof doc.elementsFromPoint !== 'function') return true;
+    const owner = anchor.card ?? anchor.el;
+    for (const el of doc.elementsFromPoint(x, y)) {
+      // Our own host is the top hit at that point whenever the button is already
+      // showing; a closed shadow root reports the host, never its contents.
+      if (el === host) continue;
+      return el === owner || owner.contains(el);
     }
+    return false;
+  }
+
+  /** Is Facebook's row a fixed neighbour, or will it scroll off and leave the button
+   *  behind? Two shapes qualify. The row is drawn ON the media — every foreground
+   *  viewer does this, so the reel, the video story and the highlight all take it. Or
+   *  the page cannot scroll at all, which is what the story viewers enforce, so a
+   *  letterboxed photo's row above the image stays put too.
+   *
+   *  A feed post is neither: its row is the post header, out of the viewport while
+   *  the image is still centred, and a button following it hopped to the corner
+   *  halfway through a scroll. */
+  function rowIsFixedNeighbour(media: DOMRect, control: DOMRect): boolean {
+    if (control.top >= media.top && control.bottom <= media.bottom) return true;
+    return doc.documentElement.scrollHeight <= win.innerHeight;
+  }
+
+  /** False when the button must not be drawn where it currently belongs. */
+  function place(): boolean {
+    if (!wrap || !anchor) return false;
+    const { rect, control } = anchor;
+    // Left of the row's first control, in the gap Facebook already leaves between
+    // them; else the media's own top-right corner.
+    const row = control != null && rowIsFixedNeighbour(rect, control) ? control : undefined;
+    // The slot is an offset from the media's top-right corner, so it survives scrolling, and it
+    // outlives the row itself — Facebook auto-hides the reel controls after a few seconds of
+    // stillness. Forgotten as soon as the media changes.
+    if (row) {
+      rowSlot = { el: anchor.el, dx: rect.right - (row.left - GAP_PX), dy: row.top - rect.top, size: Math.round(row.height) };
+    } else if (rowSlot?.el !== anchor.el) {
+      rowSlot = undefined;
+    }
+    const size = rowSlot?.size ?? (control ? Math.round(control.height) : FALLBACK_SIZE_PX);
+    const right = Math.round(rowSlot ? rect.right - rowSlot.dx : rect.right - INSET_PX);
+    const top = Math.round(rowSlot ? rect.top + rowSlot.dy : rect.top + INSET_PX);
+    // The wrap is anchored by its RIGHT edge (translateX below), so its own centre
+    // is half a button to the left of `right`.
+    if (!ownsPoint(right - size / 2, top + size / 2)) return false;
+    wrap.style.left = `${right}px`;
+    wrap.style.top = `${top}px`;
+    wrap.style.setProperty('--size', `${size}px`);
+    if (anchor.chrome != null) wrap.style.setProperty('--chrome', anchor.chrome);
+    else wrap.style.removeProperty('--chrome');
     // Anchored by its right edge so the resolution menu, which is wider than the
     // button, opens leftwards over the media instead of off it.
     wrap.style.transform = 'translateX(-100%)';
+    return true;
   }
 
   function show(visible: boolean): void {
@@ -472,6 +567,11 @@ export function createDownloadOverlay(ports: DownloadOverlayPorts): DownloadOver
     }
   }
 
+  /** Re-place the button against the media's current position, without re-finding the control row.
+   *  A row scan rects every `[role="button"]` in Facebook's tree, which is far more than a scroll
+   *  frame can afford; the remembered slot holds the row's offset from the media's corner, and that
+   *  offset is unchanged by scrolling. refresh() re-scans on its own 750ms tick, which is when a
+   *  row can have moved. */
   function trackGeometry(): void {
     if (frame !== undefined) return;
     frame = win.requestAnimationFrame(() => {
@@ -481,8 +581,13 @@ export function createDownloadOverlay(ports: DownloadOverlayPorts): DownloadOver
         show(false);
         return;
       }
+      if (anchor != null && anchor.el === el) {
+        anchor = { ...anchor, rect: el.getBoundingClientRect() };
+        if (!place()) show(false);
+        return;
+      }
       anchor = measure(el);
-      place();
+      if (!place()) show(false);
     });
   }
 
@@ -549,8 +654,7 @@ export function createDownloadOverlay(ports: DownloadOverlayPorts): DownloadOver
       renderMenu();
     }
     if (!busy && Date.now() >= holdUntil) setTriggerState('idle', 'overlayDownload');
-    place();
-    show(true);
+    show(place());
   }
 
   function dispose(): void {
@@ -570,5 +674,13 @@ export function createDownloadOverlay(ports: DownloadOverlayPorts): DownloadOver
   win.addEventListener('scroll', onScrollOrResize, true);
   win.addEventListener('resize', onScrollOrResize);
 
-  return { refresh, dispose };
+  return {
+    refresh,
+    showResult: (ok) => {
+      if (disposed || busy || !wrap) return;
+      setTriggerState(ok ? 'done' : 'failed', ok ? 'overlayDone' : 'overlayFailed');
+      holdUntil = Date.now() + RESULT_HOLD_MS;
+    },
+    dispose,
+  };
 }

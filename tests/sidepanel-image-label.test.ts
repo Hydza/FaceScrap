@@ -3,10 +3,10 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import test from 'node:test';
 
-const controller = readFileSync(
-  join(process.cwd(), 'src', 'sidepanel', 'sidepanel.ts'),
-  'utf8',
-);
+import { panelSource } from './panel-source';
+
+const controller = panelSource();
+
 const i18n = readFileSync(join(process.cwd(), 'src', 'shared', 'i18n.ts'), 'utf8');
 
 interface DeclaredFunction {

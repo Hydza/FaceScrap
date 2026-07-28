@@ -10,7 +10,7 @@
 
 import { fileExtensionFor, resolutionOf, type MediaItem } from './media';
 import { DEFAULT_SETTINGS, type Settings } from './settings';
-import type { SavedEntry } from './storage';
+import type { SavedEntry } from './saved';
 
 /** Card id namespaces. Group keys and item ids are separate namespaces that must
  *  never collide, and the receipt id IS the card id — so the worker has to derive

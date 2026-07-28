@@ -119,52 +119,128 @@
           <button id="settings-close" class="settings-close" type="button" data-i18n-aria="titleCloseSettings" aria-label="Close"></button>
         </div>
 
-        <div class="settings-body">
-          <section class="set-section">
-            <h3 class="set-label" data-i18n="settingsDownloads">Downloads</h3>
-            <div class="set-card">
-              <div class="set-row col"><span id="label-set-template" class="set-title" data-i18n="settingsTemplate">Filename</span><input id="set-template" class="set-input mono" type="text" spellcheck="false" autocomplete="off" maxlength="200" aria-labelledby="label-set-template" /></div>
-              <div class="set-row"><span id="label-set-subfolder" class="set-title" data-i18n="settingsSubfolder">Save in "FaceScrap/" subfolder</span><label class="switch"><input id="set-subfolder" type="checkbox" aria-labelledby="label-set-subfolder" /><span class="track"></span></label></div>
-              <div class="set-row"><span id="label-set-quality" class="set-title" data-i18n="settingsQuality">Default quality</span><select id="set-quality" class="select" aria-labelledby="label-set-quality"><option value="highest" data-i18n="qualityHighest">Highest</option><option value="lowest" data-i18n="qualityLowest">Lowest</option><option value="ask" data-i18n="qualityAsk">Ask</option></select></div>
-              <div class="set-row two"><span class="set-copy"><span id="label-set-direct" class="set-title" data-i18n="settingsDirect">Direct download</span><span class="set-hint" data-i18n="settingsDirectHint">May skip audio merge</span></span><label class="switch"><input id="set-direct" type="checkbox" aria-labelledby="label-set-direct" /><span class="track"></span></label></div>
-              <p class="set-note" data-i18n="settingsHdNote">HD video + audio merge automatically. Direct download may skip audio.</p>
-            </div>
-          </section>
+        <!-- Four pages instead of one long scroll. No fifth: a profile archive would mean
+             ORIGINATING requests for media the user is not watching, which is exactly the
+             thing ARCHITECTURE.md's passive-hook invariant forbids. -->
+        <!-- Toggle buttons, NOT role="tab". A tab must carry aria-selected and point at a
+             role="tabpanel" via aria-controls, and the tablist pattern also owes the user
+             arrow-key navigation between tabs. This had role="tab" with aria-pressed and no
+             panels at all — announced as a tab strip, then behaved like nothing. It is the
+             same shape as #views and #filters, so it is now spelled the same way. -->
+        <nav id="set-tabs" class="set-tabs" data-i18n-aria="ariaSetTabs" aria-label="Settings pages">
+          <button class="set-tab" type="button" data-tab="general" aria-pressed="true" data-i18n="tabGeneral">General</button>
+          <button class="set-tab" type="button" data-tab="appearance" aria-pressed="false" data-i18n="tabAppearance">Appearance</button>
+          <button class="set-tab" type="button" data-tab="shortcuts" aria-pressed="false" data-i18n="tabShortcuts">Shortcuts</button>
+          <button class="set-tab" type="button" data-tab="advanced" aria-pressed="false" data-i18n="tabAdvanced">Advanced</button>
+        </nav>
 
-          <section class="set-section">
-            <h3 class="set-label" data-i18n="settingsPanel">Panel</h3>
-            <div class="set-card">
-              <div class="set-row"><span id="label-lang" class="set-title" data-i18n="settingsLanguage">Language</span><div id="lang" class="lang-toggle" role="group" aria-labelledby="label-lang"><button type="button" data-lang="en" class="is-active" aria-pressed="true">EN</button><button type="button" data-lang="es" aria-pressed="false">ES</button></div></div>
-              <div class="set-row"><span id="label-set-followlang" class="set-title" data-i18n="settingsFollowLang">Follow browser language</span><label class="switch"><input id="set-followlang" type="checkbox" aria-labelledby="label-set-followlang" /><span class="track"></span></label></div>
-              <div class="set-row two"><span class="set-copy"><span id="label-set-theme" class="set-title" data-i18n="settingsTheme">Theme</span><span id="hint-set-theme" class="set-hint" data-i18n="settingsThemeHint">Follows Facebook, then your device</span></span><select id="set-theme" class="select" aria-labelledby="label-set-theme" aria-describedby="hint-set-theme"><option value="auto" data-i18n="themeAuto">Auto</option><option value="light" data-i18n="themeLight">Light</option><option value="dark" data-i18n="themeDark">Dark</option></select></div>
-              <div class="set-row"><span id="label-set-order" class="set-title" data-i18n="settingsOrder">List order</span><select id="set-order" class="select" aria-labelledby="label-set-order"><option value="newest" data-i18n="orderNewest">Newest first</option><option value="oldest" data-i18n="orderOldest">Oldest first</option></select></div>
-            </div>
-          </section>
+        <div id="set-body" class="settings-body">
+          <div class="set-page" data-page="general">
+            <section class="set-section">
+              <h3 class="set-label" data-i18n="settingsDownloads">Downloads</h3>
+              <div class="set-card">
+                <div class="set-row two"><span class="set-copy"><span id="label-set-quality" class="set-title" data-i18n="settingsQuality">Quality</span><span class="set-hint" data-i18n="settingsQualityHint">Highest keeps the best representation the post offers.</span></span><div class="seg" data-seg="quality" role="group" aria-labelledby="label-set-quality"><button type="button" data-value="highest" aria-pressed="true" data-i18n="qualityHighest">Highest</button><button type="button" data-value="lowest" aria-pressed="false" data-i18n="qualityLowest">Lowest</button><button type="button" data-value="ask" aria-pressed="false" data-i18n="qualityAsk">Ask</button></div></div>
+                <div class="set-row two"><span class="set-copy"><span id="label-set-subfolder" class="set-title" data-i18n="settingsSubfolder">Where files land</span><span class="set-hint" data-i18n="settingsSubfolderHint">A subfolder keeps them out of the Downloads root.</span></span><label class="switch"><input id="set-subfolder" type="checkbox" aria-labelledby="label-set-subfolder" /><span class="track"></span></label></div>
+                <div class="set-row two"><span class="set-copy"><span id="label-set-direct" class="set-title" data-i18n="settingsDirect">Direct download</span><span class="set-hint" data-i18n="settingsDirectHint">Skips the audio merge. The file may arrive muted.</span></span><label class="switch"><input id="set-direct" type="checkbox" aria-labelledby="label-set-direct" /><span class="track"></span></label></div>
+                <div class="set-row two"><span class="set-copy"><span id="label-set-inpage" class="set-title" data-i18n="settingsInPage">Button on the video</span><span class="set-hint" data-i18n="settingsInPageHint">A download button on the reel, story or photo you are watching. Off adds nothing to the page.</span></span><label class="switch"><input id="set-inpage" type="checkbox" aria-labelledby="label-set-inpage" /><span class="track"></span></label></div>
+              </div>
+            </section>
 
-          <section class="set-section">
-            <h3 class="set-label" data-i18n="settingsCapture">Capture</h3>
-            <div class="set-card">
-              <div class="set-row"><span id="label-set-videosonly" class="set-title" data-i18n="settingsVideosOnly">Videos only</span><label class="switch"><input id="set-videosonly" type="checkbox" aria-labelledby="label-set-videosonly" /><span class="track"></span></label></div>
-              <div class="set-row"><span id="label-set-minres" class="set-title" data-i18n="settingsMinRes">Minimum resolution</span><select id="set-minres" class="select" aria-labelledby="label-set-minres"><option value="0" data-i18n="resNone">No minimum</option><option value="360">360p</option><option value="480">480p</option><option value="720">720p</option><option value="1080">1080p</option></select></div>
-            </div>
-          </section>
+            <section class="set-section">
+              <h3 class="set-label" data-i18n="settingsLangTheme">Language &amp; theme</h3>
+              <div class="set-card">
+                <div class="set-row two"><span class="set-copy"><span id="label-lang" class="set-title" data-i18n="settingsLanguage">Language</span><span class="set-hint" data-i18n="settingsLanguageHint">Auto follows the browser.</span></span><div id="lang" class="seg" role="group" aria-labelledby="label-lang"><button type="button" data-lang="auto" aria-pressed="false" data-i18n="langAuto">Auto</button><button type="button" data-lang="en" aria-pressed="true">EN</button><button type="button" data-lang="es" aria-pressed="false">ES</button></div></div>
+                <div class="set-row two"><span class="set-copy"><span id="label-set-theme" class="set-title" data-i18n="settingsTheme">Theme</span><span id="hint-set-theme" class="set-hint" data-i18n="settingsThemeHint">Follows Facebook, then your device</span></span><div class="seg" data-seg="theme" role="group" aria-labelledby="label-set-theme" aria-describedby="hint-set-theme"><button type="button" data-value="auto" aria-pressed="true" data-i18n="themeAuto">Auto</button><button type="button" data-value="light" aria-pressed="false" data-i18n="themeLight">Light</button><button type="button" data-value="dark" aria-pressed="false" data-i18n="themeDark">Dark</button></div></div>
+                <div class="set-row two"><span class="set-copy"><span id="label-set-order" class="set-title" data-i18n="settingsOrder">List order</span><span class="set-hint" data-i18n="settingsOrderHint">Which end of the capture list comes first.</span></span><div class="seg" data-seg="order" role="group" aria-labelledby="label-set-order"><button type="button" data-value="newest" aria-pressed="true" data-i18n="orderNewest">Newest</button><button type="button" data-value="oldest" aria-pressed="false" data-i18n="orderOldest">Oldest</button></div></div>
+              </div>
+            </section>
+          </div>
 
-          <section class="set-section">
-            <h3 class="set-label" data-i18n="settingsSavedData">Saved data</h3>
-            <div class="set-card">
-              <div class="set-row two"><span class="set-copy"><span id="label-set-maxitems" class="set-title" data-i18n="settingsMaxItems">Max saved items</span><span id="hint-set-maxitems" class="set-hint"><span>0 = </span><span data-i18n="maxUnlimited">Unlimited</span></span></span><input id="set-maxitems" class="set-input set-number" type="text" inputmode="numeric" pattern="[0-9]*" maxlength="16" autocomplete="off" spellcheck="false" aria-labelledby="label-set-maxitems" aria-describedby="hint-set-maxitems" /></div>
-              <div class="set-row"><span id="label-set-confirmclear" class="set-title" data-i18n="settingsConfirmClear">Confirm before clearing</span><label class="switch"><input id="set-confirmclear" type="checkbox" aria-labelledby="label-set-confirmclear" /><span class="track"></span></label></div>
-              <div class="set-row two"><span class="set-copy"><span class="set-title" data-i18n="settingsClearList">Clear captured list</span><span class="set-hint" data-i18n="settingsClearHint">Library only · Saved stays</span></span><button id="clear" class="btn-ghost" type="button" data-i18n="clear">Clear</button></div>
-            </div>
-          </section>
+          <div class="set-page" data-page="appearance" hidden>
+            <section class="set-section">
+              <h3 class="set-label" data-i18n="settingsPanelLook">Panel appearance</h3>
+              <div class="set-card">
+                <div class="set-row two"><span class="set-copy"><span id="label-set-cols" class="set-title" data-i18n="settingsColumns">Grid</span><span class="set-hint" data-i18n="settingsColumnsHint">Thumbnails per row. Fewer columns, larger previews.</span></span><div class="seg" data-seg="cols" role="group" aria-labelledby="label-set-cols"><button type="button" data-value="1" aria-pressed="false">1×1</button><button type="button" data-value="2" aria-pressed="true">2×2</button><button type="button" data-value="3" aria-pressed="false">3×3</button><button type="button" data-value="4" aria-pressed="false">4×4</button></div></div>
+                <div class="set-row two"><span class="set-copy"><span id="label-set-backdrop" class="set-title" data-i18n="settingsBackdrop">Background</span><span class="set-hint" data-i18n="settingsBackdropHint">Let your image show through. Glass blurs what is behind the cards.</span></span><div class="seg" data-seg="backdrop" role="group" aria-labelledby="label-set-backdrop"><button type="button" data-value="solid" aria-pressed="true" data-i18n="backdropSolid">Solid</button><button type="button" data-value="frosted" aria-pressed="false" data-i18n="backdropFrosted">Frosted</button><button type="button" data-value="glass" aria-pressed="false" data-i18n="backdropGlass">Glass</button></div></div>
+                <div class="set-row two"><span class="set-copy"><span id="label-set-corners" class="set-title" data-i18n="settingsCorners">Corners</span><span class="set-hint" data-i18n="settingsCornersHint">The radius every card and control shares.</span></span><div class="seg" data-seg="corners" role="group" aria-labelledby="label-set-corners"><button type="button" data-value="sharp" aria-pressed="false" data-i18n="cornersSharp">Sharp</button><button type="button" data-value="soft" aria-pressed="true" data-i18n="cornersSoft">Soft</button><button type="button" data-value="round" aria-pressed="false" data-i18n="cornersRound">Round</button></div></div>
+                <div class="set-row two"><span class="set-copy"><span id="label-set-accent" class="set-title" data-i18n="settingsAccent">Accent</span><span class="set-hint" data-i18n="settingsAccentHint">Selection, progress and the primary button.</span></span><!-- Swatches are built in settings-sheet.ts from ACCENTS, so the palette has one source. --><div id="set-accent" class="swatches" role="group" aria-labelledby="label-set-accent"></div></div>
+              </div>
+            </section>
 
-          <section class="set-section diagnostics">
-            <h3 class="set-label" data-i18n="settingsDiagnostics">Diagnostics</h3>
-            <div class="set-card">
-              <div class="set-row two"><span class="set-copy"><span id="label-set-diag" class="set-title" data-i18n="settingsDiagEnabled">Count discarded captures</span><span class="set-hint" data-i18n="settingsDiagHint">Reload Facebook to apply</span></span><label class="switch"><input id="set-diag" type="checkbox" aria-labelledby="label-set-diag" /><span class="track"></span></label></div>
-              <details id="diag-details" class="set-row col"><summary class="set-title" data-i18n="diagShow">Show counters</summary><pre id="diag-counters" class="set-input mono"></pre><button id="diag-reset" class="btn-ghost" type="button" data-i18n="diagReset">Reset counters</button></details>
-            </div>
-          </section>
+            <section class="set-section">
+              <h3 class="set-label" data-i18n="settingsCustomBg">Your background</h3>
+              <div class="set-card">
+                <p class="set-hint set-block" data-i18n="settingsCustomBgHint"></p>
+                <div class="set-row two">
+                  <span class="set-copy"><span class="set-title" data-i18n="settingsBgImage">Image</span><span id="set-bg-state" class="set-hint"></span></span>
+                  <span class="set-actions">
+                    <!-- A label wrapping the input is what gives the file picker a styled
+                         trigger; the input itself is unstylable and stays visually hidden. -->
+                    <label class="btn-quiet" role="button" tabindex="0"><span data-i18n="settingsBgPick">Choose…</span><input id="set-bg-file" type="file" accept="image/*" hidden /></label>
+                    <button id="set-bg-clear" class="btn-ghost" type="button" data-i18n="settingsBgClear">Remove</button>
+                  </span>
+                </div>
+                <p id="set-bg-error" class="set-hint set-block set-error" role="status" hidden></p>
+              </div>
+            </section>
+          </div>
+
+          <div class="set-page" data-page="shortcuts" hidden>
+            <section class="set-section">
+              <h3 class="set-label" data-i18n="settingsKeys">Keyboard shortcuts</h3>
+              <div class="set-card">
+                <div class="set-row two"><span class="set-copy"><span id="label-set-keysenabled" class="set-title" data-i18n="settingsKeysEnabled">Keyboard control</span><span class="set-hint" data-i18n="settingsKeysEnabledHint">Turn off if the keys clash with an IME or another extension.</span></span><label class="switch"><input id="set-keysenabled" type="checkbox" aria-labelledby="label-set-keysenabled" /><span class="track"></span></label></div>
+                <p class="set-hint set-block" data-i18n="settingsKeysHint"></p>
+                <!-- Rows are built in settings-sheet.ts, one per KEY_ACTIONS entry, so the
+                     order and the set of bindable functions have exactly one source. -->
+                <div id="set-keys" class="keys-grid"></div>
+                <p id="set-keys-error" class="set-hint set-block set-error" role="status" hidden></p>
+                <div class="set-row two"><span class="set-copy"><span class="set-title" data-i18n="settingsKeysReset">Restore default keys</span><span class="set-hint" data-i18n="keyHint"></span></span><button id="keys-reset" class="btn-ghost" type="button" data-i18n="keysReset">Reset</button></div>
+                <div class="set-row two"><span class="set-copy"><span class="set-title" data-i18n="settingsGlobalKey">Download while browsing</span><span class="set-hint mono" data-i18n="settingsGlobalKeyHint"></span></span></div>
+              </div>
+            </section>
+          </div>
+
+          <div class="set-page" data-page="advanced" hidden>
+            <section class="set-section">
+              <h3 class="set-label" data-i18n="settingsFileName">File name</h3>
+              <div class="set-card">
+                <div class="set-row col">
+                  <span id="label-set-template" class="set-title sr-only" data-i18n="settingsTemplate">Filename</span>
+                  <input id="set-template" class="set-input mono" type="text" spellcheck="false" autocomplete="off" maxlength="200" aria-labelledby="label-set-template" aria-describedby="set-template-preview" />
+                  <p id="set-template-preview" class="set-preview"><span class="set-preview-tag" data-i18n="settingsPreview">preview</span> <span id="set-template-out" class="mono"></span></p>
+                  <!-- Chips append a token at the cursor. Built in settings-sheet.ts from the
+                       same list downloadFilename substitutes, so the two cannot drift. -->
+                  <span id="set-template-tokens" class="tokens"></span>
+                </div>
+              </div>
+            </section>
+
+            <section class="set-section">
+              <h3 class="set-label" data-i18n="settingsCapture">Capture</h3>
+              <div class="set-card">
+                <div class="set-row two"><span class="set-copy"><span id="label-set-videosonly" class="set-title" data-i18n="settingsVideosOnly">Videos only</span><span class="set-hint" data-i18n="settingsVideosOnlyHint">Hides photos from the Library. Nothing is dropped.</span></span><label class="switch"><input id="set-videosonly" type="checkbox" aria-labelledby="label-set-videosonly" /><span class="track"></span></label></div>
+                <div class="set-row two"><span class="set-copy"><span id="label-set-minres" class="set-title" data-i18n="settingsMinRes">Minimum resolution</span><span class="set-hint" data-i18n="settingsMinResHint">Hides videos below it. An unmeasured video is never hidden.</span></span><div class="seg" data-seg="minres" role="group" aria-labelledby="label-set-minres"><button type="button" data-value="0" aria-pressed="true" data-i18n="resNone">Off</button><button type="button" data-value="360" aria-pressed="false">360p</button><button type="button" data-value="720" aria-pressed="false">720p</button><button type="button" data-value="1080" aria-pressed="false">1080p</button></div></div>
+              </div>
+            </section>
+
+            <section class="set-section">
+              <h3 class="set-label" data-i18n="settingsSavedData">Saved data</h3>
+              <div class="set-card">
+                <div class="set-row two"><span class="set-copy"><span id="label-set-maxitems" class="set-title" data-i18n="settingsMaxItems">Max saved items</span><span id="hint-set-maxitems" class="set-hint"><span>0 = </span><span data-i18n="maxUnlimited">Unlimited</span></span></span><input id="set-maxitems" class="set-input set-number" type="text" inputmode="numeric" pattern="[0-9]*" maxlength="16" autocomplete="off" spellcheck="false" aria-labelledby="label-set-maxitems" aria-describedby="hint-set-maxitems" /></div>
+                <div class="set-row two"><span class="set-copy"><span id="label-set-confirmclear" class="set-title" data-i18n="settingsConfirmClear">Confirm before clearing</span><span class="set-hint" data-i18n="settingsConfirmClearHint">Asks first, so one click cannot empty the list.</span></span><label class="switch"><input id="set-confirmclear" type="checkbox" aria-labelledby="label-set-confirmclear" /><span class="track"></span></label></div>
+                <div class="set-row two"><span class="set-copy"><span class="set-title" data-i18n="settingsClearList">Clear captured list</span><span class="set-hint" data-i18n="settingsClearHint">Library only · Saved stays</span></span><button id="clear" class="btn-ghost" type="button" data-i18n="clear">Clear</button></div>
+              </div>
+            </section>
+
+            <section class="set-section diagnostics">
+              <h3 class="set-label" data-i18n="settingsDiagnostics">Diagnostics</h3>
+              <div class="set-card">
+                <div class="set-row two"><span class="set-copy"><span id="label-set-diag" class="set-title" data-i18n="settingsDiagEnabled">Count discarded captures</span><span class="set-hint" data-i18n="settingsDiagHint">Reload Facebook to apply. Nothing is uploaded.</span></span><label class="switch"><input id="set-diag" type="checkbox" aria-labelledby="label-set-diag" /><span class="track"></span></label></div>
+                <details id="diag-details" class="set-row col"><summary class="set-title" data-i18n="diagShow">Show counters</summary><pre id="diag-counters" class="set-input mono"></pre><button id="diag-reset" class="btn-ghost" type="button" data-i18n="diagReset">Reset counters</button></details>
+              </div>
+            </section>
+          </div>
 
           <div class="settings-footer"><p class="settings-rights" data-i18n="settingsRights">Only download content you have the rights to.</p><p id="version" class="settings-version"></p></div>
         </div>

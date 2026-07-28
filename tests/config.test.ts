@@ -5,6 +5,8 @@ import { join } from 'node:path';
 
 import { DASH_UI_HARD_CAP_MS, MUX_HARD_CAP_MS, SETTLE_CAP_MS } from '../src/shared/messages';
 import { dashDownloadKey } from '../src/shared/download-settlement';
+import { ATTEMPTS, RETRY_DELAY_MS, STALL_MS, WORST_CASE_SILENCE_MS } from '../src/shared/track-fetch';
+import { getSaved, SAVED_ID_MAX, SAVED_LABEL_MAX, SAVED_THUMB_MAX } from '../src/shared/saved';
 import { resetChromeStorage } from './chrome-fake';
 
 // The suite runs with cwd = repo root (scripts/test.mjs). import.meta.url can't
@@ -27,113 +29,21 @@ test('DASH_UI_HARD_CAP_MS is derived strictly above one full worker job worst ca
   assert.ok(DASH_UI_HARD_CAP_MS > MUX_HARD_CAP_MS + SETTLE_CAP_MS);
 });
 
-test('MUX_IDLE_MS in service-worker.ts is derived above track-fetch.ts\'s full retry-ladder worst case', () => {
-  // track-fetch.ts's retry ladder (STALL_MS/ATTEMPTS/RETRY_DELAY_MS) is not
-  // exported, so service-worker.ts keeps a hand-mirrored copy (see the
-  // comment above TRACK_FETCH_STALL_MS there) instead of importing it. This
-  // test is the guard against that mirror drifting from the real ladder, and
-  // against MUX_IDLE_MS regressing to a value that no longer sits above it —
-  // exactly the bug that once killed a download still healthy on attempt 2 of
-  // a lawful 3-attempt retry (see MUX_IDLE_MS's own comment).
-  const trackFetchSrc = readSrc('src/shared/track-fetch.ts');
-  const workerSrc = readSrc('src/background/service-worker.ts');
-
-  const extract = (src: string, re: RegExp, label: string): number => {
-    const m = src.match(re);
-    assert.ok(m, `could not find ${label}`);
-    return Number(m![1].replace(/_/g, ''));
-  };
-
-  const realStallMs = extract(trackFetchSrc, /const STALL_MS = ([\d_]+);/, 'track-fetch.ts STALL_MS');
-  const realAttempts = extract(trackFetchSrc, /const ATTEMPTS = ([\d_]+);/, 'track-fetch.ts ATTEMPTS');
-  const realRetryDelayMs = extract(trackFetchSrc, /const RETRY_DELAY_MS = ([\d_]+);/, 'track-fetch.ts RETRY_DELAY_MS');
-
-  const mirroredStallMs = extract(
-    workerSrc,
-    /const TRACK_FETCH_STALL_MS = ([\d_]+);/,
-    'service-worker.ts TRACK_FETCH_STALL_MS',
-  );
-  const mirroredAttempts = extract(
-    workerSrc,
-    /const TRACK_FETCH_ATTEMPTS = ([\d_]+);/,
-    'service-worker.ts TRACK_FETCH_ATTEMPTS',
-  );
-  const mirroredRetryDelayMs = extract(
-    workerSrc,
-    /const TRACK_FETCH_RETRY_DELAY_MS = ([\d_]+);/,
-    'service-worker.ts TRACK_FETCH_RETRY_DELAY_MS',
-  );
-  assert.equal(mirroredStallMs, realStallMs, 'TRACK_FETCH_STALL_MS mirror is out of sync with track-fetch.ts STALL_MS');
-  assert.equal(mirroredAttempts, realAttempts, 'TRACK_FETCH_ATTEMPTS mirror is out of sync with track-fetch.ts ATTEMPTS');
+test('the mux idle window is derived above track-fetch\'s full retry-ladder worst case', () => {
+  // Nothing beats during a stall, a backoff or a hanging reconnect, so a mux cut off
+  // INSIDE the ladder kills a track that was about to report its own specific error.
+  // The worker imports WORST_CASE_SILENCE_MS and adds a margin, so it cannot drift
+  // below the ladder by construction; this pins the arithmetic and today's numbers.
   assert.equal(
-    mirroredRetryDelayMs,
-    realRetryDelayMs,
-    'TRACK_FETCH_RETRY_DELAY_MS mirror is out of sync with track-fetch.ts RETRY_DELAY_MS',
+    WORST_CASE_SILENCE_MS,
+    STALL_MS * ATTEMPTS + (RETRY_DELAY_MS * (ATTEMPTS * (ATTEMPTS - 1))) / 2,
   );
-
-  const margin = extract(
-    workerSrc,
-    /const MUX_IDLE_MS = TRACK_FETCH_WORST_CASE_SILENCE_MS \+ ([\d_]+);/,
-    'service-worker.ts MUX_IDLE_MS',
-  );
-
-  // Same arithmetic as fetchTrackWithBudget's retry loop: every attempt
-  // stalls out (STALL_MS each) plus the backoff sleep between attempts
-  // (RETRY_DELAY_MS * attempt, for every attempt but the last).
-  const worstCaseSilenceMs = realStallMs * realAttempts + (realRetryDelayMs * (realAttempts * (realAttempts - 1))) / 2;
-  const muxIdleMs = worstCaseSilenceMs + margin;
-  assert.ok(muxIdleMs > worstCaseSilenceMs, 'MUX_IDLE_MS must sit strictly above the lawful worst-case retry-ladder silence');
-  // Pins today's actual numbers too, so a passing test can't hide behind a
-  // margin that happens to cancel out: at today's values this is 183_000ms.
-  assert.equal(worstCaseSilenceMs, 183_000);
-});
-
-// S8: sanitizeDownloadReceipt used to hardcode its three bounds
-// (id.length > 258, thumbUrl.length <= 1024, resLabel.slice(0, 16)) as
-// separate literals, even though storage.ts already declares — and enforces
-// on every SavedEntry via sanitizeEntry — the exact same three numbers as
-// SAVED_ID_MAX / SAVED_THUMB_MAX / SAVED_LABEL_MAX. Two independently
-// hand-maintained copies of the same bound can drift the moment either one
-// changes; this pins service-worker.ts to importing storage.ts's exports
-// instead of re-spelling them, the same drift-guard technique the MUX_IDLE_MS
-// test above uses for its own mirrored constants.
-test('S8: sanitizeDownloadReceipt in service-worker.ts imports its bounds from storage.ts instead of re-spelling them', () => {
-  const workerSrc = readSrc('src/background/service-worker.ts');
-
+  assert.equal(WORST_CASE_SILENCE_MS, 183_000);
   assert.match(
-    workerSrc,
-    /import\s*\{[^}]*\bSAVED_ID_MAX\b[^}]*\}\s*from\s*'\.\.\/shared\/storage'/,
-    'service-worker.ts must import SAVED_ID_MAX from storage.ts',
+    readSrc('src/background/dash-download.ts'),
+    /const MUX_IDLE_MS = WORST_CASE_SILENCE_MS \+ [\d_]+;/,
+    'MUX_IDLE_MS must stay derived from the ladder, not re-hardcoded',
   );
-  assert.match(
-    workerSrc,
-    /import\s*\{[^}]*\bSAVED_THUMB_MAX\b[^}]*\}\s*from\s*'\.\.\/shared\/storage'/,
-    'service-worker.ts must import SAVED_THUMB_MAX from storage.ts',
-  );
-  assert.match(
-    workerSrc,
-    /import\s*\{[^}]*\bSAVED_LABEL_MAX\b[^}]*\}\s*from\s*'\.\.\/shared\/storage'/,
-    'service-worker.ts must import SAVED_LABEL_MAX from storage.ts',
-  );
-
-  const fnMatch = workerSrc.match(/function sanitizeDownloadReceipt\([\s\S]*?\n}\n/);
-  assert.ok(fnMatch, 'could not locate sanitizeDownloadReceipt in service-worker.ts');
-  const fn = fnMatch![0];
-
-  assert.match(fn, /receipt\.id\.length > SAVED_ID_MAX/, 'the id bound must reference SAVED_ID_MAX');
-  assert.match(fn, /receipt\.thumbUrl\.length <= SAVED_THUMB_MAX/, 'the thumbUrl bound must reference SAVED_THUMB_MAX');
-  assert.match(
-    fn,
-    /receipt\.resLabel\.slice\(0, SAVED_LABEL_MAX\)/,
-    'the resLabel truncation must reference SAVED_LABEL_MAX',
-  );
-
-  // The old hardcoded numbers must be GONE from this function, not merely
-  // supplemented by the imports above (which would leave both a literal and
-  // an unused import, still free to drift against each other in practice).
-  assert.doesNotMatch(fn, /\b258\b/, 'the old hardcoded id bound (258) must not remain');
-  assert.doesNotMatch(fn, /\b1024\b/, 'the old hardcoded thumbUrl bound (1024) must not remain');
-  assert.doesNotMatch(fn, /\.slice\(0, 16\)/, 'the old hardcoded resLabel bound (16) must not remain');
 });
 
 // C7 regression: a Saved-receipt write failure AFTER an already-successful
@@ -293,4 +203,52 @@ test('E4: a dash download completed before a simulated worker restart is not re-
     assert.equal(handled, true);
   });
   assert.deepEqual(response, { ok: true });
+});
+
+// The worker validates an inbound receipt against saved.ts's own bounds instead of
+// re-spelling the numbers. Asserted through the real message path, so a re-hardcoded
+// literal that disagrees with the exported bound cannot satisfy it.
+test('an inbound receipt is bounded by saved.ts\'s limits, not by re-spelled literals', async () => {
+  assert.ok(onMessage, 'runtime.onMessage listener was not registered');
+  const tabId = 900_003;
+  const sendReceipt = (receipt: Record<string, unknown>): Promise<unknown> =>
+    new Promise((resolve) => {
+      const handled = onMessage!(
+        {
+          type: 'FACESCRAP_DOWNLOAD_DIRECT',
+          tabId,
+          url: 'https://video-abc.xx.fbcdn.net/v/t42/bounds.mp4',
+          filename: 'bounds.mp4',
+          receipt,
+        },
+        {} as Sender,
+        resolve,
+      );
+      assert.equal(handled, true);
+    });
+  const base = { kind: 'video', source: 'reel', savedAt: 0 };
+
+  // One char past the bound is refused outright: a TRUNCATED receipt id could never
+  // re-link to its live card, so accepting it would be worse than rejecting it.
+  assert.deepEqual(await sendReceipt({ ...base, id: `v:${'a'.repeat(SAVED_ID_MAX - 1)}` }), {
+    ok: false,
+    error: 'Invalid download request.',
+  });
+
+  // Exactly at the bound it lands, and the display fields are clamped on the way in.
+  const id = `v:${'a'.repeat(SAVED_ID_MAX - 2)}`;
+  assert.deepEqual(
+    await sendReceipt({
+      ...base,
+      id,
+      resLabel: 'x'.repeat(SAVED_LABEL_MAX + 8),
+      thumbUrl: `https://scontent.xx.fbcdn.net/${'t'.repeat(SAVED_THUMB_MAX)}.jpg`,
+    }),
+    { ok: true },
+  );
+  const stored = (await getSaved(tabId)).find((e) => e.id === id);
+  assert.ok(stored, 'the receipt at the id bound must reach the ledger');
+  assert.equal(stored.id.length, SAVED_ID_MAX);
+  assert.equal(stored.resLabel?.length, SAVED_LABEL_MAX);
+  assert.equal(stored.thumbUrl, undefined, 'an over-long thumb URL is dropped, not stored');
 });

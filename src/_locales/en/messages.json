@@ -8,5 +8,9 @@
   },
   "extensionActionTitle": {
     "message": "Open FaceScrap"
+  },
+  "commandDownloadPlaying": {
+    "message": "Download what is playing",
+    "description": "Keyboard shortcut listed in chrome://extensions/shortcuts"
   }
 }

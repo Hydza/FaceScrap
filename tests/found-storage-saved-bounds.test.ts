@@ -12,7 +12,7 @@ import test from 'node:test';
 
 import { resetChromeStorage } from './chrome-fake';
 
-const { addSaved, getSaved, SAVED_ID_MAX, SAVED_LABEL_MAX, SAVED_THUMB_MAX } = await import('../src/shared/storage');
+const { addSaved, getSaved, SAVED_ID_MAX, SAVED_LABEL_MAX, SAVED_THUMB_MAX } = await import('../src/shared/saved');
 
 test('SAVED_ID_MAX, SAVED_THUMB_MAX and SAVED_LABEL_MAX are exported with the documented values', () => {
   assert.equal(SAVED_ID_MAX, 258);

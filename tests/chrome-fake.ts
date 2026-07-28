@@ -98,6 +98,17 @@ Object.defineProperty(globalThis, 'chrome', {
         },
       },
     },
+    // Enough runtime for a BACKGROUND module to be imported at all. dash-download.ts opens
+    // its mux-progress port at module scope, and playing-download.ts imports it — so without
+    // these, testing anything in src/background/ dies on the import rather than on the
+    // behaviour under test. Deliberately inert: nothing here simulates a port or a message,
+    // and a test that needs those should say so by stubbing them itself.
+    runtime: {
+      id: 'facescrap-test',
+      onConnect: { addListener() {}, removeListener() {} },
+      onMessage: { addListener() {}, removeListener() {} },
+      getURL: (path: string) => `chrome-extension://facescrap-test/${path}`,
+    },
   },
 });
 

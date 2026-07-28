@@ -1,17 +1,13 @@
 // Collapsing a video group's representations into a ranked, deduped option list.
 //
-// This used to live inside sidepanel.ts, where only the panel could reach it.
-// The in-page download button needs the same list — but it must be computed by
-// the SERVICE WORKER, never by the content script: the worker is the only side
-// that may turn a resolution choice into a real fbcdn URL (see the
-// FACESCRAP_DOWNLOAD_DASH handler's sender.tab rejection). Shared here so the
-// panel and the worker can never disagree about what the options are.
+// Shared by the panel and the service worker so the two can never disagree about what
+// the options are. The worker computes them for the in-page button because only the
+// worker may turn a resolution choice into an fbcdn URL — a content script shares a
+// process with the page (see the FACESCRAP_DOWNLOAD_DASH handler's sender.tab
+// rejection).
 //
-// Deliberately free of any panel-only dependency: the two settings it used to
-// read off a module-global, and the on-screen cover lookup it used to call into
-// now-playing.ts for, are all parameters now. The worker only wants labels, and
-// would have got nothing useful from a binding cache that lives in the panel's
-// process anyway.
+// Takes every panel-only input as a parameter, so nothing here reaches into a
+// module-global or a cache that lives in one process.
 
 import {
   canonicalizeHistoricalMediaId,
@@ -47,29 +43,19 @@ interface VideoOptionsContext {
 /**
  * What the tab is playing, as a PURE read of the stored PlayingRef.
  *
- * Deliberately NOT selectPlaying(). That function is the detector: it endorses a
- * group as live, LEARNS durable cover/mark bindings and writes the playing pin.
- * Those writes are correct for exactly one caller on one cadence — the panel's
- * render. Calling it from the in-page button's polling handler as well put a
- * second, faster writer on the same state and on the same storage keys, which is
- * what made detection and the downloads that follow from it go wrong.
+ * Must never call selectPlaying(): that is the detector, and it WRITES — it endorses a
+ * group as live, learns durable cover/mark bindings, and updates the playing pin.
+ * Those writes are correct for one caller on one cadence (the panel's render); a
+ * second, faster writer corrupts detection and every download that follows from it.
  *
- * Still weaker than selectPlaying, and deliberately so — but it is no longer blind
- * to what the panel learned. A story or reel plays under MSE, so its <video> has a
- * `blob:` currentSrc that content.ts refuses to turn into an id: the ONLY thing
- * naming the video in `ref.ids` is its cover. Match that cover against a captured
- * item's thumbUrl and the button appears; miss (a different rendition, a capture
- * with no preview at all, a replay that fetched nothing) and there is no second
- * chance — which is a button that never appears on video at all, not one that
- * appears sometimes. The learned cover↔group bindings ARE that second chance, and
- * they are persisted under `bind_<tabId>`, so reading them here is a pure read of
- * storage exactly like the ref and the items themselves. Passed in rather than
- * fetched, so this function stays pure and the caller keeps owning the I/O.
+ * Answers reliably for PHOTOS only. A photo's fbcdn URL is in the DOM, so its id
+ * reaches ref.ids and matches here. A video under MSE has a `blob:` src that never
+ * becomes an id — identifying one takes the streamed-track evidence in
+ * playingVideoGroup.
  */
 export function playingItems(
-  ref: { ids?: string[]; vid?: string; hasVideo?: boolean } | null | undefined,
+  ref: { ids?: string[]; vid?: string } | null | undefined,
   items: MediaItem[],
-  bindings?: { coverBind: [string, string][] } | null,
 ): MediaItem[] {
   const active = new Set(ref?.ids ?? []);
   for (const id of [...active]) {
@@ -81,33 +67,18 @@ export function playingItems(
   // of its representations and nothing else, so it survives fbcdn's prefetching
   // of the neighbouring reel.
   const urlVid = ref?.vid != null ? `vid:${ref.vid}` : undefined;
-  const matched = items.filter((i) => {
+  return items.filter((i) => {
     if (matchesActiveMediaId(i, active, owners)) return true;
     if (i.thumbUrl != null && active.has(mediaId(i.thumbUrl))) return true;
     return urlVid != null && i.kind === 'video' && fbAssetKeys(i.url).includes(urlVid);
   });
-  // Only as a fallback, and only for video: a photo that matched nothing matched
-  // nothing, and forcing a cover binding on it would offer the wrong media.
-  if (bindings == null || ref?.hasVideo !== true || matched.some((i) => i.kind === 'video')) {
-    return matched;
-  }
-  const bound = new Map(bindings.coverBind);
-  for (const id of active) {
-    const group = bound.get(id);
-    if (group == null) continue;
-    const groupItems = items.filter((i) => i.kind === 'video' && videoGroupKey(i) === group);
-    if (groupItems.length > 0) return groupItems;
-  }
-  return matched;
 }
 
 /**
- * The playing video's representation group, built exactly as the panel builds it:
- * videos ONLY.
+ * The playing video's representation group: videos ONLY, as the panel builds it.
  *
- * An audio representation of the same video shares its group key — that is the
- * point of the key. Letting one into the option list is how the button came to
- * offer, and download, an audio file as if it were a resolution.
+ * The audio representation shares the group key — that is what the key is for. Let one
+ * through and it is offered as a resolution, and downloaded as an audio file.
  */
 export function videoGroupOf(video: MediaItem, items: MediaItem[]): MediaItem[] {
   const key = videoGroupKey(video);

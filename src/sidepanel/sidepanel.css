@@ -46,6 +46,11 @@
   --media-control: rgba(0, 0, 0, 0.55);
   --media-control-soft: rgba(0, 0, 0, 0.3);
   --media-surface: #15171b;
+  /* The card's own edge. Not theme-split like --line: the media tokens are fixed
+     dark chrome because they sit over photographs, and this ring is read against
+     the canvas, which is dark wherever it is needed — a light theme already frames
+     a dark card by contrast. */
+  --media-frame: rgba(255, 255, 255, 0.17);
   --media-text: #ffffff;
   --media-muted: #c3c8ce;
   --media-accent: #1f6bff;
@@ -71,9 +76,9 @@
   --text: #16181c;
   --muted: #59636e;
   --accent: #1f6bff;
-  /* Used as TEXT (.set-label section headings, .grid-count) on --canvas, where
-     --accent's own #1f6bff only reaches 3.99:1. This darker step is 4.81:1 there
-     and leaves --accent itself alone, so the primary button keeps its fill. */
+  /* The accent at text weight, for the armed capture pill and a link hover. A darker step than
+     --accent, whose #1f6bff reaches only 3.99:1 on --canvas; this is 4.81:1 and leaves --accent
+     alone, so the primary button keeps its fill. */
   --accent-soft: #1a5fe6;
   --accent-grad: linear-gradient(180deg, #3a8bff, #2069f0);
   --live: #177a49;
@@ -265,8 +270,8 @@ label { -webkit-tap-highlight-color: transparent; }
   }
 .empty p { max-width: 260px; margin: 0; color: var(--muted); font-size: 12px; line-height: 17px; }
 
-/* Padding lives in the layout block further down, with the other .now geometry —
-   this used to declare 0 12px here as well, permanently overridden and 4px off. */
+/* Padding lives in the layout block further down, with the rest of the .now geometry. One
+   declaration, so the two cannot disagree. */
 .now {
   flex: 1;
   min-height: 0;
@@ -363,10 +368,9 @@ label { -webkit-tap-highlight-color: transparent; }
 }
 .preview.is-video .preview-play { display: flex; }
 .preview.play-obstructed .preview-play { visibility: hidden; }
-/* No nudge margin: play.svg already carries its own optical centring (the
-   triangle's box sits at x 9-17 of a 24 viewBox), and `mask: center` centres it
-   again — the 3px that used to live here pushed it visibly off-centre, unlike
-   the grid thumbnails' ::after, which centres the same file with no margin. */
+/* No nudge margin: play.svg carries its own optical centring — the triangle's box sits at x 9-17
+   of a 24 viewBox — and `mask: center` centres that again. Any offset here lands visibly off,
+   which is why the grid thumbnails' ::after centres the same file with no margin either. */
 .preview-play::before {
   content: "";
   width: 22px;
@@ -593,7 +597,7 @@ label { -webkit-tap-highlight-color: transparent; }
 .grid-title-line { display: flex; align-items: baseline; gap: 8px; }
 .grid-title h2 { margin: 0; font-size: 20px; line-height: 25px; font-weight: 800; }
 .grid-title p { height: 0; margin: 0; overflow: hidden; }
-.grid-count { min-width: 0; overflow: hidden; color: var(--accent-soft); font-size: 12.5px; line-height: 16px; font-weight: 700; text-overflow: ellipsis; white-space: nowrap; }
+.grid-count { min-width: 0; overflow: hidden; color: var(--muted); font-size: 12.5px; line-height: 16px; font-weight: 700; text-overflow: ellipsis; white-space: nowrap; }
 .picks-head {
   flex: none;
   display: flex;
@@ -635,8 +639,11 @@ label { -webkit-tap-highlight-color: transparent; }
   padding: 0 16px;
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  grid-auto-rows: minmax(205px, 1fr);
-  gap: 10px;
+  /* Card height per column count. A tuned number per width rather than one aspect-ratio: the
+     205px at two columns is measured, and an aspect would move it. */
+  --card-min: 205px;
+  grid-auto-rows: minmax(var(--card-min), 1fr);
+  gap: 13px;
   align-content: start;
   overflow: hidden auto;
 }
@@ -661,20 +668,101 @@ label { -webkit-tap-highlight-color: transparent; }
   width: 0;
   height: 0;
 }
+/* The grid density, from settings.columns. An attribute rather than a JS-computed var:
+   the two numbers per density belong next to each other, and the panel only has to
+   write which density is active. */
+#app[data-cols="1"] .grid {
+  grid-template-columns: minmax(0, 1fr);
+  --card-min: 380px;
+}
+#app[data-cols="3"] .grid {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  --card-min: 148px;
+}
+#app[data-cols="4"] .grid {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  --card-min: 116px;
+  /* The 13px gutter eats a fifth of a 4-up card's width at this panel size. */
+  gap: 8px;
+}
+
+/* The corner family. One attribute retunes the three radius tokens together, so every card, sheet,
+   chip and field moves as a set. The pill radii (999px) are untouched: a pill is a shape, not a
+   rounded rectangle. */
+#app[data-corners="sharp"] { --r-lg: 5px; --r-md: 4px; --r-sm: 3px; }
+#app[data-corners="round"] { --r-lg: 24px; --r-md: 20px; --r-sm: 16px; }
+
+/* A custom background replaces .app's flat canvas fill. body keeps painting --canvas
+   underneath as a floor, so a transparent PNG or a short image still has something behind
+   it rather than showing the page through the panel. */
+.app.has-bg {
+  background-image: var(--panel-bg);
+  background-size: cover;
+  background-position: center;
+}
+/* How much of it comes through. Explicit rgba per theme rather than a color-mix() or a
+   relative-colour syntax: the floor this extension supports is Chrome 116, and these two
+   surface tokens are the only thing that has to change. Frosted and glass also blur, so a
+   photographic background cannot fight the text sitting on it. */
+#app[data-backdrop="frosted"] { --surface: rgba(21, 23, 27, 0.82); --media-surface: rgba(21, 23, 27, 0.82); --veil-blur: blur(14px); }
+#app[data-backdrop="glass"] { --surface: rgba(21, 23, 27, 0.55); --media-surface: rgba(21, 23, 27, 0.55); --veil-blur: blur(22px); }
+:root[data-theme="light"] #app[data-backdrop="frosted"] { --surface: rgba(255, 255, 255, 0.82); }
+:root[data-theme="light"] #app[data-backdrop="glass"] { --surface: rgba(255, 255, 255, 0.6); }
+/* Gated on has-bg: backdrop-filter forces a compositing layer per element it is set on, and with
+   no custom image behind the cards there is nothing to blur. A panel without a background pays
+   nothing.
+   ponytail: one layer per VISIBLE card when a background IS set, which Chrome culls for off-screen
+   tiles. If a dense grid ever stutters, the upgrade is one blurred layer behind the whole grid —
+   at the cost of blurring the gaps, which is where the image shows. */
+#app.has-bg[data-backdrop="frosted"] .card,
+#app.has-bg[data-backdrop="frosted"] .set-card,
+#app.has-bg[data-backdrop="glass"] .card,
+#app.has-bg[data-backdrop="glass"] .set-card {
+  -webkit-backdrop-filter: var(--veil-blur);
+  backdrop-filter: var(--veil-blur);
+}
+/* The rubber band. Fixed on the body so .grid's own overflow cannot clip it, and
+   pointer-events: none so it never becomes the hit target of the drag drawing it. */
+.marquee {
+  position: fixed;
+  z-index: 5;
+  pointer-events: none;
+  border: 1px solid var(--media-accent);
+  border-radius: 4px;
+  background: var(--select-hover);
+}
 .grid:empty { display: none; }
 .spacer { display: none; }
 .card {
   position: relative;
   min-width: 0;
-  min-height: 205px;
+  min-height: var(--card-min, 205px);
   overflow: hidden;
   border-radius: var(--r-md);
   color: var(--media-text);
   background: var(--media-surface);
   isolation: isolate;
+  /* Drawn OUTSIDE the card, against the canvas rather than over the media: an inset ring is only
+     visible on half the images — a pale story swallows a light one, a night video a dark one. Out
+     here the contrast is constant whatever the photo is, and the same 1px reads as the gap. */
+  box-shadow: 0 0 0 1px var(--media-frame);
   transition: transform 0.16s ease;
+  /* The whole card selects on click and rubber-band drags across it, so a drag must
+     not start highlighting the title and meta text instead. */
+  user-select: none;
+  cursor: pointer;
 }
+/* Picked, on the whole card and not only in its 28px checkbox: at three columns that circle is
+   most of what there is to aim at. Replaces the frame; is-live's outline is INSET, so a live
+   picked card still shows both. */
+.card.is-picked { box-shadow: 0 0 0 2px var(--media-accent); }
+/* Nothing to select here (an MSE blob:, a receipt whose capture is gone). */
+.card.is-inert { cursor: default; }
 .card.is-live { outline: 2px solid var(--accent); outline-offset: -2px; }
+/* The keyboard cursor. Its own rule because the global focus ring is scoped to real controls and
+   a card is an <article>; offset OUTSIDE so it reads against the canvas rather than the photo.
+   Declared after is-live: same specificity, and the cursor wins because it is where you are. */
+.card:focus-visible { outline: 2px solid var(--media-text); outline-offset: 2px; }
 .card::after {
   content: "";
   position: absolute;
@@ -841,6 +929,44 @@ label { -webkit-tap-highlight-color: transparent; }
   gap: 0;
   overflow: hidden auto;
 }
+/* The page strip: four short pages rather than one column the user has to remember the order of. */
+.set-tabs {
+  flex: none;
+  margin: 0 16px 12px;
+  padding: 3px;
+  display: flex;
+  gap: 2px;
+  overflow-x: auto;
+  scrollbar-width: none;
+  background: var(--input-deep);
+  border: 1px solid var(--control-line);
+  border-radius: 11px;
+}
+.set-tabs::-webkit-scrollbar { height: 0; }
+/* Sized so all four labels fit on one line at the panel's own width. English is the long one:
+   "General Appearance Shortcuts Advanced" is 34 characters. The strip can scroll, but a scrollable
+   tab bar in a 340px panel reads as a clipped one, not as something to swipe. */
+.set-tab {
+  flex: 1 0 auto;
+  min-width: 0;
+  height: 30px;
+  padding: 0 7px;
+  color: var(--muted);
+  background: transparent;
+  border: 0;
+  border-radius: 8px;
+  font-size: 11px;
+  line-height: 1;
+  font-weight: 700;
+  white-space: nowrap;
+  cursor: pointer;
+}
+/* The active page reads as a raised tile, not a filled accent pill: the accent belongs to what is
+   being chosen on the page, and a lit strip above it competes with that. */
+.set-tab[aria-pressed="true"] { color: var(--text); background: var(--control-surface); }
+.set-tab:not([aria-pressed="true"]):hover { color: var(--text); }
+.set-page { display: flex; flex-direction: column; }
+.set-page[hidden] { display: none; }
 .set-section { flex: none; }
 .set-card { padding: 4px 14px; background: var(--surface); border-radius: var(--r-md); }
 .set-label {
@@ -880,6 +1006,110 @@ label { -webkit-tap-highlight-color: transparent; }
   text-align: right;
 }
 .set-row .select { width: auto; max-width: 168px; height: 32px; flex: 0 1 auto; }
+/* A paragraph that spans the whole settings card instead of sitting in a two-column
+   row — the keyboard hint and the reason a key was refused. */
+.set-block { padding: 12px 0; }
+.set-error { color: var(--danger); }
+/* Two buttons where a row normally holds one control. */
+.set-actions { flex: none; display: flex; align-items: center; gap: 8px; }
+/* A label that has to look like a button, for the file input it wraps: an <input type="file">
+   cannot be styled, so the label is the trigger and the input stays hidden. */
+.btn-quiet {
+  min-height: 32px;
+  padding: 8px 14px;
+  display: inline-flex;
+  align-items: center;
+  color: var(--text);
+  background: var(--control-surface);
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  font-size: 12.5px;
+  line-height: 15px;
+  font-weight: 700;
+  cursor: pointer;
+}
+.btn-quiet:hover { background: var(--select-hover); }
+/* The template's live result, on its own line above the token chips: what is worth seeing is what
+   the real namer adds — the subfolder prefix and the extension. */
+.set-preview { margin: 0; display: flex; align-items: baseline; gap: 7px; font-size: 12px; }
+.set-preview-tag { flex: none; color: var(--faint); font-size: 10px; font-weight: 800; letter-spacing: 0.1em; text-transform: uppercase; }
+#set-template-out { min-width: 0; color: var(--mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tokens { display: flex; flex-wrap: wrap; gap: 6px; }
+.token {
+  min-height: 26px;
+  padding: 0 9px;
+  color: var(--faint);
+  background: transparent;
+  border: 1px dashed var(--line);
+  border-radius: 999px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  cursor: pointer;
+}
+.token:hover { color: var(--text); border-style: solid; border-color: var(--accent); }
+/* The accent row. Circles, so the gradients read as colour and nothing else. */
+.swatches { flex: none; display: flex; flex-wrap: wrap; align-items: center; gap: 7px; }
+.swatch {
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  cursor: pointer;
+}
+/* A ring OUTSIDE the circle, in the panel's text colour rather than the accent: the chosen swatch
+   has to be findable against six neighbours, several of them near in hue. */
+.swatch[aria-pressed="true"] { box-shadow: 0 0 0 2px var(--canvas), 0 0 0 4px var(--text); }
+/* Two shortcut rows per line where the panel is wide enough, so nine rows and the reset button
+   fit on one screen. */
+.keys-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 0 14px; }
+.key-row { min-width: 0; min-height: 44px; padding: 9px 0; display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.key-name { min-width: 0; overflow: hidden; font-size: 12.5px; line-height: 16px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+/* Visible to a screen reader, not on screen: the template input's label is redundant beside its
+   own preview, but the input still needs a name. */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+/* The binding button, on the same 32px edge as every other right-hand control. Fixed
+   width so nine rows line up, monospace so a bound key reads as a key. */
+.key-cap {
+  flex: 0 0 auto;
+  /* Narrow, because two of these share a line with their labels; wide enough for the two
+     word-states to keep their shape. */
+  min-width: 46px;
+  height: 32px;
+  padding: 0 10px;
+  /* Flex-centred rather than line-height-centred: the label is sometimes a single punctuation
+     glyph, and "," sits on its baseline near the bottom of a 1.0 line box. */
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text);
+  background: var(--field);
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  font-weight: 700;
+  cursor: pointer;
+}
+/* The two states whose label is a word and not a key — the capture prompt, and "no key at all".
+   Both drop the monospace, or they read as a key named PULSA or NINGUNA. */
+.key-cap.is-armed,
+.key-cap.is-unbound {
+  font-family: var(--font);
+  font-size: 11.5px;
+  font-weight: 600;
+}
+.key-cap.is-armed { color: var(--accent-soft); border-color: var(--accent); }
+.key-cap.is-unbound { color: var(--faint); }
 .btn-ghost {
   min-height: 32px;
   padding: 8px 16px;
@@ -902,11 +1132,43 @@ label { -webkit-tap-highlight-color: transparent; }
 .track::before { content: ""; position: absolute; top: 3px; left: 3px; width: 20px; height: 20px; border-radius: 50%; background: var(--knob); box-shadow: 0 1px 3px rgba(0, 0, 0, 0.45); transition: transform 0.14s ease; }
 .switch input:checked + .track { background: var(--accent); }
 .switch input:checked + .track::before { transform: translateX(18px); }
-.lang-toggle { flex: none; padding: 3px; display: flex; gap: 2px; background: var(--input-deep); border: 1px solid var(--control-line); border-radius: 9px; }
-.lang-toggle button { min-width: 40px; height: 26px; padding: 0 14px; color: var(--muted); background: transparent; border: 0; border-radius: 7px; font-size: 12.5px; font-weight: 700; cursor: pointer; }
-.lang-toggle button.is-active { color: var(--on-accent); background: var(--accent); }
-.lang-toggle.is-disabled { opacity: 0.45; pointer-events: none; }
-.lang-toggle button:disabled { cursor: default; }
+/* The segmented control: every either/or setting, in one shape. Three or four options are cheaper
+   to read side by side than behind a click, and one shape means one set of states to style. */
+.seg {
+  flex: 0 1 auto;
+  min-width: 0;
+  padding: 3px;
+  display: flex;
+  gap: 2px;
+  background: var(--input-deep);
+  border: 1px solid var(--control-line);
+  border-radius: 9px;
+}
+.seg > button {
+  min-width: 0;
+  height: 26px;
+  padding: 0 9px;
+  color: var(--muted);
+  background: transparent;
+  border: 0;
+  border-radius: 7px;
+  font-size: 12px;
+  line-height: 1;
+  font-weight: 700;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.seg > button[aria-pressed="true"] { color: var(--on-accent); background: var(--accent-grad); }
+.seg > button:not([aria-pressed="true"]):hover { color: var(--text); background: var(--select-hover); }
+/* Four options plus a two-line hint do not fit beside each other at panel widths, so the row
+   wraps: the control drops to its own line only when it has to, and keeps every option's whole
+   word rather than clipping the last one. */
+.set-row:has(> .seg),
+.set-row:has(> .swatches) { flex-wrap: wrap; row-gap: 10px; }
+.set-row:has(> .seg) > .set-copy,
+.set-row:has(> .swatches) > .set-copy { flex: 1 1 150px; }
+.set-row:has(> .seg) > .seg,
+.set-row:has(> .swatches) > .swatches { flex: 0 0 auto; max-width: 100%; margin-left: auto; }
 .diagnostics details { cursor: pointer; }
 .diagnostics pre { height: auto; min-height: 44px; margin: 0; padding: 8px; white-space: pre-wrap; }
 /* The counters panel is the one .set-row.col whose children are NOT flex siblings:
@@ -974,9 +1236,9 @@ label { -webkit-tap-highlight-color: transparent; }
 
 @media (max-width: 335px) {
   .brand { padding-right: 12px; padding-left: 12px; }
-  /* Tighten the whole view, like .brand and .grid below. This used to indent
-     .now-overlay instead, which ADDED to .now's own padding and left the title,
-     metrics and button 12px further in than the media card above them. */
+  /* Tighten the whole view, like .brand and .grid below. On .now itself, not on .now-overlay:
+     an inset there ADDS to this padding and pushes the title, metrics and button further in than
+     the media card above them. */
   .now { padding-right: 12px; padding-left: 12px; }
   .metrics { gap: 7px; }
   .metric { gap: 2px; }
@@ -1057,7 +1319,9 @@ label { -webkit-tap-highlight-color: transparent; }
 .now-title,
 #settings-title { font-weight: 800; letter-spacing: -0.02em; }
 .set-label {
-  color: var(--accent-soft);
+  /* Muted, not accent-coloured: a section heading is a signpost, and the accent is a user choice
+     that would shout over the controls it labels. */
+  color: var(--faint);
   font-size: 10.5px;
   font-weight: 800;
   letter-spacing: 0.12em;
@@ -1111,10 +1375,9 @@ label { -webkit-tap-highlight-color: transparent; }
 .preview { flex: 1 1 auto; min-height: 170px; aspect-ratio: 10 / 16; }
 
 /* Section heading for the view, matching the grid's title row. */
-/* Same shape as .grid-title-line: the count sits right after the heading, sharing
-   its baseline. It used to be pushed to the far right by space-between, which left
-   it hanging away from the title it belongs to — the one visible difference from
-   Library and Saved that no amount of spacing would fix. The inset comes from
+/* Same shape as .grid-title-line: the count sits right after the heading, sharing its baseline,
+   rather than being pushed to the far edge by space-between and hanging away from the title it
+   belongs to. The inset comes from
    .now's own padding, as the grid's does, so there is no extra 2px here. */
 .now-head {
   flex: none;
@@ -1131,7 +1394,7 @@ label { -webkit-tap-highlight-color: transparent; }
 .now-pieces {
   min-width: 0;
   overflow: hidden;
-  color: var(--accent-soft);
+  color: var(--muted);
   font-size: 12.5px;
   line-height: 16px;
   font-weight: 700;

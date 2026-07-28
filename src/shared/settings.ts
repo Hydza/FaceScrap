@@ -3,11 +3,97 @@
 // corrupt stored shape is coerced back onto the defaults, so adding a field here
 // is backward-safe and a bad value can never reach a filename builder or a splice().
 
+import {
+  ACCENTS,
+  BACKDROPS,
+  CORNERS,
+  DEFAULT_ACCENT,
+  type AccentId,
+  type PanelBackdrop,
+  type PanelCorners,
+} from './appearance';
 import type { SettingsUpdateAck, SettingsUpdateMsg } from './messages';
 import type { ThemePreference } from './theme';
 
 type QualityPref = 'highest' | 'lowest' | 'ask';
 type ListOrder = 'newest' | 'oldest';
+
+/** The panel functions a key can be bound to. Order is load-bearing: it is the
+ *  order the keymap resolves conflicts in, and the order the Settings rows appear. */
+export const KEY_ACTIONS = [
+  'togglePick',
+  'downloadCard',
+  'selectAll',
+  'downloadPicks',
+  'viewNow',
+  'viewLibrary',
+  'viewSaved',
+  'cycleFilter',
+  'openSettings',
+] as const;
+export type KeyAction = (typeof KEY_ACTIONS)[number];
+/** An action's key, or '' when it has none. */
+export type Keymap = Record<KeyAction, string>;
+
+/** Is this a key a user may bind?
+ *
+ *  One printable character, and never whitespace. That single rule is also what keeps
+ *  the panel's own keys out: `Tab`, `Enter`, `Escape`, `ArrowUp`, `PageDown` and every
+ *  other navigation key arrives from KeyboardEvent.key as a multi-character NAME, so
+ *  the length check excludes them without a list to maintain. Space is the one
+ *  single-character exception — it scrolls the grid — hence the trim.
+ *
+ *  Nothing here can collide with Facebook: these are read by the side panel, which is
+ *  a separate document. A page never sees them. The one shortcut that does reach past
+ *  the panel is declared in manifest.json under "commands", where Chrome itself
+ *  intercepts the combination before the page. */
+export function isAssignableKey(key: unknown): key is string {
+  return typeof key === 'string' && key.length === 1 && key.trim().length === 1;
+}
+
+export const DEFAULT_KEYMAP: Keymap = {
+  togglePick: 's',
+  downloadCard: 'd',
+  selectAll: 'a',
+  downloadPicks: 'q',
+  viewNow: '1',
+  viewLibrary: '2',
+  viewSaved: '3',
+  cycleFilter: 'f',
+  openSettings: ',',
+};
+
+/** Coerce a stored keymap so no two actions can ever share a key.
+ *
+ *  Resolved in KEY_ACTIONS order, so the same corrupt store always resolves the same
+ *  way. An action whose stored key is unusable or already taken falls back to its
+ *  default; if that is taken too it ends up UNBOUND rather than duplicated — one press
+ *  firing two actions is worse than a function with no key. */
+export function normalizeKeymap(raw: unknown): Keymap {
+  const stored = (raw ?? {}) as Record<string, unknown>;
+  const map = {} as Keymap;
+  const taken = new Set<string>();
+  for (const action of KEY_ACTIONS) {
+    const value = stored[action];
+    const wanted = typeof value === 'string' ? value.toLowerCase() : undefined;
+    // '' is a choice, not an absence — it is what the Settings row stores when Backspace clears a
+    // binding — so it passes through rather than falling back to the default.
+    if (wanted === '') {
+      map[action] = '';
+      continue;
+    }
+    const fallback = DEFAULT_KEYMAP[action];
+    const key =
+      wanted != null && isAssignableKey(wanted) && !taken.has(wanted)
+        ? wanted
+        : taken.has(fallback)
+          ? ''
+          : fallback;
+    map[action] = key;
+    if (key !== '') taken.add(key);
+  }
+  return map;
+}
 
 export interface Settings {
   /** Filename pattern; tokens {source} {date} {id} are substituted, the rest kept. */
@@ -18,11 +104,28 @@ export interface Settings {
   defaultQuality: QualityPref;
   /** Skip the DASH audio+video remux and download the video track directly (muted). */
   directDownload: boolean;
+  /** Show the download button on the reel, story or photo being watched. Off means the
+   *  content script injects nothing into the page at all — see playing-download.ts. */
+  inPageButton: boolean;
   /** Pick EN/ES from navigator.language instead of the manual toggle. */
   followBrowserLang: boolean;
   /** Panel appearance; automatic follows Facebook for this tab, then the device. */
   theme: ThemePreference;
   listOrder: ListOrder;
+  /** Grid columns. 1 reads as a single tall column, 4 fits most at the cost of size. */
+  columns: number;
+  /** Accent for the selection, the progress and the primary button — see appearance.ts. */
+  accent: AccentId;
+  /** How much of a custom background shows through the panel's surfaces. */
+  panelBackdrop: PanelBackdrop;
+  /** The corner radius family. */
+  panelCorners: PanelCorners;
+  /** Master switch for the panel's own key bindings, for anyone whose IME or other
+   *  extension fights them. The arrows and the grid cursor go with it. */
+  keysEnabled: boolean;
+  /** Which key runs which panel function. A patch may name only the actions it rebinds; the
+   *  rest merge in from storage (see applyPatch). */
+  keymap: Keymap;
   /** Ask for confirmation before the Clear button wipes the list. */
   confirmClear: boolean;
   /** View filter: show only video rows (images/audio hidden, not dropped). */
@@ -41,9 +144,18 @@ export const DEFAULT_SETTINGS: Settings = {
   subfolder: true,
   defaultQuality: 'highest',
   directDownload: false,
+  inPageButton: true,
   followBrowserLang: false,
   theme: 'auto',
   listOrder: 'newest',
+  columns: 2,
+  accent: DEFAULT_ACCENT,
+  panelBackdrop: 'solid',
+  panelCorners: 'soft',
+  keysEnabled: true,
+  // A copy: loadSettings' error path spreads DEFAULT_SETTINGS shallowly, and a shared
+  // map would let one panel's edit rewrite the defaults for every later reader.
+  keymap: { ...DEFAULT_KEYMAP },
   confirmClear: false,
   videosOnly: false,
   minResolution: 0,
@@ -54,6 +166,7 @@ export const DEFAULT_SETTINGS: Settings = {
 const SETTINGS_KEY = 'settings';
 const QUALITY: QualityPref[] = ['highest', 'lowest', 'ask'];
 const ORDER: ListOrder[] = ['newest', 'oldest'];
+export const COLUMN_CHOICES = [1, 2, 3, 4];
 const THEME: ThemePreference[] = ['auto', 'light', 'dark'];
 const SETTINGS_FIELDS = Object.keys(DEFAULT_SETTINGS) as (keyof Settings)[];
 
@@ -89,9 +202,20 @@ export function normalizeSettings(raw: unknown): Settings {
       ? (r.defaultQuality as QualityPref)
       : DEFAULT_SETTINGS.defaultQuality,
     directDownload: bool(r.directDownload, DEFAULT_SETTINGS.directDownload),
+    inPageButton: bool(r.inPageButton, DEFAULT_SETTINGS.inPageButton),
     followBrowserLang: bool(r.followBrowserLang, DEFAULT_SETTINGS.followBrowserLang),
     theme: THEME.includes(r.theme as ThemePreference) ? (r.theme as ThemePreference) : DEFAULT_SETTINGS.theme,
     listOrder: ORDER.includes(r.listOrder as ListOrder) ? (r.listOrder as ListOrder) : DEFAULT_SETTINGS.listOrder,
+    columns: COLUMN_CHOICES.includes(r.columns as number) ? (r.columns as number) : DEFAULT_SETTINGS.columns,
+    accent: ACCENTS.some((a) => a.id === r.accent) ? (r.accent as AccentId) : DEFAULT_SETTINGS.accent,
+    panelBackdrop: BACKDROPS.includes(r.panelBackdrop as PanelBackdrop)
+      ? (r.panelBackdrop as PanelBackdrop)
+      : DEFAULT_SETTINGS.panelBackdrop,
+    panelCorners: CORNERS.includes(r.panelCorners as PanelCorners)
+      ? (r.panelCorners as PanelCorners)
+      : DEFAULT_SETTINGS.panelCorners,
+    keysEnabled: bool(r.keysEnabled, DEFAULT_SETTINGS.keysEnabled),
+    keymap: normalizeKeymap(r.keymap),
     confirmClear: bool(r.confirmClear, DEFAULT_SETTINGS.confirmClear),
     videosOnly: bool(r.videosOnly, DEFAULT_SETTINGS.videosOnly),
     minResolution: num(r.minResolution, DEFAULT_SETTINGS.minResolution),
@@ -114,7 +238,18 @@ export interface SettingsStorageArea {
   set(values: Record<string, unknown>): Promise<void>;
 }
 
-type SettingsPatchWriter = (patch: Partial<Settings>) => Promise<Settings>;
+/** A settings change. `keymap` is the one field that may be partial: it names only the actions
+ *  being rebound, and the rest are merged in from storage at write time. */
+export type SettingsPatch = Omit<Partial<Settings>, 'keymap'> & { keymap?: Partial<Keymap> };
+
+type SettingsPatchWriter = (patch: SettingsPatch) => Promise<Settings>;
+
+/** The value a patch produces on top of `base`. Scalars replace; `keymap` merges per action, so a
+ *  patch naming one binding leaves the other eight alone and two rebinds resolved from the same
+ *  snapshot both survive. normalizeKeymap settles any collision between them. */
+export function applyPatch(base: Settings, patch: SettingsPatch): Settings {
+  return normalizeSettings({ ...base, ...patch, keymap: { ...base.keymap, ...patch.keymap } });
+}
 
 /** Create one serialized read-modify-write lane. The service worker owns the
  * shared instance used by extension pages; direct writers are only a fallback
@@ -124,7 +259,7 @@ export function createSettingsPatchWriter(
 ): SettingsPatchWriter {
   let waitForPrevious: Promise<void> = Promise.resolve();
 
-  return async (patch: Partial<Settings>): Promise<Settings> => {
+  return async (patch: SettingsPatch): Promise<Settings> => {
     const pendingPatch = { ...patch };
     const previous = waitForPrevious;
     let release!: () => void;
@@ -139,7 +274,7 @@ export function createSettingsPatchWriter(
       // erase unrelated preferences.
       const area = storage ?? chrome.storage.local;
       const raw = (await area.get(SETTINGS_KEY))[SETTINGS_KEY];
-      const next = normalizeSettings({ ...normalizeSettings(raw), ...pendingPatch });
+      const next = applyPatch(normalizeSettings(raw), pendingPatch);
       await area.set({ [SETTINGS_KEY]: next });
       return next;
     } finally {
@@ -150,19 +285,37 @@ export function createSettingsPatchWriter(
 
 const settingsPatchWriter = createSettingsPatchWriter();
 
-function sanitizeSettingsPatch(raw: unknown): Partial<Settings> | undefined {
+/** The actions named by a keymap patch, with each key either a bindable character or '' for
+ *  "unbound". Anything else is dropped, leaving that action to whatever storage already holds. */
+function sanitizeKeymapPatch(raw: unknown): Partial<Keymap> | undefined {
+  if (raw == null || typeof raw !== 'object' || Array.isArray(raw)) return undefined;
+  const record = raw as Record<string, unknown>;
+  const patch: Partial<Keymap> = {};
+  for (const action of KEY_ACTIONS) {
+    const value = record[action];
+    if (typeof value !== 'string') continue;
+    const key = value.toLowerCase();
+    if (key === '' || isAssignableKey(key)) patch[action] = key;
+  }
+  return Object.keys(patch).length > 0 ? patch : undefined;
+}
+
+function sanitizeSettingsPatch(raw: unknown): SettingsPatch | undefined {
   if (raw == null || typeof raw !== 'object' || Array.isArray(raw)) return undefined;
   const normalized = normalizeSettings(raw);
-  const patch: Partial<Settings> = {};
+  const patch: SettingsPatch = {};
   const record = raw as Record<string, unknown>;
   // Carry every supplied field, coerced to a valid value: the worker write queue
   // must only ever persist a well-formed Settings, so a present-but-invalid field
   // is normalized to its default rather than rejecting the caller's whole patch.
   for (const field of SETTINGS_FIELDS) {
-    if (Object.prototype.hasOwnProperty.call(record, field)) {
-      (patch as Record<string, unknown>)[field] = normalized[field];
-    }
+    if (!Object.prototype.hasOwnProperty.call(record, field)) continue;
+    // keymap alone stays partial: normalizeSettings would fill every unnamed action from the
+    // defaults, turning a one-key rebind into a whole-map write.
+    if (field === 'keymap') patch.keymap = sanitizeKeymapPatch(record.keymap);
+    else (patch as Record<string, unknown>)[field] = normalized[field];
   }
+  if (patch.keymap === undefined) delete patch.keymap;
   return patch;
 }
 
@@ -264,7 +417,7 @@ function missingMessageReceiver(error: unknown): boolean {
 /** Route normal extension-page writes through the worker-owned queue. A direct
  * local write remains available when no runtime exists (unit tests) or when an
  * older worker has no receiver, but content scripts never get that bypass. */
-export async function saveSettings(patch: Partial<Settings>): Promise<void> {
+export async function saveSettings(patch: SettingsPatch): Promise<void> {
   const pendingPatch = { ...patch };
   const runtime = runtimeSettingsBroker();
   if (runtime) {
@@ -302,11 +455,11 @@ export async function saveSettings(patch: Partial<Settings>): Promise<void> {
 
 interface OptimisticSettingWrite {
   /** Persist the patch durably; a rejection triggers rollback. */
-  save(patch: Partial<Settings>): Promise<void>;
+  save(patch: SettingsPatch): Promise<void>;
   /** Reflect the optimistic value before the durable write resolves. */
   applyOptimistic?(next: Settings): void | Promise<void>;
   /** Effects that must happen only once the write is durable (re-render, etc.). */
-  onCommitted?(next: Settings, patch: Partial<Settings>): void | Promise<void>;
+  onCommitted?(next: Settings, patch: SettingsPatch): void | Promise<void>;
   /** Restore any optimistic UI to the previous value after a rejected write. */
   onRolledBack?(previous: Settings): void | Promise<void>;
   /** Surface a rejected write instead of dropping it. */
@@ -323,10 +476,10 @@ interface OptimisticSettingWrite {
  */
 export async function writeSettingOptimistically(
   previous: Settings,
-  patch: Partial<Settings>,
+  patch: SettingsPatch,
   hooks: OptimisticSettingWrite,
 ): Promise<Settings> {
-  const next = { ...previous, ...patch };
+  const next = applyPatch(previous, patch);
   // applyOptimistic is inside the try: it can reject too (it touches the DOM and,
   // in the panel, storage), and outside the try that rejection escaped past the
   // rollback — leaving the control showing a value that was never persisted.

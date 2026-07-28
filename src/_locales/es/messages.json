@@ -6,6 +6,10 @@
   "extensionDescription": {
     "message": "Guarda los reels, historias y destacadas de Facebook que puedes ver, con un clic."
   },
+  "commandDownloadPlaying": {
+    "message": "Descargar lo que se está reproduciendo",
+    "description": "Keyboard shortcut listed in chrome://extensions/shortcuts"
+  },
   "extensionActionTitle": {
     "message": "Abrir FaceScrap"
   }

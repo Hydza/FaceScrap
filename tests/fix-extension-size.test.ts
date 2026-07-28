@@ -1,11 +1,6 @@
-// The unpacked extension was 32.7 MB. 30.7 of that was ffmpeg-core.wasm, shipped
-// to run one `-c copy -shortest` merge; compressing it got to 10.5 MB, and
-// replacing it with src/shared/mp4-remux.ts got to well under one.
-//
-// These tests exist to keep it there. The remuxer's own correctness is covered by
-// tests/fix-mp4-remux.test.ts, against real MediaRecorder-produced tracks, and the
-// output was confirmed to decode in Chromium (readyState 4, 31 frames and 21 KB of
-// audio actually decoded from the merged file).
+// Guards the size budget: ~600 KB unpacked, all of it built from src/. It was 32.7 MB
+// while it carried an ffmpeg core to run one merge, so the rule is one vendored binary
+// away from breaking. The remuxer's own correctness lives in fix-mp4-remux.test.ts.
 
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
@@ -20,12 +15,9 @@ const pkg = JSON.parse(read('package.json')) as {
 };
 
 test('ships no runtime dependency at all', () => {
-  // @ffmpeg/core alone was 30.7 MB unpacked. Nothing in src/ may pull in a package
-  // again without this failing first — the whole size budget is this one rule.
-  //
-  // The devDependency list used to be pinned here too. That was a tripwire: it
-  // failed on a routine esbuild bump and could not fail on a real regression, since
-  // devDependencies never reach dist/.
+  // The whole budget is this one rule: nothing in src/ may pull in a package. (The
+  // devDependency list is deliberately NOT pinned — it never reaches dist/, so pinning
+  // it only breaks on tooling bumps.)
   assert.deepEqual(pkg.dependencies ?? {}, {}, 'dependencies must stay empty');
 });
 

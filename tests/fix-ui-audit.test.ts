@@ -3,13 +3,26 @@
 // copy contracts, which the DOM-less unit suite can pin without a browser.
 
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { readdirSync, readFileSync, statSync } from 'node:fs';
+import { join, sep } from 'node:path';
 import test from 'node:test';
+
+import { panelSource } from './panel-source';
+
+/** Every .ts/.html under a directory. Used instead of a hand-listed set of paths so a new
+ *  module that renders copy is covered the day it is written. */
+function sourceFiles(dir: string, out: string[] = []): string[] {
+  for (const entry of readdirSync(dir)) {
+    const full = join(dir, entry);
+    if (statSync(full).isDirectory()) sourceFiles(full, out);
+    else if (entry.endsWith('.ts') || entry.endsWith('.html')) out.push(full);
+  }
+  return out;
+}
 
 const css = readFileSync(join(process.cwd(), 'src', 'sidepanel', 'sidepanel.css'), 'utf8');
 const html = readFileSync(join(process.cwd(), 'src', 'sidepanel', 'sidepanel.html'), 'utf8');
-const panel = readFileSync(join(process.cwd(), 'src', 'sidepanel', 'sidepanel.ts'), 'utf8');
+const panel = panelSource();
 const i18n = readFileSync(join(process.cwd(), 'src', 'shared', 'i18n.ts'), 'utf8');
 
 function luminance(hex: string): number {
@@ -123,15 +136,14 @@ test('gives the card corner controls one shared box and a 24px-plus target', () 
   assert.ok(pad * 2 + line >= 24, `.link-btn target is ${pad * 2 + line}px, needs 24`);
 });
 
-// Images carry no duration, so the middle metric is hidden — but hiding a cell
-// does not drop its grid column, leaving an empty third and an off-centre divider.
+// Images carry no duration, so the middle metric is hidden — but hiding a cell does not drop its
+// grid column, leaving an empty third and an off-centre divider. Only the CSS and the markup are
+// asserted, which is where the source is the artifact; the two source-order checks that used to
+// follow pinned the shape of the code instead and failed on any equivalent rewrite.
 test('matches the metrics column count to the visible cells on images', () => {
   assert.match(css, /\.metrics\.is-two-up\s*\{\s*grid-template-columns:\s*repeat\(2,\s*1fr\)/);
   assert.match(html, /id="metrics"/, 'the metrics card needs an id for the toggle');
-  assert.match(panel, /classList\.toggle\('is-two-up',\s*isImage\)/);
-  const durationLine = panel.indexOf("byId('m-duration-metric').hidden = isImage");
-  const toggleLine = panel.indexOf("classList.toggle('is-two-up'");
-  assert.ok(durationLine >= 0 && toggleLine > durationLine, 'the toggle must ride with the hidden flag');
+  assert.match(html, /id="m-duration-metric"/, 'the duration cell needs an id to be hidden by');
 });
 
 // A container that gets replaced wholesale is the wrong live region: every render
@@ -213,14 +225,13 @@ test('localises every download failure reason and the startup failure', () => {
 test('carries no unused message keys', () => {
   const declared = [...i18n.matchAll(/^\s+\| '(\w+)'/gm)].map((m) => m[1]!);
   assert.ok(declared.length > 100, 'MsgKey parse looks wrong');
-  // Every context that renders user-visible copy, not just the panel: the
-  // in-page download overlay reads its own keys straight from i18n.ts.
-  const sources = [panel, html]
-    .concat(
-      ['src/shared/settings.ts', 'src/content/download-overlay.ts'].map((rel) =>
-        readFileSync(join(process.cwd(), ...rel.split('/')), 'utf8'),
-      ),
-    )
+  // Every file under src/, not a hand-listed subset. The list this replaced named three
+  // paths and went stale the moment a fourth module started holding message keys — the
+  // accent palette, whose swatches have no text and carry their label as data. A key used
+  // only there read as dead, which is the opposite of what this test is for.
+  const sources = sourceFiles(join(process.cwd(), 'src'))
+    .filter((file) => !file.endsWith(`shared${sep}i18n.ts`))
+    .map((file) => readFileSync(file, 'utf8'))
     .join('\n');
   const unused = declared.filter((key) => !sources.includes(`'${key}'`) && !sources.includes(`"${key}"`));
   assert.deepEqual(unused, [], `unused message keys: ${unused.join(', ')}`);

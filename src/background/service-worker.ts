@@ -8,29 +8,19 @@
 // Service workers are ephemeral: do minimal synchronous work in listeners and
 // persist immediately. Never keep capture state in module-scope variables.
 
-import { createJobChain, withHeartbeat } from '../shared/async';
 import { diagBump, diagDrain } from '../shared/diag';
 import {
-  addDiagCounters,
-  addSaved,
   addMedia,
   clearTab,
-  ensureCaptureHeadroom,
-  getBind,
-  getDiagCounters,
-  getMedia,
-  getPlaying,
   setFacebookTheme,
   purgeTab,
-  resetDiagCounters,
-  SAVED_ID_MAX,
-  SAVED_LABEL_MAX,
-  SAVED_THUMB_MAX,
   setCaps,
   setPlayingMediaPin,
   setRecent,
-  type SavedEntry,
 } from '../shared/storage';
+import { ensureCaptureHeadroom } from '../shared/session-write';
+import { addSaved, SAVED_ID_MAX, SAVED_LABEL_MAX, SAVED_THUMB_MAX, type SavedEntry } from '../shared/saved';
+import { addDiagCounters, getDiagCounters, resetDiagCounters } from '../shared/diag-store';
 import {
   classifyNetworkRequest,
   DASH_BYTE_RANGE_RE,
@@ -39,45 +29,24 @@ import {
   MEDIA_KINDS,
   MEDIA_SOURCES,
   mediaSourceFromLocation,
-  resolutionOf,
   sanitizeIncomingItems,
   type MediaSource,
 } from '../shared/media';
+import { forgetVideoGroupMemory } from '../shared/now-playing';
 import {
-  isDownloadable,
-  optionForLabel,
-  playingItems,
-  videoGroupOf,
-  videoOptions,
-} from '../shared/video-options';
-import { downloadFilename, itemCardId, savedEntryForItem, videoCardId } from '../shared/download-naming';
-import {
-  MUX_HARD_CAP_MS,
-  MUX_PORT,
-  SETTLE_CAP_MS,
-  type DashJobStartedMsg,
-  type RequestPlayingDownloadMsg,
   type DownloadDirectMsg,
   type DownloadDirectResponse,
-  type MuxMsg,
-  type MuxProgress,
-  type MuxProgressMsg,
-  type MuxResponse,
-  type RevokeMsg,
   type RuntimeMessage,
 } from '../shared/messages';
 import { facebookThemeRefAtReceipt } from '../shared/theme';
-import {
-  dashDownloadKey,
-  waitForDownloadSettlement,
-  type DashDownloadIdentity,
-} from '../shared/download-settlement';
-import { createSuccessDeduper, isRecentlyCompleted, withCompletion, type DedupSnapshot } from '../shared/success-deduper';
 import { hasOffscreen, hasSidePanel } from '../shared/capabilities';
 import { createSettingsMessageHandler, loadSettings } from '../shared/settings';
 import { createDiagObserver } from './diag-observer';
 import { createBindingMessageHandler } from './binding-handler';
 import { createContentScriptRecoveryCoordinator } from './content-script-recovery';
+import { downloadDash, downloadDirect } from './dash-download';
+import { createPlayingDownloadHandler } from './playing-download';
+import { createShortcutHandler } from './shortcut-download';
 import { persistNowPlayingMessage } from './playing-handler';
 import { createRecentObserver } from './recent-observer';
 import {
@@ -254,6 +223,28 @@ chrome.tabs.onActivated.addListener(({ tabId }) => {
 const tabLifecycle = createTabLifecycle(captureStorageReady);
 const handleBindingMessage = createBindingMessageHandler(tabLifecycle);
 const handleSettingsMessage = createSettingsMessageHandler();
+const handlePlayingDownload = createPlayingDownloadHandler({
+  isDead: (tabId) => tabLifecycle.isDead(tabId),
+  isFacebookUrl: (url) => FB_URL.test(url ?? ''),
+  persistReceipt: (tabId, receipt) => persistCompletedDownload(tabId, receipt),
+});
+
+// The global keyboard shortcut. Its logic lives in shortcut-download.ts so a test can drive it
+// without evaluating this whole module; here it is only wired to the browser.
+//
+// Guarded down to addListener, not just the namespace: a fork that ships chrome.commands without
+// onCommand would throw at module scope and take every capture and download with it, for a
+// shortcut nobody pressed.
+chrome.commands?.onCommand?.addListener?.(
+  createShortcutHandler({
+    // tabs.query rejects when there is no last-focused window — every window minimised, or the
+    // shortcut arriving as the last one closes.
+    activeTab: async () => (await chrome.tabs.query({ active: true, lastFocusedWindow: true }).catch(() => []))[0],
+    run: handlePlayingDownload,
+    report: (tabId, message) => void chrome.tabs.sendMessage(tabId, message).catch(() => {}),
+    onError: (error) => console.warn('[FaceScrap] shortcut download failed', error),
+  }),
+);
 
 function chromeDocumentIdentity(raw: unknown): string | undefined {
   return typeof raw === 'string' && raw.length > 0 && raw.length <= 128 ? `chrome:${raw}` : undefined;
@@ -283,6 +274,32 @@ function contentDocumentIdentity(sender: chrome.runtime.MessageSender, token: un
 
 function isExpectedLifecycleStop(error: unknown): boolean {
   return error instanceof ClosedTabError || error instanceof StaleDocumentError || error instanceof StaleTabEpochError;
+}
+
+type ContentAck = { ok: true } | { ok: false; retryable: boolean; error: string };
+
+/** The sender could not be identified, or its tab is already gone. Permanent: the
+ *  content script tears itself down rather than retry into a dead context. */
+const INVALID_SENDER: ContentAck = { ok: false, retryable: false, error: 'Invalid or closed sender tab.' };
+
+/**
+ * Map a lifecycle rejection to the retry contract the content script acts on. One
+ * decision for every capture message — three copies of this drifted apart once.
+ *
+ * A closed tab or a replaced document is permanent. A pending navigation is worth
+ * retrying. A stale tab EPOCH acks ok: the document that would do the retrying is
+ * already gone, so answering retryable:false would only make it tear itself down
+ * over evidence that was never wrong.
+ */
+function lifecycleAck(err: unknown): ContentAck {
+  if (err instanceof StaleTabEpochError) return { ok: true };
+  return {
+    ok: false,
+    retryable:
+      err instanceof NavigationPendingError ||
+      !(err instanceof ClosedTabError || err instanceof StaleDocumentError),
+    error: err instanceof Error ? err.message : String(err),
+  };
 }
 
 function sanitizeDownloadFilename(raw: unknown): string | undefined {
@@ -439,6 +456,7 @@ chrome.webNavigation.onErrorOccurred.addListener((details) => {
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (handleBindingMessage(msg, sender, sendResponse)) return true;
   if (handleSettingsMessage(msg, sender, sendResponse)) return true;
+  if (handlePlayingDownload(msg, sender, sendResponse)) return true;
   const tabId = sender.tab?.id;
   // Narrowing on the shared union couples this receiver to the senders at
   // compile time. The runtime field checks below are not redundant: content
@@ -450,27 +468,15 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     const documentId = contentDocumentIdentity(sender, m.documentToken);
     const signal = facebookThemeRefAtReceipt(m, Date.now());
     if (typeof tabId !== 'number' || tabLifecycle.isDead(tabId) || documentId == null || signal == null) {
-      sendResponse({ ok: false, retryable: false, error: 'Invalid or closed sender tab.' });
+      sendResponse(INVALID_SENDER);
       return true;
     }
     tabLifecycle.runIfLive(tabId, () => setFacebookTheme(tabId, signal), documentId).then(
       (stored) =>
         sendResponse(
-          stored
-            ? { ok: true }
-            : { ok: false, retryable: true, error: 'Facebook theme storage failed.' },
+          stored ? { ok: true } : { ok: false, retryable: true, error: 'Facebook theme storage failed.' },
         ),
-      (err) => {
-        if (err instanceof StaleTabEpochError) {
-          sendResponse({ ok: true });
-          return;
-        }
-        sendResponse({
-          ok: false,
-          retryable: err instanceof NavigationPendingError || !(err instanceof ClosedTabError || err instanceof StaleDocumentError),
-          error: err instanceof Error ? err.message : String(err),
-        });
-      },
+      (err) => sendResponse(lifecycleAck(err)),
     );
     return true;
   }
@@ -478,7 +484,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (m?.type === 'MEDIA_FOUND') {
     const documentId = contentDocumentIdentity(sender, m.documentToken);
     if (typeof tabId !== 'number' || tabLifecycle.isDead(tabId) || documentId == null || !Array.isArray(m.items)) {
-      sendResponse({ ok: false, retryable: false, error: 'Invalid or closed sender tab.' });
+      sendResponse(INVALID_SENDER);
       return true;
     }
     // The content script sanitizes too, but it shares the renderer process with
@@ -491,17 +497,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           void setBadge(tabId, n);
           sendResponse({ ok: true });
         },
-        (err) => {
-          if (err instanceof StaleTabEpochError) {
-            sendResponse({ ok: true });
-            return;
-          }
-          sendResponse({
-            ok: false,
-            retryable: err instanceof NavigationPendingError || !(err instanceof ClosedTabError || err instanceof StaleDocumentError),
-            error: err instanceof Error ? err.message : String(err),
-          });
-        },
+        (err) => sendResponse(lifecycleAck(err)),
       );
     return true;
   }
@@ -509,22 +505,12 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (m?.type === 'NOW_PLAYING') {
     const documentId = contentDocumentIdentity(sender, m.documentToken);
     if (typeof tabId !== 'number' || tabLifecycle.isDead(tabId) || documentId == null) {
-      sendResponse({ ok: false, retryable: false, error: 'Invalid or closed sender tab.' });
+      sendResponse(INVALID_SENDER);
       return true;
     }
     tabLifecycle.runIfLive(tabId, () => persistNowPlayingMessage(tabId, m, Date.now()), documentId).then(
       (ack) => sendResponse(ack),
-      (err) => {
-        if (err instanceof StaleTabEpochError) {
-          sendResponse({ ok: true });
-          return;
-        }
-        sendResponse({
-          ok: false,
-          retryable: err instanceof NavigationPendingError || !(err instanceof ClosedTabError || err instanceof StaleDocumentError),
-          error: err instanceof Error ? err.message : String(err),
-        });
-      },
+      (err) => sendResponse(lifecycleAck(err)),
     );
     return true;
   }
@@ -684,148 +670,15 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     return true;
   }
 
-  // The in-page download button's two messages. These are the MIRROR IMAGE of
-  // the two above: those carry a URL and are refused when sender.tab is set,
-  // because a page sharing a process with a content script must never aim the
-  // downloader at a URL of its choosing. These carry no URL at all — the tab
-  // comes from `sender`, which the page cannot forge, and every URL is resolved
-  // from capture state this worker already owns for that tab. So the most a
-  // hostile facebook.com page can do is re-download what the user is watching.
-  if (m?.type === 'FACESCRAP_PLAYING_DOWNLOAD_OPTIONS' || m?.type === 'FACESCRAP_REQUEST_PLAYING_DOWNLOAD') {
-    const senderTab = sender.tab;
-    // Must come FROM a tab (the inverse of the checks above), and only from a
-    // Facebook one: fbcdn is host-permitted too but is not a viewing surface.
-    if (
-      senderTab?.id == null ||
-      !Number.isInteger(senderTab.id) ||
-      !FB_URL.test(senderTab.url ?? '') ||
-      tabLifecycle.isDead(senderTab.id)
-    ) {
-      sendResponse({ ok: false, error: 'Unauthorized request.' });
-      return true;
-    }
-    const tid = senderTab.id;
-    const wantsDownload = m.type === 'FACESCRAP_REQUEST_PLAYING_DOWNLOAD';
-    const requestedLabel = wantsDownload ? (msg as Partial<RequestPlayingDownloadMsg>).label : undefined;
-
-    void (async () => {
-      try {
-        const [items, settings, ref, bind] = await Promise.all([
-          getMedia(tid),
-          loadSettings(),
-          getPlaying(tid),
-          // The panel's learned cover↔group bindings. Read, never written: they are
-          // what lets the button identify an MSE video whose only id in the ref is
-          // its cover — see playingItems.
-          getBind(tid),
-        ]);
-        // A PURE read — see playingItems. This handler polls, so it must not be a
-        // second writer on the detector's learned state or its pin.
-        const playing = playingItems(ref, items, bind);
-        // stripAudio mirrors the panel's own rule: no offscreen API, or the user
-        // asked for direct downloads, means a DASH pair cannot be remuxed.
-        const context = { stripAudio: !hasOffscreen() || settings.directDownload };
-
-        const video = playing.find((i) => i.kind === 'video');
-        // videosOnly hides images from every view; this button is one of them.
-        const image =
-          video || settings.videosOnly
-            ? undefined
-            : playing.find((i) => i.kind === 'image' && isDownloadable(i));
-
-        if (video) {
-          const group = videoGroupOf(video, items);
-          const { options, gkey, thumbUrl, durationSec } = videoOptions(group, context);
-          // minResolution hides the whole card in the Library and in Now Playing.
-          // Offering it here anyway would make the button contradict both.
-          const maxHeight = Math.max(0, ...group.map((i) => i.height ?? 0));
-          const decluttered =
-            settings.minResolution > 0 && maxHeight > 0 && maxHeight < settings.minResolution;
-          if (options.length === 0 || decluttered) {
-            // For the options query "nothing to offer" is a normal answer and the
-            // button hides. A download request must FAIL — answering ok would put
-            // "Saved" on a button that saved nothing.
-            if (wantsDownload) sendResponse({ ok: false, error: 'Nothing downloadable is playing.' });
-            else sendResponse({ ok: true, media: undefined });
-            return;
-          }
-          if (!wantsDownload) {
-            sendResponse({
-              ok: true,
-              media: { kind: 'video', labels: options.map((i) => resolutionOf(i).label) },
-            });
-            return;
-          }
-          const target = optionForLabel(options, requestedLabel, settings.defaultQuality);
-          if (!target) {
-            sendResponse({ ok: false, error: 'Nothing downloadable is playing.' });
-            return;
-          }
-          const cardId = videoCardId(gkey);
-          const receipt = savedEntryForItem(cardId, target, { thumbUrl, durationSec });
-          const filename = downloadFilename(target, settings);
-          const saveAs = settings.defaultQuality === 'ask';
-          if (target.audioUrl != null) {
-            if (!hasOffscreen()) {
-              sendResponse({ ok: false, error: 'This browser can\'t merge audio and video.' });
-              return;
-            }
-            await downloadDash({
-              tabId: tid,
-              receiptId: receipt.id,
-              videoUrl: target.url,
-              audioUrl: target.audioUrl,
-              filename,
-              saveAs,
-            });
-          } else {
-            await downloadDirect(target.url, filename, saveAs);
-          }
-          await persistCompletedDownload(tid, receipt);
-          sendResponse({ ok: true });
-          return;
-        }
-
-        if (image) {
-          if (!wantsDownload) {
-            // No resolutions to choose from — the overlay downloads on one click.
-            sendResponse({ ok: true, media: { kind: 'image', labels: [] } });
-            return;
-          }
-          const cardId = itemCardId(image.id);
-          const receipt = savedEntryForItem(cardId, image);
-          await downloadDirect(image.url, downloadFilename(image, settings), settings.defaultQuality === 'ask');
-          await persistCompletedDownload(tid, receipt);
-          sendResponse({ ok: true });
-          return;
-        }
-
-        // Nothing downloadable on screen. For the options query that is a normal
-        // answer (the button hides); for a download request it is a real failure.
-        if (wantsDownload) sendResponse({ ok: false, error: 'Nothing downloadable is playing.' });
-        else sendResponse({ ok: true, media: undefined });
-      } catch (error) {
-        sendResponse({ ok: false, error: String((error as Error)?.message ?? error) });
-      }
-    })();
-    return true; // async response
-  }
-
   return undefined;
 });
 
 // 4. Toolbar badge = number of captured items for that tab (count comes from
 //    addMedia's write, so this never re-reads the array).
-// EF8: setBadgeBackgroundColor's argument is a CONSTANT, so it only needs to
-// run once — not before every setBadgeText call. setBadge runs on the
-// worker's hottest paths (every classified fbcdn webRequest, every
-// MEDIA_FOUND ack, every panel focus), and this await used to sit on all of
-// them. A service worker is reaped and restarted, re-evaluating this module
-// from scratch, so this module-scope call still re-arms once per worker
-// instance rather than needing a browser-session-wide latch to survive a
-// restart. Caught here (never left to reject) so a one-off failure logs once
-// instead of making every future badge write throw against a permanently-
-// rejected cached promise.
+// The colour is a constant, so it is set once per worker instance rather than before
+// every badge write — setBadge runs on the worker's hottest paths. Module scope is
+// what re-arms it after a restart. Caught, never left to reject: a rejected cached
+// promise would make every future badge write throw.
 const badgeColorReady: Promise<void> = chrome.action
   .setBadgeBackgroundColor({ color: '#1877F2' })
   .catch((err) => {
@@ -844,6 +697,7 @@ chrome.tabs.onRemoved.addListener((tabId) => {
   diagObserver.removeTab(tabId);
   recentObserver.dispose(tabId); // tab is gone for good — release its dedupe state, not just reset it
   tabSurface.delete(tabId);
+  forgetVideoGroupMemory(tabId);
   void purgeTab(tabId);
 });
 
@@ -871,367 +725,3 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
     })
     .catch(() => {});
 });
-
-// --- DASH remux via the offscreen document ---
-
-let creatingOffscreen: Promise<void> | null = null;
-
-// A3: the idle-close timer (scheduled in runDownloadDash below) and the close
-// it can trigger both outlive the ONE job that scheduled them — dashChain has
-// already advanced to (or is free for) the next job by the time either
-// fires. Both need to live here, at module scope, shared across every job:
-//   - cancelPendingOffscreenIdleClose lets a job that starts before the timer
-//     fires cancel it outright, so a stale "no other job is running" verdict
-//     from an OLD job can never fire once that has stopped being true.
-//   - offscreenClosing lets ensureOffscreen wait out a close ALREADY in
-//     flight (the timer having fired first) before trusting getContexts —
-//     closeDocument()'s promise resolves only once Chrome confirms the
-//     document is actually gone, so awaiting it here first means the
-//     getContexts() call below always sees a settled state instead of racing
-//     a teardown that started before this job even asked.
-let offscreenClosing: Promise<void> | null = null;
-let cancelPendingOffscreenIdleClose: (() => void) | null = null;
-
-async function ensureOffscreen(): Promise<void> {
-  const closing = offscreenClosing;
-  if (closing) await closing;
-  const contexts = await chrome.runtime.getContexts({
-    contextTypes: [chrome.runtime.ContextType.OFFSCREEN_DOCUMENT],
-  });
-  if (contexts.length > 0) return;
-  if (!creatingOffscreen) {
-    creatingOffscreen = chrome.offscreen
-      .createDocument({
-        url: 'offscreen/offscreen.html',
-        reasons: [chrome.offscreen.Reason.BLOBS],
-        justification: 'Remux split DASH video+audio tracks into one MP4.',
-      })
-      .finally(() => {
-        creatingOffscreen = null;
-      });
-  }
-  await creatingOffscreen;
-}
-
-// A DASH job can take a while — the two track fetches dominate it now that the
-// merge itself is table surgery — and a service worker that goes idle mid-job is
-// killed, orphaning the offscreen reply and hanging the panel's button forever.
-// Pinging a cheap API on an interval resets the idle timer while a job runs.
-// (chrome.downloads is unavailable in offscreen docs, so the SW must stay alive
-// to receive the blob URL and start the download itself.)
-function startKeepalive(): () => void {
-  const id = setInterval(() => void chrome.runtime.getPlatformInfo().catch(() => {}), 20000);
-  return () => clearInterval(id);
-}
-
-// A DASH download is identified by its (video, audio) track pair. The panel's
-// UI timeout (DASH_UI_TIMEOUT_MS) does NOT cancel the SW job, and once the
-// panel gives up its button turns clickable again, so duplicates are collapsed:
-// a concurrent request shares the one in-flight job, and a request shortly
-// after a completed download is an idempotent no-op.
-// SETTLE_CAP_MS and MUX_HARD_CAP_MS (imported above from messages.ts) are this
-// job's other two timing constants; they live there — not here — so
-// DASH_UI_HARD_CAP_MS (the panel's own ceiling) can be derived from them
-// instead of merely asserted to sit above them. See their comments there.
-// Grace before closing the idle offscreen document after a download settles. It no
-// longer has a loaded wasm core to amortize, but recreating the document per
-// download would still serialize a page load in front of every merge.
-const OFFSCREEN_IDLE_MS = 60_000;
-
-// track-fetch.ts's own retry ladder (STALL_MS, ATTEMPTS, RETRY_DELAY_MS at
-// src/shared/track-fetch.ts:16-20) is not exported, so it cannot be imported
-// here. These mirror its current values so the idle window below is DERIVED
-// from the ladder instead of merely asserted to sit above it — keep them in
-// sync by hand if that ladder ever changes (tests/config.test.ts pins both
-// sides against drift). Exporting the real constants would remove this risk.
-const TRACK_FETCH_STALL_MS = 60_000;
-const TRACK_FETCH_ATTEMPTS = 3;
-const TRACK_FETCH_RETRY_DELAY_MS = 1_000;
-// Worst case a single lawfully-retrying track fetch can go without emitting a
-// byte (fetchTrackWithBudget's retry loop): every attempt stalls out
-// (STALL_MS each) plus the backoff sleep between attempts
-// (RETRY_DELAY_MS * attempt, for every attempt but the last). Both DASH tracks
-// would have to stall in lockstep for the whole ladder to produce this — the
-// worst case, not the typical one — but a lawful worst case must still never
-// be cut off.
-const TRACK_FETCH_WORST_CASE_SILENCE_MS =
-  TRACK_FETCH_STALL_MS * TRACK_FETCH_ATTEMPTS +
-  (TRACK_FETCH_RETRY_DELAY_MS * (TRACK_FETCH_ATTEMPTS * (TRACK_FETCH_ATTEMPTS - 1))) / 2;
-
-// Backstop on ONE mux round-trip, measured from job START — jobs are serialized
-// on dashChain below, so queue wait never burns this budget.
-//
-// This was a 115s WALL-CLOCK cap, justified by a bound the offscreen document
-// does not actually have: it caps the IDLE gap of each track read (STALL_MS),
-// deliberately, because "a whole-transfer wall-clock cap can't tell a stall
-// from a large track on a slow-but-steady link" (its own words). The worker
-// then reimposed exactly that cap one layer up, so a 500MB video on a 20Mbps
-// link — several minutes of perfectly healthy transfer — died at 115s, and the
-// catch below tore down the offscreen document, discarding every byte. Retrying
-// failed identically. It was deterministic, not flaky.
-//
-// So: bound idleness instead, against the progress the offscreen now reports
-// (MUX_PORT). A job that keeps moving is never cut off; a wedged one still
-// dies. This was then set to a flat 90s — comfortably above STALL_MS alone,
-// but track-fetch can lawfully go silent for its WHOLE retry ladder
-// (TRACK_FETCH_WORST_CASE_SILENCE_MS, ~183s at today's values) before it
-// exhausts its attempts and throws a real, specific error: nothing beats
-// during a stall, the backoff, or a hanging reconnect (fetchTrack only reports
-// progress on byte arrival). A job still healthy on attempt 2 of 3 was being
-// killed here, generically, well before it had that chance. The idle window
-// now sits above the FULL ladder's worst case, not just one stall, so a track
-// that truly exhausts its retries surfaces ITS specific error instead of this
-// generic one.
-const MUX_IDLE_MS = TRACK_FETCH_WORST_CASE_SILENCE_MS + 30_000;
-
-// Just past the longest a job can possibly run, and derived from it so the two
-// cannot drift apart: a retry clicked after a long download must hit the no-op
-// above, never run a second full download of a file already on disk. Derived
-// from the HARD CAP rather than the panel's idle window — with progress-based
-// timeouts a healthy job may now legitimately outlive that window several times
-// over, and a dedup entry that expired first would let a retry duplicate it.
-const DEDUP_WINDOW_MS = MUX_HARD_CAP_MS + 30_000;
-const dashDeduper = createSuccessDeduper(DEDUP_WINDOW_MS, () => performance.now());
-
-// dashDeduper above is in-memory only, so its success window dies with the
-// worker — and MV3 can reap an idle worker roughly a minute after a download
-// settles (see scheduleIdleClose below), well inside DEDUP_WINDOW_MS. A Retry
-// clicked minutes later, after a restart, would otherwise re-run a full
-// track fetch + remux for a file already on disk. Mirror completions into
-// chrome.storage.session — wall-clock stamped (see DedupSnapshot), never
-// performance.now(), which resets its origin every worker instance — and
-// consult the mirror before ever asking dashDeduper to start a fresh job. A
-// separate small key rather than routed through storage.ts: this bookkeeping
-// is unrelated to the captured-media domain storage.ts owns (media/saved/
-// playing/recent/bind), so it does not participate in its capture-headroom
-// reservation or per-tab retention.
-const DASH_DEDUP_STORAGE_KEY = 'dash_dedup_completed_v1';
-
-async function readDashDedupSnapshot(): Promise<DedupSnapshot> {
-  try {
-    const raw = (await chrome.storage.session.get(DASH_DEDUP_STORAGE_KEY))[DASH_DEDUP_STORAGE_KEY];
-    return raw != null && typeof raw === 'object' ? (raw as DedupSnapshot) : {};
-  } catch {
-    return {}; // a read failure must never block a legitimate download — fail open
-  }
-}
-
-function dashCompletedAcrossRestart(key: string): Promise<boolean> {
-  return readDashDedupSnapshot().then((snapshot) => isRecentlyCompleted(snapshot, key, Date.now(), DEDUP_WINDOW_MS));
-}
-
-async function recordDashCompletionAcrossRestart(key: string): Promise<void> {
-  const next = withCompletion(await readDashDedupSnapshot(), key, Date.now(), DEDUP_WINDOW_MS);
-  try {
-    await chrome.storage.session.set({ [DASH_DEDUP_STORAGE_KEY]: next });
-  } catch (err) {
-    // Best-effort mirror: losing this write only re-exposes the pre-fix gap
-    // for this one entry (a worker-restarted Retry re-downloads it), never a
-    // new hazard — the file and its Saved receipt are already durable by now.
-    console.error('[FaceScrap] dash dedup mirror write failed', err);
-  }
-}
-
-// Progress from the running mux. Jobs are serialized on dashChain, so at most
-// one beat function is live; the port is opened by the offscreen when its job
-// starts (see enqueueMux there).
-let activeBeat: (() => void) | null = null;
-chrome.runtime.onConnect.addListener((port) => {
-  // Only the extension's own offscreen document — a content script's port has
-  // sender.tab set. Same defence-in-depth as the message router.
-  if (port.name !== MUX_PORT || port.sender?.tab) return;
-  port.onMessage.addListener((p: MuxProgress) => {
-    activeBeat?.();
-    // Forward to the panel so ITS wait is idle-bounded too — otherwise a
-    // download long enough to be worth this whole mechanism would still be
-    // reported failed by the UI while the worker was happily finishing it.
-    chrome.runtime.sendMessage({ type: 'FACESCRAP_MUX_PROGRESS', ...p } satisfies MuxProgressMsg).catch(() => {});
-  });
-});
-
-// Every DASH job runs one at a time on this chain, whichever panel window sent
-// it. The offscreen muxQueue already serializes the MUXES, but a job's
-// MUX_TIMEOUT used to start at sendMessage — so a request queued behind a long
-// merge burned its budget waiting and was reported failed over work that then
-// completed and was thrown away. Chaining here starts each job's clock at job
-// start. createJobChain's internal catch() keeps one failed job from
-// poisoning the chain for the next one, while downloadDash below still awaits
-// (and sees the rejection of) its OWN job.
-//
-// That fix alone was worker-side only: the PANEL's own wait (DASH_UI_HARD_CAP_MS,
-// messages.ts) still started at sendMessage, before a job even reached this
-// chain — a request queued behind another long job could still exhaust the
-// panel's ceiling while this chain later finished it and wrote a Saved
-// receipt, tagging one card both Failed (panel) and present (Saved view).
-// downloadDash below now also broadcasts FACESCRAP_DASH_JOB_STARTED the
-// instant a request leaves this chain, so the panel can rebase its own
-// DASH_UI_HARD_CAP_MS wait off the job actually starting instead of off
-// sendMessage — see DASH_UI_HARD_CAP_MS's and withRearmableHardCap's comments
-// in messages.ts for the panel-side half.
-const dashChain = createJobChain<void>();
-
-async function downloadDash(request: DashDownloadIdentity): Promise<void> {
-  const key = dashDownloadKey(request);
-  // Durable check FIRST: dashDeduper's own in-memory hit/miss means nothing
-  // right after a worker restart.
-  if (await dashCompletedAcrossRestart(key)) return;
-  await dashDeduper.run(key, () =>
-    // The completion mirror write is folded into the SAME chained job (not
-    // appended after it) so it is serialized against every other queued job's
-    // read-modify-write of the one shared storage key — two jobs completing
-    // close together could otherwise race and silently lose one's record.
-    dashChain(async () => {
-      // Tell whichever panel is waiting on THIS request that it has left the
-      // queue — addressed by `key` so a panel queued behind a DIFFERENT job
-      // can never rebase its hard cap off someone else's start. Fire-and-
-      // forget, like FACESCRAP_MUX_PROGRESS: with no panel open (or the wrong
-      // one listening), sendMessage simply finds no matching receiver.
-      chrome.runtime
-        .sendMessage({ type: 'FACESCRAP_DASH_JOB_STARTED', key } satisfies DashJobStartedMsg)
-        .catch(() => {});
-      await runDownloadDash(request.videoUrl, request.audioUrl, request.filename, request.saveAs);
-      await recordDashCompletionAcrossRestart(key);
-    }),
-  );
-}
-
-async function runDownloadDash(
-  videoUrl: string,
-  audioUrl: string,
-  filename: string,
-  saveAs: boolean,
-): Promise<void> {
-  // A3: cancel whatever idle-close a PREVIOUS job scheduled before this job
-  // gets anywhere near ensureOffscreen. Synchronous, before any await, so it
-  // either beats a not-yet-fired timer outright (clearTimeout always wins
-  // against a timer that hasn't run yet) or is a safe no-op — the timer
-  // already fired, and ensureOffscreen's offscreenClosing wait above is what
-  // covers that case instead. Also releases that OLD job's keepalive right
-  // away: this job starts its own below, so holding the old one open too
-  // would only duplicate pings, and never releasing it here would leak it
-  // for the rest of the worker's life (nothing else ever calls stopOnce for
-  // a cancelled timer).
-  cancelPendingOffscreenIdleClose?.();
-  const stopKeepalive = startKeepalive();
-  let keepaliveStopped = false;
-  const stopOnce = (): void => {
-    if (keepaliveStopped) return;
-    keepaliveStopped = true;
-    stopKeepalive();
-  };
-  // Let the document go once idle: it holds the fetched tracks and the published
-  // blob, which is the only memory left in this path now that there is no wasm
-  // heap. Hold the keepalive one grace period longer, then close it if no other
-  // mux is running. The next download simply recreates it.
-  let idleCloseScheduled = false;
-  const scheduleIdleClose = (): void => {
-    if (idleCloseScheduled) return;
-    idleCloseScheduled = true;
-    const timer = setTimeout(() => {
-      cancelPendingOffscreenIdleClose = null;
-      if (dashDeduper.inFlightCount === 0) {
-        // Module-scope (not a local var) so a job starting while this is
-        // still in flight can await it from ensureOffscreen instead of
-        // racing it — see offscreenClosing's comment above.
-        offscreenClosing = chrome.offscreen
-          .closeDocument()
-          .catch(() => {})
-          .finally(() => {
-            offscreenClosing = null;
-          });
-      }
-      stopOnce();
-    }, OFFSCREEN_IDLE_MS);
-    cancelPendingOffscreenIdleClose = () => {
-      clearTimeout(timer);
-      cancelPendingOffscreenIdleClose = null;
-      stopOnce();
-    };
-  };
-
-  try {
-    await ensureOffscreen();
-    let res: MuxResponse | undefined;
-    try {
-      const guarded = withHeartbeat(
-        chrome.runtime.sendMessage({ type: 'FACESCRAP_MUX', videoUrl, audioUrl } satisfies MuxMsg),
-        MUX_IDLE_MS,
-        MUX_HARD_CAP_MS,
-        'The merge timed out.',
-      );
-      activeBeat = guarded.beat;
-      try {
-        res = (await guarded.promise) as MuxResponse | undefined;
-      } finally {
-        activeBeat = null;
-      }
-    } catch (e) {
-      // A timed-out mux may still be RUNNING over there — the guard above only
-      // stops waiting, and there is no cancel message. Left alive, the wedged
-      // exec keeps the offscreen muxQueue busy while the NEXT chained job's
-      // clock runs, cascading false timeouts through everything queued behind
-      // it (the queue-wait-burns-the-budget bug one layer down). Tear the
-      // document down so the wedge dies with it; the next job recreates a
-      // fresh one. Acceptable collateral: this job was already reported
-      // failed, and a prior job's pending blob download has near-always
-      // settled by now (blob→disk lands in well under a second). A rejected
-      // sendMessage (offscreen already gone) takes this path too — the close
-      // is then a no-op. AWAITED before the rethrow: dashChain advances the
-      // moment this promise rejects (microtasks), while closeDocument is a
-      // cross-process round trip — an unawaited close lets the next job's
-      // ensureOffscreen see the dying document via getContexts, skip creation,
-      // and send its mux into it.
-      await chrome.offscreen.closeDocument().catch(() => {});
-      throw e;
-    }
-    if (res?.ok !== true || !res.blobUrl) {
-      throw new Error((res?.ok === false ? res.error : undefined) || 'Could not merge audio and video.');
-    }
-
-    const blobUrl = res.blobUrl;
-    let downloadId: number;
-    try {
-      downloadId = await chrome.downloads.download({ url: blobUrl, filename, saveAs });
-    } catch (e) {
-      // The mux succeeded but the download couldn't start — release the
-      // offscreen-owned blob instead of leaking it until the doc closes.
-      chrome.runtime.sendMessage({ type: 'FACESCRAP_REVOKE', blobUrl } satisfies RevokeMsg).catch(() => {});
-      throw e;
-    }
-    try {
-      // `download()` proves only enqueue. Dedup and Saved advance only after
-      // this terminal promise confirms the file actually reached `complete`.
-      await waitForDownloadSettlement(chrome.downloads, downloadId, {
-        timeoutMs: SETTLE_CAP_MS,
-        cancelOnTimeout: true,
-      });
-    } finally {
-      chrome.runtime.sendMessage({ type: 'FACESCRAP_REVOKE', blobUrl } satisfies RevokeMsg).catch(() => {});
-    }
-    scheduleIdleClose();
-  } catch (e) {
-    // Same idle-close path as success: a failed mux (an expired fbcdn URL is the
-    // common failure) must not leave the offscreen document — and the tracks it
-    // fetched — alive indefinitely.
-    scheduleIdleClose();
-    throw e;
-  }
-}
-
-async function downloadDirect(url: string, filename: string, saveAs: boolean): Promise<void> {
-  const stopKeepalive = startKeepalive();
-  try {
-    const downloadId = await chrome.downloads.download({
-      url,
-      filename,
-      conflictAction: 'uniquify',
-      saveAs,
-    });
-    // A remote progressive file can be legitimately slow, so unlike the local
-    // DASH blob this has no wall-clock timeout. The browser's terminal event is
-    // the authority; interruption rejects and leaves Retry real.
-    await waitForDownloadSettlement(chrome.downloads, downloadId);
-  } finally {
-    stopKeepalive();
-  }
-}

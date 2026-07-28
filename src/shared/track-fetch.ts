@@ -13,11 +13,18 @@ import { isFbcdn } from './media';
  *  forever. Bound the IDLE gap, never total duration — a whole-transfer cap
  *  cannot tell a stall from a large track on a slow-but-steady link, and
  *  aborted legitimate slow downloads. */
-const STALL_MS = 60_000;
+export const STALL_MS = 60_000;
 
 /** A dropped connection is worth retrying; an expired URL is not (see below). */
-const ATTEMPTS = 3;
-const RETRY_DELAY_MS = 1_000;
+export const ATTEMPTS = 3;
+export const RETRY_DELAY_MS = 1_000;
+
+/** Longest a lawfully-retrying track fetch can go without emitting a byte: every
+ *  attempt stalls out, plus the backoff between attempts. Exported because the
+ *  worker's mux idle window must sit ABOVE it — cut a job off sooner and a track
+ *  that was about to exhaust its retries reports a generic timeout instead of its
+ *  own specific error. Derived here so the two cannot drift apart. */
+export const WORST_CASE_SILENCE_MS = STALL_MS * ATTEMPTS + (RETRY_DELAY_MS * (ATTEMPTS * (ATTEMPTS - 1))) / 2;
 
 // A 500 MB (decimal) video track still fits, as does its audio companion, while
 // forged/unbounded responses cannot consume the offscreen document indefinitely.

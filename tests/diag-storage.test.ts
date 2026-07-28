@@ -3,7 +3,7 @@ import test from 'node:test';
 
 import './chrome-fake';
 import { resetChromeStorage } from './chrome-fake';
-import { addDiagCounters, getDiagCounters, resetDiagCounters } from '../src/shared/storage';
+import { addDiagCounters, getDiagCounters, resetDiagCounters } from '../src/shared/diag-store';
 
 test('reports no counters before anything is recorded', async () => {
   await resetChromeStorage();

@@ -12,12 +12,25 @@ import {
   pickAnchorElement,
   pickControlAnchor,
 } from '../src/content/download-overlay';
+import { playingVideoGroup, rememberedVideoGroup } from '../src/shared/now-playing';
 import { optionForLabel, playingItems, videoGroupOf } from '../src/shared/video-options';
 import { downloadFilename, itemCardId, videoCardId } from '../src/shared/download-naming';
 import { mediaId, videoGroupKey, type MediaItem } from '../src/shared/media';
 
 const ROOT = process.cwd();
-const worker = readFileSync(join(ROOT, 'src', 'background', 'service-worker.ts'), 'utf8');
+// The in-page handler lives in playing-download.ts; the router that gates it and the
+// DASH orchestration behind it are separate modules. Concatenated so these assertions
+// follow the code across module moves.
+const worker = [
+  join(ROOT, 'src', 'background', 'service-worker.ts'),
+  join(ROOT, 'src', 'background', 'playing-download.ts'),
+  join(ROOT, 'src', 'background', 'dash-download.ts'),
+]
+  .map((file) => readFileSync(file, 'utf8'))
+  .join('\n');
+// The whole module IS the in-page handler now, so these assertions read it directly
+// instead of slicing a range out of the router.
+const playingHandler = readFileSync(join(ROOT, 'src', 'background', 'playing-download.ts'), 'utf8');
 const overlaySource = readFileSync(join(ROOT, 'src', 'content', 'download-overlay.ts'), 'utf8');
 
 // ── The trust boundary ──────────────────────────────────────────────────────
@@ -39,12 +52,10 @@ test('keeps refusing URL-carrying download messages from a content script', () =
 });
 
 test('the in-page messages require a Facebook tab and never trust a tab id from the page', () => {
-  const at = worker.indexOf("m?.type === 'FACESCRAP_PLAYING_DOWNLOAD_OPTIONS'");
-  assert.ok(at >= 0, 'missing the in-page download handler');
-  const body = worker.slice(at, worker.indexOf('return undefined;', at));
+  const body = playingHandler;
 
   assert.match(body, /senderTab\?\.id == null/, 'must refuse a sender without a tab');
-  assert.match(body, /FB_URL\.test\(senderTab\.url \?\? ''\)/, 'must refuse a non-Facebook tab');
+  assert.match(body, /deps\.isFacebookUrl\(senderTab\.url\)/, 'must refuse a non-Facebook tab');
   assert.match(body, /const tid = senderTab\.id;/, 'the tab must come from sender, not the message');
   // The message shape has no tabId at all, but assert the handler never reads one
   // even if somebody adds it later.
@@ -53,8 +64,7 @@ test('the in-page messages require a Facebook tab and never trust a tab id from 
 });
 
 test('the options reply carries resolution labels only, never a URL', () => {
-  const at = worker.indexOf("m?.type === 'FACESCRAP_PLAYING_DOWNLOAD_OPTIONS'");
-  const body = worker.slice(at, worker.indexOf('return undefined;', at));
+  const body = playingHandler;
   // Every options response in this handler.
   const replies = [...body.matchAll(/sendResponse\(\{\s*ok: true,\s*media:[\s\S]*?\}\);/g)].map((m) => m[0]);
   assert.ok(replies.length >= 2, 'expected the video and image option replies');
@@ -129,9 +139,11 @@ test('optionForLabel matches the requested resolution, and falls back rather tha
 
 test('resolves what is playing without running the detector', () => {
   assert.doesNotMatch(worker, /selectPlaying/, 'the worker must not run the detector at all');
-  const at = worker.indexOf("m?.type === 'FACESCRAP_PLAYING_DOWNLOAD_OPTIONS'");
-  const body = worker.slice(at, worker.indexOf('return undefined;', at));
-  assert.match(body, /playingItems\(ref, items, bind\)/, 'must use the pure read');
+  const body = playingHandler;
+  assert.match(body, /playingItems\(ref, items\)/, 'must use the pure read');
+  assert.match(body, /playingVideoGroup\(\s*tid,\s*items,\s*ref,\s*recent,\s*at,\s*bind,?\s*\)/, 'and the shared evidence core for video');
+  // Held across ticks, or the button vanishes when the streamed evidence ages out.
+  assert.match(body, /rememberedVideoGroup\(/, 'and its own memory of the answer');
 
   const shared = readFileSync(join(ROOT, 'src', 'shared', 'video-options.ts'), 'utf8');
   const selector = shared.slice(shared.indexOf('export function playingItems'));
@@ -162,13 +174,11 @@ test('offers video representations only — never the audio track of the same vi
   for (const item of group) assert.equal(item.kind, 'video');
 
   // The helper being right is not enough — the wiring is what was wrong.
-  const at = worker.indexOf("m?.type === 'FACESCRAP_PLAYING_DOWNLOAD_OPTIONS'");
-  assert.match(worker.slice(at, worker.indexOf('return undefined;', at)), /videoGroupOf\(video, items\)/);
+  assert.match(playingHandler, /videoGroupOf\(video, items\)/);
 });
 
 test('fails a download it cannot serve instead of reporting success', () => {
-  const at = worker.indexOf("m?.type === 'FACESCRAP_PLAYING_DOWNLOAD_OPTIONS'");
-  const body = worker.slice(at, worker.indexOf('return undefined;', at));
+  const body = playingHandler;
   // "Nothing to offer" is a normal answer to the query and a failure for a
   // download — answering ok would put "Saved" on a button that saved nothing.
   assert.match(
@@ -177,7 +187,7 @@ test('fails a download it cannot serve instead of reporting success', () => {
   );
 });
 
-test('a learned cover binding identifies an MSE video the ids alone cannot', () => {
+test('the streamed tracks identify an MSE video no id can name', () => {
   // A story or reel plays under MSE, so content.ts refuses to turn its blob:
   // currentSrc into an id (content.ts:973). The only thing naming the video in
   // ref.ids is its COVER — and when no captured item happens to carry that exact
@@ -190,38 +200,43 @@ test('a learned cover binding identifies an MSE video the ids alone cannot', () 
   const items = [hd, sd, unrelated];
   assert.notEqual(videoGroupKey(hd), videoGroupKey(unrelated), 'the fixture must not group everything');
 
-  const coverId = 'story-cover-1';
-  const ref = { ids: [coverId], hasVideo: true };
-  assert.deepEqual(playingItems(ref, items), [], 'the cover alone matches nothing — that is the bug');
+  // Nothing in the ref names the video — no ids at all, which is the real shape of
+  // a story slide whose <video> is a blob:.
+  const T = 1_000_000;
+  const ref = { ids: [], hasVideo: true, mark: 'vm:abc', at: T };
+  assert.deepEqual(playingItems(ref, items), [], 'no id names an MSE video — that is why the button was blank');
 
-  const bindings = { coverBind: [[coverId, videoGroupKey(hd)]] as [string, string][] };
-  assert.deepEqual(
-    playingItems(ref, items, bindings).map((i) => i.id),
-    ['fb:hd', 'fb:sd'],
-    'the binding names the group, and the whole resolution ladder comes back with it',
+  // What the panel matches on instead: the tracks fbcdn actually streamed. Four
+  // of them, starting just after the slide and spanning past the sustained-stream
+  // minimum, are playback rather than a burst.
+  const streamed = (at: number) => ({ url: track('hd'), at });
+  const recent = { tracks: [streamed(T + 100), streamed(T + 400), streamed(T + 900), streamed(T + 1400)] };
+  assert.equal(
+    playingVideoGroup(1, items, ref, recent, T + 2000, null),
+    videoGroupKey(hd),
+    'a sustained post-slide stream identifies the video no id could',
   );
 });
 
-test('the cover binding is a fallback, never an override', () => {
-  const efg = Buffer.from(JSON.stringify({ xpv_asset_id: '4242' })).toString('base64url');
-  const hd = video({ id: 'fb:hd', url: `https://video.xx.fbcdn.net/v/t42/hd_n.mp4?efg=${efg}` });
-  const other = video({ id: 'fb:other', url: 'https://video.xx.fbcdn.net/v/t42/x_n.mp4' });
-  const photo = video({ id: 'fb:photo', kind: 'image', url: 'https://scontent.xx.fbcdn.net/v/t51/p.jpg' });
-  const items = [hd, other, photo];
-  const coverId = 'story-cover-1';
-  const bindings = { coverBind: [[coverId, videoGroupKey(hd)]] as [string, string][] };
+test('a prefetched neighbour never wins the button', () => {
+  // fbcdn streams the NEXT reel while you watch this one. Ranking by recency alone
+  // hands the button that video, and the download saves something the user never
+  // opened — worse than the button staying hidden.
+  const efg = (id: string) => Buffer.from(JSON.stringify({ xpv_asset_id: id })).toString('base64url');
+  const url = (name: string, id: string) => `https://video.xx.fbcdn.net/v/t42/${name}_n.mp4?efg=${efg(id)}`;
+  const neighbour = video({ id: 'fb:next', url: url('next', '222') });
+  const items = [neighbour];
+  const T = 1_000_000;
+  const ref = { ids: [], hasVideo: true, mark: 'vm:abc', at: T };
 
-  // A photo story is not a video whose match failed — it matched nothing because
-  // no video is playing. Forcing the binding here would offer the wrong media.
-  assert.deepEqual(playingItems({ ids: [coverId], hasVideo: false }, items, bindings), []);
+  // One burst, before this slide began: unanchored, so it is a guess.
+  const burst = { tracks: [{ url: neighbour.url, at: T - 5_000 }] };
+  assert.equal(playingVideoGroup(1, items, ref, burst, T + 2_000, null), undefined);
 
-  // Live evidence outranks the binding: the cover is present AND bound to hd's
-  // group, but a video already matched on its own id, so that match stands. The
-  // binding is a FIFO cache that can hold a stale row — it is the last resort.
-  assert.deepEqual(
-    playingItems({ ids: ['fb:other', coverId], hasVideo: true }, items, bindings).map((i) => i.id),
-    ['fb:other'],
-  );
+  // Even fresh and post-slide, a lone one-shot request is still indistinguishable
+  // from a prefetch: it takes a sustained stream to earn the button.
+  const oneShot = { tracks: [{ url: neighbour.url, at: T + 200 }] };
+  assert.equal(playingVideoGroup(1, items, ref, oneShot, T + 2_000, null), undefined);
 });
 
 test('playingItems matches on the stored ids, on a cover, and on the URL video id', () => {
@@ -383,13 +398,13 @@ test('anchors to the left of the leftmost control in Facebook own row', () => {
     { left: 642, top: 120, right: 674, bottom: 152, width: 32, height: 32 },
   ];
   const found = pickControlAnchor(fakeDoc({ control: row }), win, anchoredMedia(filled, [filled]));
-  assert.equal(found?.left, 570, 'must pick the leftmost control, not the nearest edge');
-  assert.equal(found?.height, 32, 'the row height is what sizes our button');
+  assert.equal(found?.control?.rect.left, 570, 'must pick the leftmost control, not the nearest edge');
+  assert.equal(found?.control?.rect.height, 32, 'the row height is what sizes our button');
 
   // The author's avatar sits in the same band, on the left half.
   const avatar = { left: 312, top: 116, right: 352, bottom: 156, width: 40, height: 40 };
   assert.equal(
-    pickControlAnchor(fakeDoc({ control: [avatar] }), win, anchoredMedia(filled, [filled])),
+    pickControlAnchor(fakeDoc({ control: [avatar] }), win, anchoredMedia(filled, [filled]))?.control,
     undefined,
   );
 
@@ -398,14 +413,14 @@ test('anchors to the left of the leftmost control in Facebook own row', () => {
   const follow = { left: 560, top: 120, right: 680, bottom: 152, width: 120, height: 32 };
   const close = { left: 940, top: 24, right: 972, bottom: 56, width: 32, height: 32 };
   assert.equal(
-    pickControlAnchor(fakeDoc({ control: [follow, close] }), win, anchoredMedia(filled, [filled])),
+    pickControlAnchor(fakeDoc({ control: [follow, close] }), win, anchoredMedia(filled, [filled]))?.control,
     undefined,
   );
 
   // Controls further down the card (a feed player's own bar) are not the row.
   const bottomBar = { left: 560, top: 640, right: 592, bottom: 672, width: 32, height: 32 };
   assert.equal(
-    pickControlAnchor(fakeDoc({ control: [bottomBar] }), win, anchoredMedia(filled, [filled])),
+    pickControlAnchor(fakeDoc({ control: [bottomBar] }), win, anchoredMedia(filled, [filled]))?.control,
     undefined,
   );
 });
@@ -422,7 +437,7 @@ test('finds the row above a letterboxed photo, and refuses the page own top bar'
     { left: 451, top: 50, right: 483, bottom: 82, width: 32, height: 32 },
   ];
   const found = pickControlAnchor(fakeDoc({ control: row }), win, anchoredMedia(photo, [card, photo]));
-  assert.equal(found?.left, 415, 'must walk up to the card and find the row above the photo');
+  assert.equal(found?.control?.rect.left, 415, 'must walk up to the card and find the row above the photo');
 
   // Facebook's own top nav is also a row of icon buttons. The walk must stop
   // before any ancestor that wide, or the button lands in the navbar.
@@ -433,7 +448,7 @@ test('finds the row above a letterboxed photo, and refuses the page own top bar'
   ];
   const feedVideo = { left: 300, top: 300, right: 700, bottom: 600, width: 400, height: 300 };
   assert.equal(
-    pickControlAnchor(fakeDoc({ control: navbar }), win, anchoredMedia(feedVideo, [page, feedVideo])),
+    pickControlAnchor(fakeDoc({ control: navbar }), win, anchoredMedia(feedVideo, [page, feedVideo]))?.control,
     undefined,
   );
 });
@@ -468,14 +483,17 @@ test('renders an icon of the same family as the controls beside it', () => {
  *  no jsdom and takes no new dependencies, and the menu is worth driving for real:
  *  "one click opens the resolutions, one more downloads that resolution" is the
  *  whole feature. */
-function fakeDom(media: Partial<DOMRect>, controls: Array<Partial<DOMRect>>) {
+function fakeDom(media: Partial<DOMRect>, controls: Array<Partial<DOMRect>>, cardRect?: Partial<DOMRect>) {
   const make = (tag: string, r: Partial<DOMRect> = {}): any => {
     const el: any = {
       tagName: tag.toUpperCase(),
       children: [] as any[],
       attrs: new Map<string, string>(),
       handlers: new Map<string, Array<(e: unknown) => void>>(),
-      style: { setProperty: (k: string, v: string) => (el.style[k] = v) },
+      style: {
+        setProperty: (k: string, v: string) => (el.style[k] = v),
+        removeProperty: (k: string) => delete el.style[k],
+      },
       get textContent(): string {
         return '';
       },
@@ -491,6 +509,7 @@ function fakeDom(media: Partial<DOMRect>, controls: Array<Partial<DOMRect>>) {
       addEventListener: (type: string, fn: (e: unknown) => void) =>
         el.handlers.set(type, [...(el.handlers.get(type) ?? []), fn]),
       querySelector: (sel: string) => el.children.find((k: any) => k.tagName === sel.toUpperCase()),
+      contains: (other: any) => other === el || el.children.includes(other),
       getBoundingClientRect: () => rect(r),
       attachShadow: () => (el.shadow = make('shadow-root')),
       focus: () => {},
@@ -503,9 +522,12 @@ function fakeDom(media: Partial<DOMRect>, controls: Array<Partial<DOMRect>>) {
   };
 
   const video = make('video', media);
-  // A video story fills its card, so the card's rect is the media's rect. The
-  // control search walks up from the media, so the chain has to exist.
-  video.parentElement = make('div', media);
+  // A video story fills its card, so the card's rect is the media's rect by default.
+  // A feed post's card is taller — it holds the header row above the image. The
+  // control search walks up from the media, so the chain has to exist either way.
+  const card = make('div', cardRect ?? media);
+  card.children.push(video);
+  video.parentElement = card;
   const controlEls = controls.map((r) => make('div', r));
   const documentElement = make('html');
   const doc = {
@@ -522,7 +544,7 @@ function fakeDom(media: Partial<DOMRect>, controls: Array<Partial<DOMRect>>) {
     requestAnimationFrame: () => 0,
     cancelAnimationFrame: () => {},
   } as unknown as Window;
-  return { doc, win, host: () => documentElement.children[0] };
+  return { doc, win, card, controls: controlEls, host: () => documentElement.children[0] };
 }
 
 test('offers the resolutions on click and downloads the one picked', async () => {
@@ -548,10 +570,11 @@ test('offers the resolutions on click and downloads the one picked', async () =>
   const [trigger, menu] = wrap.children;
   assert.equal(wrap.getAttribute('data-show'), '1', 'the button must be visible');
 
-  // Placed beside Facebook's own control, at its size — not on top of it.
-  assert.equal(wrap.style.left, '566px', 'must sit GAP_PX left of the control at 570');
-  assert.equal(wrap.style.top, '120px', 'must align with the control row');
-  assert.equal(wrap.style['--size'], '32px', 'must adopt the row size');
+  // The row is drawn on the media, so this is a foreground viewer: the button joins
+  // the row in the gap left of its first control, at that control's own size.
+  assert.equal(wrap.style.left, '566px', 'must sit GAP_PX left of the leftmost control at 570');
+  assert.equal(wrap.style.top, '120px', 'and level with it');
+  assert.equal(wrap.style['--size'], '32px', 'must adopt the size of their controls');
 
   // Icon only: one <svg>, no copy, and the name carried by aria-label.
   assert.equal(trigger.children.length, 1);
@@ -575,6 +598,39 @@ test('offers the resolutions on click and downloads the one picked', async () =>
   assert.equal(menu.getAttribute('data-open'), null, 'picking a resolution closes the menu');
   assert.equal(trigger.getAttribute('aria-label'), 'Saved', 'the result shows on the button');
   overlay.dispose();
+});
+
+test('joins the row only where it cannot scroll away from the media', async () => {
+  // A feed post: its only row is the post header, ABOVE the image. That row leaves
+  // the viewport while the image is still centred, so a button anchored to it hopped
+  // to the corner mid-scroll. The corner is the placement there from the start.
+  const image = { left: 300, top: 300, right: 700, bottom: 600, width: 400, height: 300 };
+  const postCard = { left: 300, top: 240, right: 700, bottom: 760, width: 400, height: 520 };
+  const header = [{ left: 640, top: 250, right: 672, bottom: 282, width: 32, height: 32 }];
+  const ports = {
+    sendMessage: async () => ({ ok: true, media: { kind: 'video', labels: ['720p'] } }),
+    isAlive: () => true,
+  };
+
+  const feed = fakeDom(image, header, postCard);
+  const scrolling = createDownloadOverlay({ ...ports, doc: feed.doc, win: feed.win });
+  await scrolling.refresh();
+  const [, feedWrap] = feed.host().shadow.children;
+  assert.equal(feedWrap.style.left, '688px', 'INSET_PX in from the image right edge at 700');
+  assert.equal(feedWrap.style.top, '312px', 'and INSET_PX down from its top at 300');
+  assert.equal(feedWrap.style['--size'], '32px', 'the row still sizes the button');
+  scrolling.dispose();
+
+  // The same geometry in a viewer that locks the page — a letterboxed photo story,
+  // whose row sits above the image and stays there. The button joins it.
+  const story = fakeDom(image, header, postCard);
+  (story.doc.documentElement as unknown as { scrollHeight: number }).scrollHeight = 800;
+  const locked = createDownloadOverlay({ ...ports, doc: story.doc, win: story.win });
+  await locked.refresh();
+  const [, storyWrap] = story.host().shadow.children;
+  assert.equal(storyWrap.style.left, '636px', 'GAP_PX left of the header control at 640');
+  assert.equal(storyWrap.style.top, '250px', 'level with it');
+  locked.dispose();
 });
 
 test('closes an open menu when the slide moves on, but not while the same one plays', async () => {
@@ -609,29 +665,68 @@ test('closes an open menu when the slide moves on, but not while the same one pl
 test('renders the resolutions as options, on a backdrop you can see the frame through', () => {
   const menu = overlaySource.match(/\.menu \{([^}]*)\}/)?.[1];
   assert.ok(menu, 'missing the .menu block');
-  // Chips that wrap into rows, not a column tall enough to cover the story.
-  assert.match(menu, /flex-wrap:\s*wrap/);
-  assert.doesNotMatch(menu, /flex-direction:\s*column/);
-  const alpha = Number(menu.match(/background: rgba\(\d+, \d+, \d+, ([\d.]+)\)/)?.[1]);
-  assert.ok(alpha > 0 && alpha <= 0.6, `the menu backdrop is too opaque: ${alpha}`);
+  // A palette of chips, not a column tall enough to cover the reel — and a GRID,
+  // because wrapped flex sized each chip to its own text and left the columns
+  // ragged with "2560p" beside "720p".
+  assert.match(menu, /grid-template-columns:\s*repeat\(2, 1fr\)/);
+  assert.doesNotMatch(menu, /flex-wrap|flex-direction/);
+  // An odd count must not leave a half-empty last row.
+  assert.match(overlaySource, /\.menu button:last-child:nth-child\(odd\)[^}]*grid-column: 1 \/ -1/);
   // Each option is a pill, not a row.
   const item = overlaySource.match(/\.menu button \{([^}]*)\}/)?.[1];
   assert.match(item!, /border-radius:\s*999px/);
   assert.match(item!, /text-align:\s*center/);
 });
 
+test('takes the circle behind the button from the control beside it', () => {
+  // A hardcoded colour is wrong on at least one surface: the reel viewer, the
+  // story viewer and the two themes do not agree, and Facebook re-tunes them. The
+  // button reads the neighbouring control's own computed background instead.
+  assert.match(overlaySource, /\.trigger \{ background: var\(--chrome, /, 'the circle must come from the variable');
+  assert.match(overlaySource, /getComputedStyle\(el\)\.backgroundColor/, 'and the variable from the real control');
+  // Hover must not need to know that colour to lighten it.
+  const hover = overlaySource.match(/\.trigger:hover,[\s\S]*?\}/)?.[0];
+  assert.match(hover!, /box-shadow: inset/, 'hover overlays a film rather than replacing the copied colour');
+});
+
+test('the copied colour is the real control colour, and transparency is refused', async () => {
+  const paint = async (backgroundColor: string) => {
+    const { doc, win, host } = fakeDom(
+      { left: 300, top: 100, right: 700, bottom: 700, width: 400, height: 600 },
+      [{ left: 570, top: 120, right: 602, bottom: 152, width: 32, height: 32 }],
+    );
+    const overlay = createDownloadOverlay({
+      sendMessage: async () => ({ ok: true, media: { kind: 'video', labels: ['1080p'] } }),
+      isAlive: () => true,
+      doc,
+      win: { ...win, getComputedStyle: () => ({ backgroundColor }) } as unknown as Window,
+    });
+    await overlay.refresh();
+    const [, wrap] = host().shadow.children;
+    overlay.dispose();
+    return wrap.style['--chrome'];
+  };
+
+  assert.equal(await paint('rgba(0, 0, 0, 0.65)'), 'rgba(0, 0, 0, 0.65)', 'their circle, not one of ours');
+  // A control Facebook paints nothing on must leave the CSS fallback in charge.
+  // Copying "rgba(0, 0, 0, 0)" would put an invisible circle beside their solid
+  // ones, which is the bug this whole mechanism exists to avoid.
+  assert.equal(await paint('rgba(0, 0, 0, 0)'), undefined);
+  assert.equal(await paint('transparent'), undefined);
+});
+
 test('re-asks what is playing only once the new slide has reached the worker', () => {
-  const content = readFileSync(join(ROOT, 'src', 'content', 'content.ts'), 'utf8');
+  const playing = readFileSync(join(ROOT, 'src', 'content', 'content-playing.ts'), 'utf8');
   // Refreshing before the delivery commits would read the PREVIOUS slide's
   // resolutions out of the worker, and a click would download that video.
   assert.match(
-    content,
-    /playingDelivery\.pump\(deliverPlaying\)\.then\(\(\) => downloadOverlay\?\.refresh\(\{ mediaChanged \}\)\)/,
+    playing,
+    /delivery\.pump\(deliver\)\.then\(\(\) => overlay\.refresh\(\{ mediaChanged \}\)\)/,
     'the slide change must drive the refresh, after the delivery lands',
   );
   // That mediaChanged excludes the id set (which grows while one video plays) is
   // covered by the behavioural test above: a plain poll must leave the menu open.
-  const interval = Number(content.match(/const OVERLAY_REFRESH_MS = ([\d_]+);/)?.[1]?.replace(/_/g, ''));
+  const interval = Number(playing.match(/const OVERLAY_REFRESH_MS = ([\d_]+);/)?.[1]?.replace(/_/g, ''));
   assert.ok(interval > 0 && interval <= 1000, `the catch-up poll must stay under a second, got ${interval}`);
 });
 
@@ -735,6 +830,102 @@ test('a late answer never overrides the refresh that started after it', async ()
   overlay.dispose();
 });
 
+test('still reports the card when the control row has auto-hidden', () => {
+  // Facebook hides the reel controls after a few seconds of stillness. With no row
+  // to find, this used to answer nothing at all — and place() then hit-tested the
+  // bare <video>, which every viewer covers with its own scrim, so the button
+  // disappeared along with the controls instead of falling back to the corner.
+  const card = { left: 12, top: 30, right: 500, bottom: 860, width: 488, height: 830 };
+  const media = { left: 12, top: 265, right: 500, bottom: 635, width: 488, height: 370 };
+  const found = pickControlAnchor(fakeDoc({ control: [] }), win, anchoredMedia(media, [card, media]));
+  assert.equal(found?.control, undefined, 'there is no row to join');
+  assert.ok(found?.card, 'but place() still needs somewhere to hit-test against');
+});
+
+test('holds the identified group while the slide stays put', () => {
+  // The streamed-track evidence goes stale 12s after the last track, and a short
+  // reel stops streaming once buffered — which is why the button appeared and then
+  // vanished a few seconds later while the video was still looping.
+  const T = 1_000_000;
+  assert.equal(rememberedVideoGroup(1, 'video:99', 'g1', T), 'g1');
+  assert.equal(rememberedVideoGroup(1, 'video:99', undefined, T + 60_000), 'g1', 'same slide keeps its answer');
+
+  // It must not follow the user onto the next reel.
+  assert.equal(rememberedVideoGroup(1, 'video:100', undefined, T + 61_000), undefined);
+
+  // A surface with no signature has nothing to tie a memory to.
+  assert.equal(rememberedVideoGroup(2, '', 'g2', T), 'g2');
+  assert.equal(rememberedVideoGroup(2, '', undefined, T + 1_000), undefined);
+
+  // And it does expire.
+  assert.equal(rememberedVideoGroup(3, 'video:7', 'g7', T), 'g7');
+  assert.equal(rememberedVideoGroup(3, 'video:7', undefined, T + 5 * 60_000 + 1), undefined);
+});
+
+test('holds its place when Facebook auto-hides the control row', async () => {
+  // The reel viewer hides mute/play/⋯ after a few seconds of stillness. The row then
+  // measures as absent, and a button that recomputed its position from scratch went
+  // to the media's corner and back on the next mouse move.
+  const media = { left: 300, top: 100, right: 700, bottom: 700, width: 400, height: 600 };
+  const { doc, win, host, controls } = fakeDom(media, [
+    { left: 570, top: 120, right: 602, bottom: 152, width: 32, height: 32 },
+  ]);
+  const overlay = createDownloadOverlay({
+    sendMessage: async () => ({ ok: true, media: { kind: 'video', labels: ['1080p'] } }),
+    isAlive: () => true,
+    doc,
+    win,
+  });
+  await overlay.refresh();
+  const [, wrap] = host().shadow.children;
+  const slot = { left: '566px', top: '120px' };
+  assert.deepEqual({ left: wrap.style.left, top: wrap.style.top }, slot);
+
+  controls.length = 0;
+  await overlay.refresh();
+  assert.deepEqual({ left: wrap.style.left, top: wrap.style.top }, slot, 'the slot outlives the row');
+  assert.equal(wrap.style['--size'], '32px', 'and so does the size taken from it');
+  overlay.dispose();
+});
+
+test('gives up the pixel rather than drawing over Facebook chrome', async () => {
+  // The wrap is position:fixed at z-index 2147483000 and tracks the control row.
+  // Scroll the feed and that row slides under Facebook's sticky top bar — the row
+  // goes under it, a z-index that high does not, so the button was left painted
+  // ON the navbar. It has to yield the point instead.
+  const { doc, win, card, host } = fakeDom(
+    { left: 300, top: 100, right: 700, bottom: 700, width: 400, height: 600 },
+    [{ left: 570, top: 120, right: 602, bottom: 152, width: 32, height: 32 }],
+  );
+  // Whatever the browser reports as topmost where the button wants to draw.
+  let topmost: unknown = card;
+  const probing = {
+    ...doc,
+    elementsFromPoint: () => (topmost == null ? [] : [topmost]),
+  } as unknown as Document;
+  const overlay = createDownloadOverlay({
+    sendMessage: async () => ({ ok: true, media: { kind: 'video', labels: ['1080p'] } }),
+    isAlive: () => true,
+    doc: probing,
+    win,
+  });
+
+  await overlay.refresh();
+  const [, wrap] = host().shadow.children;
+  assert.equal(wrap.getAttribute('data-show'), '1', 'the card owns the point — draw');
+
+  // Facebook's fixed top bar is neither the card nor inside it.
+  topmost = { tagName: 'DIV', contains: () => false };
+  await overlay.refresh();
+  assert.equal(wrap.getAttribute('data-show'), null, 'page chrome owns the point — yield it');
+
+  // Back on a point the card owns, the button returns.
+  topmost = card;
+  await overlay.refresh();
+  assert.equal(wrap.getAttribute('data-show'), '1');
+  overlay.dispose();
+});
+
 test('an answer still paints when a newer refresh has only started, not decided', async () => {
   // A slide's first second fires refreshes faster than the worker answers: the
   // 750ms poll overlaps the one each slide change schedules. Vetoing every response
@@ -805,10 +996,13 @@ test('a query still in flight cannot put the button back once the media is gone'
 });
 
 test('the content script tears the overlay down with everything else', () => {
-  const content = readFileSync(join(ROOT, 'src', 'content', 'content.ts'), 'utf8');
-  const teardown = content.slice(content.indexOf('function teardown(): void {'));
-  const end = teardown.indexOf('\n}\n');
-  const body = teardown.slice(0, end);
+  // The band that creates the overlay is the band that disposes it, through the one
+  // teardown list content-runtime.ts owns — so this reads the band's own registration.
+  const playing = readFileSync(join(ROOT, 'src', 'content', 'content-playing.ts'), 'utf8');
+  const at = playing.indexOf('runtime.onTeardown(');
+  assert.ok(at >= 0, 'the playing band must register a teardown');
+  const body = playing.slice(at, playing.indexOf('});', at));
   assert.match(body, /clearInterval\(overlayTimer\)/, 'the refresh interval must be cleared');
-  assert.match(body, /downloadOverlay\?\.dispose\(\)/, 'the overlay must be disposed');
+  assert.match(body, /overlay\.dispose\(\)/, 'the overlay must be disposed');
+  assert.match(body, /clearInterval\(poller\)/, 'and the detection poller with it');
 });

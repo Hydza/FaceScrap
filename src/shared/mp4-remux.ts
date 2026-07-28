@@ -163,6 +163,24 @@ async function topLevelBoxes(blob: Blob): Promise<BoxHeader[]> {
   return out;
 }
 
+/** Ceiling on the sample table of ONE track.
+ *
+ *  These tables are sized by fields inside the file, and this parser reads files
+ *  off the network — a truncated or garbled response (the code elsewhere already
+ *  expects "an expired fbcdn URL returned an incomplete stream") can declare a
+ *  count of four billion. Expanding that would exhaust the offscreen document
+ *  before anything noticed. 1.5M samples is over nine hours of 60fps video, so no
+ *  real reel comes near it. */
+const MAX_SAMPLES_PER_TRACK = 1_500_000;
+
+/** How many entries a table can actually hold, whatever its count field claims.
+ *  Each table has a fixed entry width, so the box's own length is the real bound
+ *  and the declared count is only a hint. */
+function boundedEntries(declared: number, availableBytes: number, entryBytes: number): number {
+  const fits = Math.max(0, Math.floor(availableBytes / entryBytes));
+  return Math.min(declared, fits);
+}
+
 /** Expand stsc/stsz/stco/stts/ctts/stss into one flat sample list. */
 function readSampleTable(moov: Uint8Array, stbl: BoxHeader): Mp4Sample[] {
   const boxes = children(moov, stbl.bodyStart, stbl.end);
@@ -177,12 +195,22 @@ function readSampleTable(moov: Uint8Array, stbl: BoxHeader): Mp4Sample[] {
   // A fragmented file keeps all four boxes here but empty; the caller then reads
   // the samples out of the fragments instead. Returning empty is the signal.
 
+  /** Every expansion below grows one of these arrays; one shared budget bounds the
+   *  lot, so a table cannot be made enormous by any single field. */
+  const room = (have: number): number => {
+    if (have > MAX_SAMPLES_PER_TRACK) {
+      throw new Error(`This track declares more than ${MAX_SAMPLES_PER_TRACK} samples; refusing to expand it.`);
+    }
+    return MAX_SAMPLES_PER_TRACK - have;
+  };
+
   // stts: run-length encoded durations.
   const stts = new Cursor(moov.subarray(sttsBox.bodyStart, sttsBox.end));
   stts.skip(4);
   const durations: number[] = [];
-  for (let i = 0, runs = stts.u32(); i < runs; i++) {
-    const count = stts.u32();
+  const sttsRuns = boundedEntries(stts.u32(), sttsBox.end - sttsBox.bodyStart - 8, 8);
+  for (let i = 0; i < sttsRuns; i++) {
+    const count = Math.min(stts.u32(), room(durations.length));
     const delta = stts.u32();
     for (let k = 0; k < count; k++) durations.push(delta);
   }
@@ -193,22 +221,32 @@ function readSampleTable(moov: Uint8Array, stbl: BoxHeader): Mp4Sample[] {
     const c = new Cursor(moov.subarray(stszBox.bodyStart, stszBox.end));
     c.skip(4);
     const uniform = c.u32();
-    const count = c.u32();
+    // A uniform table stores no per-sample entries, so its length bounds nothing;
+    // the shared sample budget is what holds it.
+    const declared = c.u32();
+    const count =
+      uniform !== 0
+        ? Math.min(declared, room(0))
+        : boundedEntries(declared, stszBox.end - stszBox.bodyStart - 12, 4);
     for (let i = 0; i < count; i++) sizes.push(uniform !== 0 ? uniform : c.u32());
   } else {
     const c = new Cursor(moov.subarray(stszBox.bodyStart, stszBox.end));
     c.skip(4);
     c.skip(3);
     const fieldSize = c.u8();
-    const count = c.u32();
+    if (fieldSize !== 4 && fieldSize !== 8 && fieldSize !== 16) {
+      throw new Error(`Unsupported stz2 field size ${fieldSize}.`);
+    }
+    const bits = stszBox.end - stszBox.bodyStart - 8;
+    const count = boundedEntries(c.u32(), bits, fieldSize / 8);
     for (let i = 0; i < count; i++) {
       if (fieldSize === 16) sizes.push(c.u16());
       else if (fieldSize === 8) sizes.push(c.u8());
-      else if (fieldSize === 4) {
+      else {
         const pair = c.u8();
         sizes.push(pair >> 4);
         if (++i < count) sizes.push(pair & 0x0f);
-      } else throw new Error(`Unsupported stz2 field size ${fieldSize}.`);
+      }
     }
   }
 
@@ -219,8 +257,9 @@ function readSampleTable(moov: Uint8Array, stbl: BoxHeader): Mp4Sample[] {
     const c = new Cursor(moov.subarray(cttsBox.bodyStart, cttsBox.end));
     const version = c.u8();
     c.skip(3);
-    for (let i = 0, runs = c.u32(); i < runs; i++) {
-      const count = c.u32();
+    const runs = boundedEntries(c.u32(), cttsBox.end - cttsBox.bodyStart - 8, 8);
+    for (let i = 0; i < runs; i++) {
+      const count = Math.min(c.u32(), room(cts.length));
       const offset = version === 1 ? c.i32() : c.u32();
       for (let k = 0; k < count; k++) cts.push(offset);
     }
@@ -233,7 +272,8 @@ function readSampleTable(moov: Uint8Array, stbl: BoxHeader): Mp4Sample[] {
     const c = new Cursor(moov.subarray(stssBox.bodyStart, stssBox.end));
     c.skip(4);
     sync = new Set<number>();
-    for (let i = 0, count = c.u32(); i < count; i++) sync.add(c.u32() - 1);
+    const count = boundedEntries(c.u32(), stssBox.end - stssBox.bodyStart - 8, 4);
+    for (let i = 0; i < count; i++) sync.add(c.u32() - 1);
   }
 
   // Chunk offsets.
@@ -241,8 +281,9 @@ function readSampleTable(moov: Uint8Array, stbl: BoxHeader): Mp4Sample[] {
   {
     const c = new Cursor(moov.subarray(stcoBox.bodyStart, stcoBox.end));
     c.skip(4);
-    const count = c.u32();
-    for (let i = 0; i < count; i++) chunkOffsets.push(stcoBox.type === 'co64' ? c.u64() : c.u32());
+    const width = stcoBox.type === 'co64' ? 8 : 4;
+    const count = boundedEntries(c.u32(), stcoBox.end - stcoBox.bodyStart - 8, width);
+    for (let i = 0; i < count; i++) chunkOffsets.push(width === 8 ? c.u64() : c.u32());
   }
 
   // stsc: samples per chunk, run-length encoded over chunks.
@@ -250,7 +291,7 @@ function readSampleTable(moov: Uint8Array, stbl: BoxHeader): Mp4Sample[] {
   {
     const c = new Cursor(moov.subarray(stscBox.bodyStart, stscBox.end));
     c.skip(4);
-    const runs = c.u32();
+    const runs = boundedEntries(c.u32(), stscBox.end - stscBox.bodyStart - 8, 12);
     const entries: Array<{ firstChunk: number; samples: number }> = [];
     for (let i = 0; i < runs; i++) {
       const firstChunk = c.u32();
@@ -464,6 +505,23 @@ export async function parseTracks(blob: Blob): Promise<Mp4Track[]> {
     });
   }
   if (found.length === 0) throw new Error('This MP4 has no video or audio track.');
+
+  // Every sample must lie inside the file. Blob.slice CLAMPS a range that runs past
+  // the end instead of failing, so without this check a truncated track — the
+  // documented failure when an fbcdn URL expires mid-fetch — produced a file whose
+  // sample table pointed at bytes that were never written: corrupt output, reported
+  // as a successful download. Fail loudly instead, with the same advice the mux
+  // path already gives for a mismatched pair.
+  for (const track of found) {
+    for (const sample of track.samples) {
+      if (sample.offset < 0 || sample.size < 0 || sample.offset + sample.size > blob.size) {
+        throw new Error(
+          `This ${track.kind} track is truncated: its sample table points past the end of the ` +
+            `${blob.size}-byte file. An fbcdn URL may have expired mid-download — reload the Facebook page.`,
+        );
+      }
+    }
+  }
   return found;
 }
 

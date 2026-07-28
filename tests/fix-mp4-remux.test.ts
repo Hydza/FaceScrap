@@ -146,6 +146,36 @@ test('puts the header before the media so playback can start without the whole f
   assert.ok(ftyp < moov && moov < mdat, `expected ftyp < moov < mdat, got ${ftyp}/${moov}/${mdat}`);
 });
 
+// The parser reads bytes off the network, and the table sizes come from inside
+// those bytes. Both of these were real gaps found reviewing it after the fact.
+test('refuses a truncated track instead of writing a file with samples past its end', async () => {
+  // Blob.slice clamps a range that runs past the end rather than throwing, so
+  // without a bounds check this produced a corrupt file reported as a success.
+  const half = new Blob([videoBytes.subarray(0, Math.floor(videoBytes.length / 2))]);
+  await assert.rejects(() => parseTrack(half), /truncated|no moov|no samples/i);
+  await assert.rejects(() => remux(half, audioBlob), /truncated|no moov|no samples/i);
+});
+
+test('refuses a sample table that declares more entries than the file can hold', async () => {
+  // Overwrite the stsz entry count with 0xFFFFFFFF. Expanding that literally is
+  // millions of pushes for a 30 KB file; the box's own length is the real bound.
+  const bytes = Buffer.from(videoBytes);
+  const at = bytes.indexOf('stsz', 0, 'latin1');
+  if (at > 0) {
+    bytes.writeUInt32BE(0xffffffff, at + 12); // sample_count
+    const parsed = await parseTrack(new Blob([bytes])).catch((error: Error) => error);
+    // Either it refuses outright, or it clamps to what the box can hold — never
+    // expands four billion entries.
+    if (!(parsed instanceof Error)) {
+      assert.ok(parsed.samples.length < 100_000, `expanded ${parsed.samples.length} samples from a 30 KB file`);
+    }
+  }
+  // And a declared count beyond the hard ceiling is refused by name.
+  const remuxer = readFileSync(join(process.cwd(), 'src', 'shared', 'mp4-remux.ts'), 'utf8');
+  assert.match(remuxer, /MAX_SAMPLES_PER_TRACK = 1_500_000/);
+  assert.match(remuxer, /boundedEntries\(/);
+});
+
 test('refuses input it cannot remux instead of writing a file that does not play', async () => {
   await assert.rejects(() => remux(new Blob([Buffer.alloc(64)]), audioBlob), /no moov box|not an MP4/i);
   // Two tracks of the same kind is the mistake that would silently produce a

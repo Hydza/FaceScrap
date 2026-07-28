@@ -1,3 +1,5 @@
+// Play-badge geometry, kept free of the DOM so it can be tested without a browser.
+
 interface PlayCenterInput {
   frameWidth: number;
   frameHeight: number;
@@ -51,7 +53,8 @@ function positive(value: number | undefined): value is number {
 
 /** Center a play badge inside the visible media that remains above UI content. */
 export function computePlayCenterY(input: PlayCenterInput): number | null {
-  const { frameWidth, frameHeight, mediaWidth, mediaHeight, fit, badgeSize, clearance } = input;
+  const { frameWidth, frameHeight, mediaWidth, mediaHeight, fit, badgeSize, clearance, unobscuredBottom } =
+    input;
   if (!positive(frameWidth) || !positive(frameHeight) || !positive(badgeSize) || clearance < 0) return null;
 
   let mediaTop = 0;
@@ -63,11 +66,13 @@ export function computePlayCenterY(input: PlayCenterInput): number | null {
     mediaBottom = mediaTop + renderedHeight;
   }
 
-  const unobscuredBottom = Number.isFinite(input.unobscuredBottom)
-    ? Math.max(0, Math.min(frameHeight, input.unobscuredBottom!))
-    : frameHeight;
+  // 0 is a legitimate value (fully obscured), so this cannot use positive().
+  const bottomLimit =
+    unobscuredBottom != null && Number.isFinite(unobscuredBottom)
+      ? Math.max(0, Math.min(frameHeight, unobscuredBottom))
+      : frameHeight;
   const visibleTop = Math.max(0, mediaTop);
-  const visibleBottom = Math.min(frameHeight, mediaBottom, unobscuredBottom);
+  const visibleBottom = Math.min(frameHeight, mediaBottom, bottomLimit);
   const radius = badgeSize / 2;
 
   if (visibleBottom - visibleTop < badgeSize + clearance * 2) return null;

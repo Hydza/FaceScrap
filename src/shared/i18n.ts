@@ -78,7 +78,6 @@ export type MsgKey =
   | 'titleSettings'
   | 'titleCloseSettings'
   | 'settingsDownloads'
-  | 'settingsPanel'
   | 'settingsCapture'
   | 'settingsSavedData'
   | 'settingsTemplate'
@@ -86,9 +85,7 @@ export type MsgKey =
   | 'settingsQuality'
   | 'settingsDirect'
   | 'settingsDirectHint'
-  | 'settingsHdNote'
   | 'settingsLanguage'
-  | 'settingsFollowLang'
   | 'settingsTheme'
   | 'settingsThemeHint'
   | 'settingsOrder'
@@ -144,7 +141,90 @@ export type MsgKey =
   | 'overlayPickQuality'
   | 'overlayWorking'
   | 'overlayDone'
-  | 'overlayFailed';
+  | 'overlayFailed'
+  // Settings pages.
+  | 'ariaSetTabs'
+  | 'tabGeneral'
+  | 'tabAppearance'
+  | 'tabShortcuts'
+  | 'tabAdvanced'
+  // General.
+  | 'settingsQualityHint'
+  | 'settingsSubfolderHint'
+  | 'settingsInPage'
+  | 'settingsInPageHint'
+  | 'settingsLangTheme'
+  | 'settingsLanguageHint'
+  | 'langAuto'
+  | 'settingsOrderHint'
+  // Appearance.
+  | 'settingsPanelLook'
+  | 'settingsColumns'
+  | 'settingsColumnsHint'
+  | 'settingsBackdrop'
+  | 'settingsBackdropHint'
+  | 'backdropSolid'
+  | 'backdropFrosted'
+  | 'backdropGlass'
+  | 'settingsCorners'
+  | 'settingsCornersHint'
+  | 'cornersSharp'
+  | 'cornersSoft'
+  | 'cornersRound'
+  | 'settingsAccent'
+  | 'settingsAccentHint'
+  // One per ACCENTS entry — the swatch's only label, so it is also its accessible name.
+  | 'accent_brand'
+  | 'accent_alert'
+  | 'accent_sun'
+  | 'accent_meta'
+  | 'accent_messenger'
+  | 'accent_story'
+  | 'accent_grow'
+  // The custom background, and the two ways handing one over can fail.
+  | 'settingsCustomBg'
+  | 'settingsCustomBgHint'
+  | 'settingsBgImage'
+  | 'settingsBgPick'
+  | 'settingsBgClear'
+  | 'bgNone'
+  | 'bgSet'
+  | 'bgTooLarge'
+  | 'bgNoRoom'
+  | 'bgSuperseded'
+  | 'bgUnreadable'
+  // Advanced.
+  | 'settingsFileName'
+  | 'settingsPreview'
+  | 'settingsVideosOnlyHint'
+  | 'settingsMinResHint'
+  | 'settingsConfirmClearHint'
+  | 'settingsKeysEnabled'
+  | 'settingsKeysEnabledHint'
+  // Keyboard: the section, the capture state, and the three reasons a key is refused.
+  | 'settingsKeys'
+  | 'settingsKeysHint'
+  | 'settingsKeysReset'
+  | 'keysReset'
+  | 'keyPressPrompt'
+  | 'keyUnbound'
+  | 'keyHint'
+  | 'keyErrorSingle'
+  | 'keyErrorPlain'
+  | 'keyErrorTaken'
+  // One label per bindable function, in KEY_ACTIONS order.
+  | 'keyTogglePick'
+  | 'keyDownloadCard'
+  | 'keySelectAll'
+  | 'keyDownloadPicks'
+  | 'keyViewNow'
+  | 'keyViewLibrary'
+  | 'keyViewSaved'
+  | 'keyCycleFilter'
+  | 'keyOpenSettings'
+  // The one shortcut that reaches past the panel; Chrome owns its combination.
+  | 'settingsGlobalKey'
+  | 'settingsGlobalKeyHint';
 
 const MESSAGES: Record<Lang, Record<MsgKey, string>> = {
   en: {
@@ -207,11 +287,10 @@ const MESSAGES: Record<Lang, Record<MsgKey, string>> = {
     bannerDegraded:
       'This browser can\'t merge audio and video: HD saves as video only. Use Chrome or Edge to include audio.',
     settings: 'Settings',
-    settingsAutosave: 'Changes save automatically',
+    settingsAutosave: 'Four short pages. Changes save as you make them.',
     titleSettings: 'Settings',
     titleCloseSettings: 'Close settings',
     settingsDownloads: 'Downloads',
-    settingsPanel: 'Panel',
     settingsCapture: 'Capture',
     settingsSavedData: 'Saved data',
     settingsTemplate: 'Filename',
@@ -219,9 +298,7 @@ const MESSAGES: Record<Lang, Record<MsgKey, string>> = {
     settingsQuality: 'Default quality',
     settingsDirect: 'Direct download',
     settingsDirectHint: 'May skip audio merge',
-    settingsHdNote: 'HD video + audio merge automatically. Direct download may skip audio.',
     settingsLanguage: 'Language',
-    settingsFollowLang: 'Follow browser language',
     settingsTheme: 'Theme',
     settingsThemeHint: 'Follows Facebook, then your device',
     settingsOrder: 'List order',
@@ -271,6 +348,83 @@ const MESSAGES: Record<Lang, Record<MsgKey, string>> = {
     overlayWorking: 'Saving…',
     overlayDone: 'Saved',
     overlayFailed: 'Failed',
+    ariaSetTabs: 'Settings pages',
+    tabGeneral: 'General',
+    tabAppearance: 'Appearance',
+    tabShortcuts: 'Shortcuts',
+    tabAdvanced: 'Advanced',
+    settingsQualityHint: 'Highest keeps the best representation the post offers.',
+    settingsSubfolderHint: 'A "FaceScrap/" subfolder keeps them out of the Downloads root.',
+    settingsInPage: 'Button on the video',
+    settingsInPageHint:
+      'A download button on the reel, story or photo you are watching. Off adds nothing to the page.',
+    settingsLangTheme: 'Language & theme',
+    settingsLanguageHint: 'Auto follows the browser.',
+    langAuto: 'Auto',
+    settingsOrderHint: 'Which end of the capture list comes first.',
+    settingsPanelLook: 'Panel appearance',
+    settingsColumns: 'Grid',
+    settingsColumnsHint: 'Thumbnails per row. Fewer columns, larger previews.',
+    settingsBackdrop: 'Background',
+    settingsBackdropHint: 'Let your image show through. Glass blurs what is behind the cards.',
+    backdropSolid: 'Solid',
+    backdropFrosted: 'Frosted',
+    backdropGlass: 'Glass',
+    settingsCorners: 'Corners',
+    settingsCornersHint: 'The radius every card and control shares.',
+    cornersSharp: 'Sharp',
+    cornersSoft: 'Soft',
+    cornersRound: 'Round',
+    settingsAccent: 'Accent',
+    settingsAccentHint: 'Selection, progress and the primary button.',
+    accent_brand: 'Facebook blue',
+    accent_alert: 'Notification red',
+    accent_sun: 'Reaction yellow',
+    accent_meta: 'Meta blue',
+    accent_messenger: 'Messenger',
+    accent_story: 'Story',
+    accent_grow: 'Green',
+    settingsCustomBg: 'Your background',
+    settingsCustomBgHint:
+      'One image behind the panel, kept on this device and still here after you close the browser. It is resized before being stored, and never uploaded.',
+    settingsBgImage: 'Image',
+    settingsBgPick: 'Choose…',
+    settingsBgClear: 'Remove',
+    bgNone: 'None chosen',
+    bgSet: 'In use',
+    bgTooLarge: 'That image is too big. Try a smaller one.',
+    bgNoRoom: 'No storage room left. Clear the captured list and try again.',
+    bgSuperseded: 'Cancelled — the background changed while that one was being prepared.',
+    bgUnreadable: "That file couldn't be read as an image.",
+    settingsFileName: 'File name',
+    settingsPreview: 'preview',
+    settingsVideosOnlyHint: 'Hides photos from the Library. Nothing is dropped.',
+    settingsMinResHint: 'Hides videos below it. An unmeasured video is never hidden.',
+    settingsConfirmClearHint: 'Asks first, so one click cannot empty the list.',
+    settingsKeysEnabled: 'Keyboard control',
+    settingsKeysEnabledHint: 'Turn off if the keys clash with an IME or another extension.',
+    settingsKeys: 'Keyboard shortcuts',
+    settingsKeysHint:
+      'Arrows move between cards. These keys work while the panel has focus, so Facebook never sees them.',
+    settingsKeysReset: 'Restore default keys',
+    keysReset: 'Reset',
+    keyPressPrompt: 'Press a key…',
+    keyUnbound: 'None',
+    keyHint: 'Click, then press a key. Backspace clears it, Esc cancels.',
+    keyErrorSingle: 'That needs to be a single character.',
+    keyErrorPlain: 'Press the key on its own, without Ctrl or Alt.',
+    keyErrorTaken: 'Already used by "{action}".',
+    keyTogglePick: 'Select the card',
+    keyDownloadCard: 'Download the card',
+    keySelectAll: 'Select all',
+    keyDownloadPicks: 'Download selection',
+    keyViewNow: 'Go to Now',
+    keyViewLibrary: 'Go to Library',
+    keyViewSaved: 'Go to Saved',
+    keyCycleFilter: 'Next media filter',
+    keyOpenSettings: 'Open Settings',
+    settingsGlobalKey: 'Download while browsing',
+    settingsGlobalKeyHint: 'Set it in chrome://extensions/shortcuts',
   },
   es: {
     brandTagline: 'recuerdos de facebook, bien guardados',
@@ -332,11 +486,10 @@ const MESSAGES: Record<Lang, Record<MsgKey, string>> = {
     bannerDegraded:
       'Este navegador no puede unir audio y video: los HD se descargan solo con imagen. Usa Chrome o Edge para incluir el audio.',
     settings: 'Ajustes',
-    settingsAutosave: 'Los cambios se guardan solos',
+    settingsAutosave: 'Cuatro páginas cortas. Los cambios se guardan solos.',
     titleSettings: 'Configuración',
     titleCloseSettings: 'Cerrar configuración',
     settingsDownloads: 'Descargas',
-    settingsPanel: 'Panel',
     settingsCapture: 'Captura',
     settingsSavedData: 'Datos guardados',
     settingsTemplate: 'Nombre de archivo',
@@ -344,9 +497,7 @@ const MESSAGES: Record<Lang, Record<MsgKey, string>> = {
     settingsQuality: 'Calidad por defecto',
     settingsDirect: 'Descarga directa',
     settingsDirectHint: 'Puede omitir la unión de audio',
-    settingsHdNote: 'Los HD unen video + audio solos. La descarga directa puede omitir el audio.',
     settingsLanguage: 'Idioma',
-    settingsFollowLang: 'Seguir idioma del navegador',
     settingsTheme: 'Tema',
     settingsThemeHint: 'Sigue Facebook y luego tu dispositivo',
     settingsOrder: 'Orden de la lista',
@@ -396,6 +547,83 @@ const MESSAGES: Record<Lang, Record<MsgKey, string>> = {
     overlayWorking: 'Guardando…',
     overlayDone: 'Guardado',
     overlayFailed: 'Falló',
+    ariaSetTabs: 'Páginas de ajustes',
+    tabGeneral: 'General',
+    tabAppearance: 'Apariencia',
+    tabShortcuts: 'Atajos',
+    tabAdvanced: 'Avanzado',
+    settingsQualityHint: 'Mayor guarda la mejor representación que ofrece la publicación.',
+    settingsSubfolderHint: 'Una subcarpeta «FaceScrap/» los mantiene fuera de la raíz de Descargas.',
+    settingsInPage: 'Botón sobre el vídeo',
+    settingsInPageHint:
+      'Un botón de descarga en el reel, la historia o la foto que estás viendo. Apagado no añade nada a la página.',
+    settingsLangTheme: 'Idioma y tema',
+    settingsLanguageHint: 'Auto sigue al navegador.',
+    langAuto: 'Auto',
+    settingsOrderHint: 'Por qué extremo de la lista empezar.',
+    settingsPanelLook: 'Apariencia del panel',
+    settingsColumns: 'Rejilla',
+    settingsColumnsHint: 'Miniaturas por fila. Menos columnas, vistas más grandes.',
+    settingsBackdrop: 'Fondo',
+    settingsBackdropHint: 'Deja ver tu imagen. Cristal difumina lo que hay detrás de las tarjetas.',
+    backdropSolid: 'Sólido',
+    backdropFrosted: 'Velado',
+    backdropGlass: 'Cristal',
+    settingsCorners: 'Esquinas',
+    settingsCornersHint: 'El radio que comparten todas las tarjetas y controles.',
+    cornersSharp: 'Rectas',
+    cornersSoft: 'Suaves',
+    cornersRound: 'Redondas',
+    settingsAccent: 'Acento',
+    settingsAccentHint: 'Selección, progreso y el botón principal.',
+    accent_brand: 'Azul de Facebook',
+    accent_alert: 'Rojo de notificación',
+    accent_sun: 'Amarillo de reacción',
+    accent_meta: 'Azul de Meta',
+    accent_messenger: 'Messenger',
+    accent_story: 'Historia',
+    accent_grow: 'Verde',
+    settingsCustomBg: 'Tu fondo',
+    settingsCustomBgHint:
+      'Una imagen detrás del panel, guardada en este dispositivo y ahí sigue cuando cierras el navegador. Se redimensiona antes de guardarse y nunca se sube.',
+    settingsBgImage: 'Imagen',
+    settingsBgPick: 'Elegir…',
+    settingsBgClear: 'Quitar',
+    bgNone: 'Ninguna elegida',
+    bgSet: 'En uso',
+    bgTooLarge: 'Esa imagen es demasiado grande. Prueba una más pequeña.',
+    bgNoRoom: 'No queda espacio de almacenamiento. Vacía la lista capturada e inténtalo de nuevo.',
+    bgSuperseded: 'Cancelado: el fondo cambió mientras se preparaba esa imagen.',
+    bgUnreadable: 'No se pudo leer ese archivo como imagen.',
+    settingsFileName: 'Nombre de archivo',
+    settingsPreview: 'vista previa',
+    settingsVideosOnlyHint: 'Oculta las fotos de la Biblioteca. No se descarta nada.',
+    settingsMinResHint: 'Oculta los vídeos por debajo. Un vídeo sin medir nunca se oculta.',
+    settingsConfirmClearHint: 'Pregunta primero, así un clic no puede vaciar la lista.',
+    settingsKeysEnabled: 'Control por teclado',
+    settingsKeysEnabledHint: 'Desactívalo si las teclas chocan con un IME u otra extensión.',
+    settingsKeys: 'Atajos de teclado',
+    settingsKeysHint:
+      'Las flechas mueven entre tarjetas. Estas teclas funcionan con el panel enfocado, así que Facebook nunca las ve.',
+    settingsKeysReset: 'Restaurar teclas por defecto',
+    keysReset: 'Restaurar',
+    keyPressPrompt: 'Pulsa una tecla…',
+    keyUnbound: 'Ninguna',
+    keyHint: 'Haz clic y pulsa una tecla. Retroceso la quita, Esc cancela.',
+    keyErrorSingle: 'Tiene que ser un solo carácter.',
+    keyErrorPlain: 'Pulsa la tecla sola, sin Ctrl ni Alt.',
+    keyErrorTaken: 'Ya la usa «{action}».',
+    keyTogglePick: 'Seleccionar la tarjeta',
+    keyDownloadCard: 'Descargar la tarjeta',
+    keySelectAll: 'Seleccionar todo',
+    keyDownloadPicks: 'Descargar la selección',
+    keyViewNow: 'Ir a Ahora',
+    keyViewLibrary: 'Ir a Biblioteca',
+    keyViewSaved: 'Ir a Guardados',
+    keyCycleFilter: 'Siguiente filtro de medios',
+    keyOpenSettings: 'Abrir Ajustes',
+    settingsGlobalKey: 'Descargar mientras navegas',
+    settingsGlobalKeyHint: 'Configúrala en chrome://extensions/shortcuts',
   },
 };
 

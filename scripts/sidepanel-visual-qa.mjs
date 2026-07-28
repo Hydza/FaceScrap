@@ -1455,7 +1455,18 @@ async function captureSurface(page, surface, language) {
       'cleared Saved selection tray',
     );
   } else if (surface === 'settings') {
-    settingsInitialFocus = await evaluate(page, `document.activeElement?.id ?? ''`);
+    // Reported as a descriptor, not a bare id: with four pages the focus target is the page
+    // strip, whose buttons carry data-tab rather than ids, and '' has to keep meaning
+    // "focus never entered the sheet at all".
+    settingsInitialFocus = await evaluate(
+      page,
+      `(() => {
+        const active = document.activeElement;
+        const sheet = document.querySelector('#settings');
+        if (!(active instanceof HTMLElement) || sheet == null || !sheet.contains(active)) return '';
+        return active.dataset.tab != null ? 'tab:' + active.dataset.tab : active.id || active.tagName.toLowerCase();
+      })()`,
+    );
     await evaluate(page, `document.activeElement instanceof HTMLElement && document.activeElement.blur()`);
   }
   const inspection = await inspectSurface(page, surface, language);
@@ -1476,7 +1487,9 @@ async function captureSurface(page, surface, language) {
     inspection.metrics.cardPlay = cardPlay;
     inspection.passed = Object.values(inspection.checks).every(Boolean);
   } else if (surface === 'settings') {
-    inspection.checks.focusMovedIntoSettings = settingsInitialFocus === 'set-template';
+    // The first tab, not the first field: focusing a control on page one hid the fact that
+    // there are three more pages, and a keyboard user had to tab back out to find them.
+    inspection.checks.focusMovedIntoSettings = settingsInitialFocus === 'tab:general';
     inspection.metrics.initialFocusedElement = settingsInitialFocus;
     inspection.passed = Object.values(inspection.checks).every(Boolean);
   }
@@ -2396,6 +2409,353 @@ async function captureOpenSelect(page, { surface, selectId, filename }) {
   } finally {
     await dismissPicker(page).catch(() => undefined);
   }
+}
+
+/** One Settings page, opened and inspected.
+ *
+ *  This replaced an open-select capture of #set-quality, which stopped existing when the
+ *  dropdowns became segmented button groups. Deleting that coverage would have left the whole
+ *  restructure — four pages, seven segmented groups, an accent palette — with no evidence at
+ *  all, so this covers the new artifact instead of the retired one: only the chosen page is in
+ *  the document, every group states exactly one value, and nothing overflows sideways. */
+async function captureSettingsPage(page, tab) {
+  const filename = `settings-${tab}.png`;
+  await activateSurface(page, 'settings');
+  await evaluate(page, `document.querySelector('#set-tabs [data-tab=${JSON.stringify(tab)}]')?.click()`);
+  await waitForEvaluation(
+    page,
+    `(() => {
+      const strip = document.querySelector('#set-tabs [data-tab=${JSON.stringify(tab)}]');
+      const shown = document.querySelector('.set-page[data-page=${JSON.stringify(tab)}]');
+      return { ready: strip?.getAttribute('aria-pressed') === 'true' && shown instanceof HTMLElement && !shown.hidden };
+    })()`,
+    `settings page ${tab}`,
+  );
+
+  const inspection = await evaluate(
+    page,
+    `(() => {
+      const tab = ${JSON.stringify(tab)};
+      const pages = [...document.querySelectorAll('.set-page')];
+      const visiblePages = pages.filter((element) => !element.hidden).map((element) => element.dataset.page);
+      const groups = [...document.querySelectorAll('.set-page:not([hidden]) .seg[data-seg]')].map((group) => ({
+        name: group.dataset.seg,
+        values: [...group.querySelectorAll('[data-value]')].map((button) => button.dataset.value),
+        pressed: [...group.querySelectorAll('[data-value][aria-pressed="true"]')].map((b) => b.dataset.value),
+        labelled: document.getElementById(group.getAttribute('aria-labelledby') ?? '') != null,
+      }));
+      const swatches = [...document.querySelectorAll('#set-accent .swatch')].map((s) => ({
+        accent: s.dataset.accent,
+        pressed: s.getAttribute('aria-pressed') === 'true',
+        named: (s.getAttribute('aria-label') ?? '').length > 0,
+      }));
+      const keys = [...document.querySelectorAll('#set-keys .key-cap')].map((cap) => ({
+        action: cap.dataset.action,
+        label: cap.textContent.trim(),
+      }));
+      const app = document.querySelector('#app');
+      const checks = {
+        onePageVisible: visiblePages.length === 1 && visiblePages[0] === tab,
+        // A group with two lit buttons, or none, cannot tell the user what is in force.
+        everyGroupStatesOneValue: groups.every((g) => g.pressed.length === 1 && g.values.length >= 2),
+        everyGroupLabelled: groups.every((g) => g.labelled),
+        // Only on the page that has them; the others legitimately have none.
+        accentRowConsistent:
+          tab !== 'appearance' ||
+          (swatches.length >= 3 &&
+            swatches.filter((s) => s.pressed).length === 1 &&
+            swatches.every((s) => s.named && s.accent)),
+        shortcutRowsPresent: tab !== 'shortcuts' || (keys.length === 9 && keys.every((k) => k.action && k.label)),
+        noHorizontalOverflow:
+          document.documentElement.scrollWidth <= document.documentElement.clientWidth &&
+          (!app || app.scrollWidth <= app.clientWidth),
+      };
+      return {
+        page: tab,
+        language: document.documentElement.lang,
+        checks,
+        passed: Object.values(checks).every(Boolean),
+        metrics: { visiblePages, groups, swatches, keys },
+      };
+    })()`,
+  );
+
+  const screenshot = await page.command('Page.captureScreenshot', {
+    format: 'png',
+    fromSurface: true,
+    captureBeyondViewport: false,
+  });
+  const bytes = Buffer.from(screenshot.data, 'base64');
+  const dimensions = pngDimensions(bytes);
+  inspection.checks.pngDimensionsExact =
+    dimensions.width === VIEWPORT.width && dimensions.height === VIEWPORT.height;
+  inspection.passed = Object.values(inspection.checks).every(Boolean);
+  const path = join(QA_DIR, filename);
+  await writeFile(path, bytes);
+  return { ...inspection, file: filename, path, ...dimensions, bytes: bytes.length };
+}
+
+/** Which settings field each segmented group is supposed to write, and how to read it back.
+ *
+ *  Stated HERE, independently of the SEGMENTS table in settings-sheet.ts. Nothing in the product
+ *  ties a group's data-seg to the field its patch writes — the `as` cast in each entry means a
+ *  copy-paste that has "corners" write panelBackdrop compiles clean, coerces to a default, and
+ *  looks exactly right in every screenshot. This is the only thing that can catch it. */
+const SEG_FIELDS = {
+  quality: { field: 'defaultQuality', values: ['lowest', 'ask', 'highest'] },
+  theme: { field: 'theme', values: ['dark', 'auto', 'light'] },
+  order: { field: 'listOrder', values: ['oldest', 'newest'] },
+  cols: { field: 'columns', values: ['1', '3', '4', '2'], number: true },
+  backdrop: { field: 'panelBackdrop', values: ['frosted', 'glass', 'solid'] },
+  corners: { field: 'panelCorners', values: ['sharp', 'round', 'soft'] },
+  minres: { field: 'minResolution', values: ['720', '360', '0'], number: true },
+};
+
+/** The stored settings object, as the panel itself would read it. */
+async function readStoredSettings(page) {
+  return evaluate(page, `(async () => (await chrome.storage.local.get('settings')).settings ?? {})()`);
+}
+
+/** Click one control and wait until the durable write has landed. The panel writes through the
+ *  worker, so the value is not there the instant the click returns. */
+async function clickAndSettle(page, selector, expectation, description) {
+  await evaluate(page, `document.querySelector(${JSON.stringify(selector)})?.click()`);
+  return waitForEvaluation(
+    page,
+    `(async () => {
+      const stored = (await chrome.storage.local.get('settings')).settings ?? {};
+      return { ready: ${expectation}, stored };
+    })()`,
+    description,
+  );
+}
+
+/** Drive every segmented group and every accent swatch, and assert the write went to the field
+ *  that control is FOR. The harness could only read pre-seeded state before this; a click was
+ *  never exercised anywhere, unit or browser. */
+async function exerciseSettingsControls(page) {
+  await activateSurface(page, 'settings');
+  const checks = {};
+  const metrics = { segments: [], accents: [] };
+
+  for (const [name, spec] of Object.entries(SEG_FIELDS)) {
+    // The page that owns this group has to be open for its buttons to be clickable.
+    for (const tab of ['general', 'appearance', 'advanced']) {
+      await evaluate(page, `document.querySelector('#set-tabs [data-tab=${JSON.stringify(tab)}]')?.click()`);
+      const present = await evaluate(
+        page,
+        `document.querySelector('.set-page:not([hidden]) .seg[data-seg=${JSON.stringify(name)}]') != null`,
+      );
+      if (present) break;
+    }
+
+    for (const value of spec.values) {
+      const wanted = spec.number ? Number(value) : value;
+      const result = await clickAndSettle(
+        page,
+        `.seg[data-seg="${name}"] [data-value="${value}"]`,
+        `stored[${JSON.stringify(spec.field)}] === ${JSON.stringify(wanted)}`,
+        `${name} → ${spec.field}=${value}`,
+      );
+      // The lit button has to agree with what was stored, or the control is reporting a value
+      // that is not in force.
+      const pressed = await evaluate(
+        page,
+        `document.querySelector('.seg[data-seg=${JSON.stringify(name)}] [data-value][aria-pressed="true"]')?.dataset.value ?? null`,
+      );
+      metrics.segments.push({ group: name, field: spec.field, value, pressed, stored: result.stored[spec.field] });
+      checks[`seg:${name}=${value}`] = pressed === value && result.stored[spec.field] === wanted;
+    }
+  }
+
+  // A swatch has to move the CSS variable, not only its own aria-pressed.
+  const swatches = await evaluate(
+    page,
+    `document.querySelector('#set-tabs [data-tab="appearance"]')?.click(),
+     [...document.querySelectorAll('#set-accent .swatch')].map((s) => s.dataset.accent)`,
+  );
+  for (const accent of swatches.slice(0, 3).concat(['brand'])) {
+    await clickAndSettle(
+      page,
+      `#set-accent [data-accent="${accent}"]`,
+      `stored.accent === ${JSON.stringify(accent)}`,
+      `accent=${accent}`,
+    );
+    const applied = await evaluate(
+      page,
+      `(() => {
+        const root = getComputedStyle(document.documentElement);
+        return {
+          accent: root.getPropertyValue('--accent').trim(),
+          media: root.getPropertyValue('--media-accent').trim(),
+          pressed: document.querySelector('#set-accent [data-accent][aria-pressed="true"]')?.dataset.accent ?? null,
+        };
+      })()`,
+    );
+    metrics.accents.push({ accent, ...applied });
+    checks[`accent:${accent}`] =
+      applied.pressed === accent && applied.accent.length > 0 && applied.accent === applied.media;
+  }
+
+  return { name: 'settings-controls', checks, metrics, passed: Object.values(checks).every(Boolean) };
+}
+
+/** One real mouse gesture, as Chrome delivers it: dispatchMouseEvent produces the pointer events
+ *  the marquee listens for, with pointerType 'mouse' and the buttons bitmask it checks. */
+async function drag(page, from, to) {
+  await page.command('Input.dispatchMouseEvent', {
+    type: 'mousePressed',
+    x: from.x,
+    y: from.y,
+    button: 'left',
+    buttons: 1,
+    clickCount: 1,
+  });
+  // Several moves, because the band only appears past its 4px threshold and then measures per
+  // frame; one jump would test neither.
+  for (let step = 1; step <= 6; step++) {
+    await page.command('Input.dispatchMouseEvent', {
+      type: 'mouseMoved',
+      x: Math.round(from.x + ((to.x - from.x) * step) / 6),
+      y: Math.round(from.y + ((to.y - from.y) * step) / 6),
+      button: 'left',
+      buttons: 1,
+    });
+    await evaluate(page, `new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)))`);
+  }
+  await page.command('Input.dispatchMouseEvent', {
+    type: 'mouseReleased',
+    x: to.x,
+    y: to.y,
+    button: 'left',
+    buttons: 0,
+    clickCount: 1,
+  });
+}
+
+/** Rubber-band selection, driven with real pointer events. Nothing had ever exercised the drag —
+ *  not the 4px threshold, not the band, not the hit test, and not the click that follows a release,
+ *  which the code has to swallow or it undoes one of the picks the drag just made. */
+async function exerciseMarqueeDrag(page) {
+  await activateSurface(page, 'library');
+  const geometry = await evaluate(
+    page,
+    `(() => {
+      const list = document.querySelector('#list');
+      const cards = [...list.querySelectorAll('.card[data-card-id]')];
+      const box = list.getBoundingClientRect();
+      return {
+        cards: cards.length,
+        selectable: cards.filter((c) => c.querySelector('.pick:enabled') != null).length,
+        list: { left: box.left, top: box.top, right: box.right, bottom: box.bottom },
+        first: cards[0]?.getBoundingClientRect() ?? null,
+        picked: cards.filter((c) => c.classList.contains('is-picked')).length,
+      };
+    })()`,
+  );
+
+  // Start in the gutter left of the first card so the press is not on a control, then sweep down
+  // and right across the grid.
+  const from = { x: Math.round(geometry.list.left + 2), y: Math.round(geometry.list.top + 2) };
+  const to = {
+    x: Math.round(Math.min(geometry.list.right - 2, geometry.list.left + 260)),
+    y: Math.round(Math.min(geometry.list.bottom - 2, geometry.list.top + 300)),
+  };
+  await drag(page, from, to);
+
+  const after = await evaluate(
+    page,
+    `(() => {
+      const cards = [...document.querySelectorAll('#list .card[data-card-id]')];
+      return {
+        picked: cards.filter((c) => c.classList.contains('is-picked')).length,
+        pressedChecks: cards.filter((c) => c.querySelector('.pick[aria-pressed="true"]') != null).length,
+        bandsLeft: document.querySelectorAll('.marquee').length,
+        trayHidden: document.querySelector('#tray')?.hidden ?? null,
+      };
+    })()`,
+  );
+
+  const checks = {
+    gridHadSelectableCards: geometry.selectable >= 2,
+    dragSelected: after.picked > geometry.picked,
+    // The card class and its checkbox must agree: they are painted by one call, and a mismatch
+    // means the tray and the grid disagree about what is in the cart.
+    checkboxesAgree: after.pressedChecks === after.picked,
+    trayOpened: after.trayHidden === false,
+    // The band is a fixed element on <body>; one left behind would sit over the panel forever.
+    bandRemoved: after.bandsLeft === 0,
+  };
+  return {
+    name: 'marquee-drag',
+    checks,
+    metrics: { before: geometry, after },
+    passed: Object.values(checks).every(Boolean),
+  };
+}
+
+/** Press one bound key and one guarded key. The dispatch layer — the typing guard, the modifier
+ *  guard and the action lookup — had no coverage at all, and its worst failure mode is a bound key
+ *  firing while the user types in a text field. */
+async function exercisePanelKeys(page) {
+  const send = async (key, code, virtualKey) => {
+    const base = { key, code, windowsVirtualKeyCode: virtualKey, nativeVirtualKeyCode: virtualKey };
+    await page.command('Input.dispatchKeyEvent', { type: 'keyDown', text: key, ...base });
+    await page.command('Input.dispatchKeyEvent', { type: 'keyUp', ...base });
+    await evaluate(page, `new Promise((resolve) => requestAnimationFrame(resolve))`);
+  };
+
+  // '2' is viewLibrary. Start on Now Playing so the switch is observable.
+  await activateSurface(page, 'now');
+  await evaluate(page, `document.activeElement instanceof HTMLElement && document.activeElement.blur()`);
+  await send('2', 'Digit2', 50);
+  const afterView = await evaluate(page, `document.querySelector('#app')?.dataset.view ?? null`);
+
+  // The same key typed into a text field must reach the field and nothing else.
+  await activateSurface(page, 'settings');
+  const typed = await evaluate(
+    page,
+    `(() => {
+      const field = document.querySelector('#set-template');
+      document.querySelector('#set-tabs [data-tab="advanced"]')?.click();
+      field.focus();
+      field.setSelectionRange(field.value.length, field.value.length);
+      return { focused: document.activeElement === field, before: field.value };
+    })()`,
+  );
+  await send('2', 'Digit2', 50);
+  const afterTyping = await evaluate(
+    page,
+    `(() => ({
+      value: document.querySelector('#set-template').value,
+      view: document.querySelector('#app')?.dataset.view ?? null,
+      settingsOpen: document.querySelector('#settings')?.hidden === false,
+    }))()`,
+  );
+
+  const checks = {
+    boundKeySwitchedView: afterView === 'library',
+    fieldTookFocus: typed.focused === true,
+    // The character reached the input...
+    keyReachedTheField: afterTyping.value === `${typed.before}2`,
+    // ...and did NOT also run the action bound to it.
+    typingDidNotFireAction: afterTyping.settingsOpen === true,
+  };
+  // Leave the field as it was found, so later captures see the seeded template.
+  await evaluate(
+    page,
+    `(() => {
+      const field = document.querySelector('#set-template');
+      field.value = ${JSON.stringify(typed.before)};
+      field.dispatchEvent(new Event('change', { bubbles: true }));
+    })()`,
+  );
+  return {
+    name: 'panel-keys',
+    checks,
+    metrics: { afterView, typed, afterTyping },
+    passed: Object.values(checks).every(Boolean),
+  };
 }
 
 async function captureSingleQualityOption(page, fixture, tabId) {
@@ -4129,20 +4489,30 @@ async function exerciseThemeTransitions(page, facebookPage, fixture, theme, tabI
 }
 
 async function captureResponsiveSettingsControl(page, width, controlName, expectedText) {
+  // Settings is four pages now, and only one of them is in the document at a time. Each probe
+  // therefore names the page that owns its control and opens it first — before this, the
+  // max-items row measured 0×0 because it sits on a page that was hidden.
   const selectors =
     controlName === 'theme'
       ? {
+          page: 'general',
           label: '#label-set-theme',
-          control: '#set-theme',
+          control: '.seg[data-seg="theme"]',
           hint: '#hint-set-theme',
           filename: `settings-theme-${width}.png`,
         }
       : {
+          page: 'advanced',
           label: '#label-set-maxitems',
           control: '#set-maxitems',
           hint: '#hint-set-maxitems',
           filename: `settings-maxitems-${width}.png`,
         };
+  await evaluate(
+    page,
+    `document.querySelector('#set-tabs [data-tab=${JSON.stringify(selectors.page)}]')?.click()`,
+  );
+  await evaluate(page, `new Promise((resolve) => requestAnimationFrame(resolve))`);
   const inspection = await evaluate(
     page,
     `(() => {
@@ -4192,14 +4562,23 @@ async function captureResponsiveSettingsControl(page, width, controlName, expect
 
       const labelText = normalizedText(label);
       const hintText = normalizedText(hint);
+      // Theme is a segmented button group now, not a <select>. Read whichever it is: the
+      // claim being checked is about the CHOICES the user is offered and their localized
+      // labels, and that claim does not care which element renders them.
+      const segButtons = control?.classList?.contains('seg')
+        ? [...control.querySelectorAll('[data-value]')]
+        : [];
       const optionLabels =
         control instanceof HTMLSelectElement
           ? [...control.options].map((option) => normalizedText(option))
-          : [];
+          : segButtons.map((button) => normalizedText(button));
       const optionValues =
         control instanceof HTMLSelectElement
           ? [...control.options].map((option) => option.value)
-          : [];
+          : segButtons.map((button) => button.dataset.value);
+      const pressedValues = segButtons
+        .filter((button) => button.getAttribute('aria-pressed') === 'true')
+        .map((button) => button.dataset.value);
       const settingsLabelsLocalized =
         labelText === expectedText.label &&
         hintText === expectedText.hint &&
@@ -4216,10 +4595,12 @@ async function captureResponsiveSettingsControl(page, width, controlName, expect
         control.getAttribute('aria-describedby') === hint.id;
       const settingsControlsUsable =
         controlName === 'theme'
-          ? control instanceof HTMLSelectElement &&
-            !control.disabled &&
-            JSON.stringify(optionValues) === JSON.stringify(['auto', 'light', 'dark']) &&
-            optionValues.includes(control.value)
+          ? JSON.stringify(optionValues) === JSON.stringify(['auto', 'light', 'dark']) &&
+            // Exactly one lit. A group showing two, or none, would leave the user unable to
+            // tell which theme is actually in force — the equivalent of a <select> with no
+            // selected option, which the old assertion covered via control.value.
+            pressedValues.length === 1 &&
+            segButtons.every((button) => !button.disabled)
           : control instanceof HTMLInputElement &&
             !control.disabled &&
             control.type === 'text' &&
@@ -5012,14 +5393,33 @@ async function main() {
       }
     }
 
-    for (const spec of [
-      { surface: 'now', selectId: 'now-qselect', filename: 'now-quality-open.png' },
-      { surface: 'settings', selectId: 'set-quality', filename: 'settings-quality-open.png' },
-    ]) {
+    // now-qselect is the only <select> left in the panel: Settings' dropdowns became segmented
+    // button groups, and the resolution picker is the one place a list still belongs.
+    for (const spec of [{ surface: 'now', selectId: 'now-qselect', filename: 'now-quality-open.png' }]) {
       const capture = await captureOpenSelect(page, spec);
       evidence.interactionCaptures.push(capture);
       if (!capture.passed) {
         throw new Error(`Visual QA checks failed for open #${spec.selectId}: ${JSON.stringify(capture.checks)}`);
+      }
+    }
+
+    for (const tab of ['general', 'appearance', 'shortcuts', 'advanced']) {
+      const capture = await captureSettingsPage(page, tab);
+      evidence.captures.push(capture);
+      if (!capture.passed) {
+        throw new Error(`Visual QA checks failed for settings page ${tab}: ${JSON.stringify(capture.checks)}`);
+      }
+    }
+
+    // Clicks, not rendered state: everything above reads what the fixture seeded.
+    for (const interaction of [
+      await exerciseSettingsControls(page),
+      await exerciseMarqueeDrag(page),
+      await exercisePanelKeys(page),
+    ]) {
+      evidence.interactionCaptures.push(interaction);
+      if (!interaction.passed) {
+        throw new Error(`Visual QA checks failed for ${interaction.name}: ${JSON.stringify(interaction.checks)}`);
       }
     }
 

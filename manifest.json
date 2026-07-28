@@ -2,6 +2,7 @@
   "manifest_version": 3,
   "name": "__MSG_extensionName__",
   "default_locale": "en",
+  "author": "Hydza",
   "version": "1.0.0",
   "minimum_chrome_version": "116",
   "description": "__MSG_extensionDescription__",
@@ -10,6 +11,12 @@
   },
   "side_panel": {
     "default_path": "sidepanel/sidepanel.html"
+  },
+  "commands": {
+    "download-playing": {
+      "suggested_key": { "default": "Alt+Shift+D" },
+      "description": "__MSG_commandDownloadPlaying__"
+    }
   },
   "background": {
     "service_worker": "service-worker.js"

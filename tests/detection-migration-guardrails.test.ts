@@ -3,6 +3,8 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import test from 'node:test';
 
+import { panelSource } from './panel-source';
+
 import { resetChromeStorage } from './chrome-fake';
 import {
   canonicalizeHistoricalMediaId,
@@ -59,27 +61,28 @@ test('the packaged update-recovery path pings before scripting injection', () =>
   };
   const worker = readFileSync(join(ROOT, 'src', 'background', 'service-worker.ts'), 'utf8');
   const content = readFileSync(join(ROOT, 'src', 'content', 'content.ts'), 'utf8');
+  // The instance and its liveness ping live in content-runtime.ts; content.ts decides
+  // whether to create one at all.
+  const contentRuntime = readFileSync(join(ROOT, 'src', 'content', 'content-runtime.ts'), 'utf8');
   const recovery = readFileSync(join(ROOT, 'src', 'content', 'content-recovery.ts'), 'utf8');
   const build = readFileSync(join(ROOT, 'scripts', 'build.mjs'), 'utf8');
-  const instanceClaim = content.indexOf(
-    'contentBootstrap.__facescrapContentInstance = contentInstance',
-  );
-  const pingListenerRegistration = content.indexOf(
-    'runtimeForInstance?.onMessage.addListener(handleContentRuntimeMessage)',
-  );
+  // The worker must be able to tell a live detector from an invalidated one, so the
+  // instance has to be published BEFORE the ping listener exists to answer for it.
+  const instanceClaim = contentRuntime.indexOf('publish(instance)');
+  const pingListenerRegistration = contentRuntime.indexOf('onMessage.addListener(handlePing)');
 
   assert.ok(manifest.permissions?.includes('scripting'));
   assert.match(worker, /chrome\.runtime\.onInstalled\.addListener/);
   assert.match(worker, /chrome\.tabs\.sendMessage/);
   assert.match(worker, /chrome\.scripting\.executeScript/);
   assert.match(worker, /details\.reason === 'update' \? 'content-recovery\.js' : 'content\.js'/);
-  assert.match(content, /FACESCRAP_CONTENT_PING/);
+  assert.match(contentRuntime, /FACESCRAP_CONTENT_PING/);
   assert.match(content, /__facescrapContentInstance/);
   assert.match(content, /__facescrapForceContentRecovery/);
   assert.match(content, /shouldStartContentInstance\(\s*existingContentInstance,\s*forceContentRecovery/);
-  assert.match(content, /contentInstance\.active && Boolean\(runtimeForInstance\?\.id\)/);
-  assert.match(content, /if \(startContentInstance\)/);
-  assert.match(content, /removeListener\(handleContentRuntimeMessage\)/);
+  assert.match(contentRuntime, /instance\.active && Boolean\(chromeRuntime\?\.id\)/);
+  assert.match(content, /if \(!startContentInstance\)/);
+  assert.match(contentRuntime, /removeListener\(handlePing\)/);
   assert.ok(instanceClaim >= 0 && instanceClaim < pingListenerRegistration);
   // The recovery skip flag still gates page-hook injection (no second fetch/XHR
   // wrap after an update), now via the instance-independent ensurePageHook path.
@@ -91,7 +94,7 @@ test('the packaged update-recovery path pings before scripting injection', () =>
 });
 
 test('a transient tabs.get failure does not freeze the panel on the previous tab', () => {
-  const panel = readFileSync(join(ROOT, 'src', 'sidepanel', 'sidepanel.ts'), 'utf8');
+  const panel = panelSource();
 
   assert.doesNotMatch(panel, /if \(activatedTab == null\) return/);
   assert.match(panel, /setTrackedTab\(info\.tabId\)/);

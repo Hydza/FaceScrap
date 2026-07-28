@@ -1,10 +1,15 @@
-// Per-tab captured-media storage, backed by chrome.storage.session.
-// Only trusted contexts (service worker, side panel) touch this — content scripts
-// relay via messages instead. Writes are serialized per key family (one promise
-// chain each) so bursty fbcdn read-modify-write cycles can't lose updates, while
-// unrelated keys never wait on each other.
+// Per-tab CAPTURE state, backed by chrome.storage.session: the media list, the
+// now-playing pointer, the recently-streamed tracks, the retention pin and the panel's
+// learned bindings. Only trusted contexts (service worker, side panel) touch this —
+// content scripts relay via messages instead.
+//
+// Durability lives in session-write.ts; the Saved ledger in saved.ts and the diagnostic
+// counters in diag-store.ts are separate key spaces and separate files.
+//
+// Order here is dependency order: keys and readers first, then the retention rules that
+// classify against them, then the writers that hold the lanes, then media and bindings.
 
-import { diagBump, sanitizeDiagCounters, setDiagEnabled, type DiagCounters, type DiagReason } from './diag';
+import { diagBump, setDiagEnabled } from './diag';
 import {
   fbAssetKeys,
   historicalAliasOwners,
@@ -12,16 +17,22 @@ import {
   matchesActiveMediaId,
   mediaId,
   MAX_MEDIA_URL_LEN,
-  MEDIA_KINDS,
-  MEDIA_SOURCES,
   mergeMedia,
   videoGroupKey,
   type MediaItem,
-  type MediaKind,
-  type MediaSource,
 } from './media';
 import { playingTimestampIsFutureEpoch } from './messages';
 import { durableStoryMarkPortion, isProvisionalStoryMark, storyDomIdFromMark } from './story-mark';
+import { dropSaved } from './saved';
+import {
+  createChainLock,
+  dataValues,
+  isStorageQuotaError,
+  keyedSerialQueue,
+  logWriteError,
+  readKey,
+  writeCaptureState,
+} from './session-write';
 import { DEFAULT_SETTINGS, loadSettings } from './settings';
 import {
   facebookThemeKey,
@@ -38,13 +49,10 @@ const keyFor = (tabId: number): string => `media_${tabId}`;
 // eviction drops the watched reel. Cached so addMedia doesn't read storage on every
 // capture; refreshed when the setting changes. 0/unset → Infinity (unlimited).
 let maxItemsCache: number = DEFAULT_SETTINGS.maxItems;
-// EF6: once a tab is already sitting AT its retention cap, addMedia's eviction
-// below sheds this many EXTRA items (bounded to 10% of the cap) so the next
-// several batches can land under the cap without re-running
-// partitionMediaForRetention's storage reads + O(n) scan. Never applied on the
-// batch that crosses the cap for the FIRST time — see the `stored.length >=
-// maxItemsCache` guard at the call site — so a fresh crossing still trims to
-// exactly the cap.
+// Once a tab already sits AT its retention cap, shed this many EXTRA items (bounded
+// to 10% of the cap) so the next several batches land under it without re-running
+// partitionMediaForRetention's storage reads and O(n) scan. Never applied to the batch
+// that crosses the cap for the first time — that one still trims to exactly the cap.
 const MAX_ITEMS_HYSTERESIS = 50;
 // Rides the same settings read: this context's diag flag has to come from
 // somewhere, and every context that imports storage.ts is one that can discard.
@@ -64,98 +72,75 @@ try {
 } catch {
   /* storage.onChanged unavailable — the cap stays at its default */
 }
+// --- "Now playing" pointer: which video is currently playing in the tab ---
 
-const readKey = async <T>(key: string, fallback: T): Promise<T> =>
-  ((await chrome.storage.session.get(key))[key] as T | undefined) ?? fallback;
-
-// storage.session has one quota shared by every Facebook tab. Reserve enough
-// bytes up front for the control plane (playing/recent/pin), so a large Library
-// burst cannot leave the panel with media rows but no current pointer. Data
-// writes always carry the full reserve; a quota recovery replaces it with an
-// empty value in the same set as the critical state, then restores headroom
-// before the recovery lane is released.
-const CONTROL_HEADROOM_KEY = 'capture_control_headroom_v1';
-const CONTROL_HEADROOM_BYTES = 512 * 1024;
-const CONTROL_HEADROOM_MIN_BYTES = 128 * 1024;
-const CONTROL_HEADROOM = '0'.repeat(CONTROL_HEADROOM_BYTES);
-const CONTROL_HEADROOM_MIN = '0'.repeat(CONTROL_HEADROOM_MIN_BYTES);
-
-function dataValues(values: Record<string, unknown>): Record<string, unknown> {
-  return { [CONTROL_HEADROOM_KEY]: CONTROL_HEADROOM, ...values };
+interface PlayingRef {
+  /** Asset ids of the media centered in the viewport (what you're watching). */
+  ids: string[];
+  /** True when a <video> is centered — enables the network-recency fallback. */
+  hasVideo: boolean;
+  /** Video id parsed from the page URL (/reel/<id>, /watch?v=<id>) — an exact,
+   *  prefetch-proof anchor: it matches the efg `vid:` key of every representation
+   *  of the watched video and nothing else. Absent on feed/story surfaces. */
+  vid?: string;
+  /** fbcdn URLs of the cover image(s) centered right now. The panel displays one
+   *  as the playing group's thumbnail when the capture carried none, and LEARNS
+   *  the cover↔video binding so returning to an already-buffered video (which
+   *  fetches nothing) still matches instantly. */
+  coverUrls?: string[];
+  /** Opaque slide marker: a durable DOM story id (`u:`) or provisional pinned-
+   *  path fallback (`p:`), combined with a per-video-load id when present (see
+   *  content.ts). Never fetched; only compared/bound according to provenance. */
+  mark?: string;
+  at: number;
 }
 
-// S2: withHeadroomLock/withMediaGlobalLock/withRetentionSnapshotLock were three
-// byte-identical chain-mutex implementations differing only in which chain
-// variable they closed over. One factory, three SEPARATE instances below —
-// each call creates its own closed-over `chain`, so the locks keep guarding
-// their own resource instead of collapsing into one shared lock.
-function createChainLock(): <T>(task: () => Promise<T>) => Promise<T> {
-  let chain: Promise<void> = Promise.resolve();
-  return function withLock<T>(task: () => Promise<T>): Promise<T> {
-    const run = chain.then(task);
-    chain = run.then(
-      () => undefined,
-      () => undefined,
-    );
-    return run;
-  };
+/** Bound an opaque PlayingRef.mark for persistence, cutting the STORY side only: the
+ *  `#<videoMark>` suffix must survive whole or consecutive loads stop being distinct,
+ *  and the story head must stay a stable prefix or the derived story portion stops
+ *  re-matching the same card. The budgets are fixed, not remainder math — a head that
+ *  flexed with suffix length would shift that portion between loads `:9` and `:10`.
+ *  56 covers a whole synthetic `#vm:<uuid>:<seq>`. */
+export function boundPlayingMark(mark: string): string {
+  if (mark.length <= 256) return mark;
+  const i = mark.lastIndexOf('#');
+  if (i < 0) return mark.slice(0, 256);
+  return mark.slice(0, Math.min(i, 200)) + mark.slice(i).slice(-56);
 }
 
-const withHeadroomLock = createChainLock();
-
-async function restoreControlHeadroom(): Promise<void> {
-  try {
-    await chrome.storage.session.set({ [CONTROL_HEADROOM_KEY]: CONTROL_HEADROOM });
-    return;
-  } catch {
-    // A compact recent payload can use part of the emergency reserve. Keep a
-    // smaller second-use reserve rather than reporting the already-durable
-    // control write as failed.
-  }
-  try {
-    await chrome.storage.session.set({ [CONTROL_HEADROOM_KEY]: CONTROL_HEADROOM_MIN });
-  } catch {
-    // Best effort only. Every later data-plane write attempts to restore the
-    // full reserve atomically, and the next control failure remains retryable.
-  }
+const playingKey = (tabId: number): string => `playing_${tabId}`;
+export async function getPlaying(tabId: number): Promise<PlayingRef | null> {
+  return readKey<PlayingRef | null>(playingKey(tabId), null);
 }
 
-/** Establish shared control-plane headroom before capture listeners process
- *  their first event. Idempotent across MV3 worker restarts because session
- *  storage outlives the worker. */
-export function ensureCaptureHeadroom(): Promise<boolean> {
-  return withHeadroomLock(async () => {
-    let current: unknown = '';
-    try {
-      current = await readKey<unknown>(CONTROL_HEADROOM_KEY, '');
-    } catch (err) {
-      // A one-shot session.get failure must not poison the worker-wide readiness
-      // promise forever. Continue with the idempotent set path; if storage is
-      // genuinely unavailable those writes still fail and return false.
-      console.warn('[FaceScrap] control headroom read failed; re-establishing reserve', err);
-    }
-    if (typeof current === 'string' && current.length >= CONTROL_HEADROOM_MIN_BYTES) return true;
-    try {
-      await chrome.storage.session.set({ [CONTROL_HEADROOM_KEY]: CONTROL_HEADROOM });
-      return true;
-    } catch {
-      try {
-        await chrome.storage.session.set({ [CONTROL_HEADROOM_KEY]: CONTROL_HEADROOM_MIN });
-        return true;
-      } catch (err) {
-        console.error('[FaceScrap] control headroom initialization failed', err);
-        return false;
-      }
-    }
-  });
+// --- Recently requested fbcdn media tracks (the video being fetched now) ---
+
+interface RecentTrack {
+  /** Widened URL of a fetched track; the side panel derives match keys
+   *  (fbAssetKeys/mediaId/trackKey) from it, since a single id can't survive
+   *  fbcdn's base64 filenames and rotating origin prefixes. */
+  url: string;
+  at: number;
 }
 
-// A short request burst can be much wider than the steady recent-track ring:
-// the Story viewer preloads several cards while the 300 ms DOM detector is
-// still settling. Keep that burst briefly, then collapse back to the steady
-// budget while reserving the two groups closest to the current slide boundary.
-// This is retention only; selectPlaying still decides whether the evidence is
-// trustworthy enough to display or learn from.
+interface RecentRef {
+  /** Fetched tracks, oldest→newest. Normally a 24-entry tail; a bounded 4s
+   *  transition burst and two boundary-near groups may temporarily widen it. */
+  tracks: RecentTrack[];
+}
+
+const recentKey = (tabId: number): string => `recent_${tabId}`;
+export async function getRecent(tabId: number): Promise<RecentRef | null> {
+  const key = recentKey(tabId);
+  const raw = (await chrome.storage.session.get(key))[key] as RecentRef | undefined;
+  return raw && Array.isArray(raw.tracks) ? raw : null;
+}
+
+// A short request burst can be much wider than the steady recent-track ring: the Story
+// viewer preloads several cards while the 300 ms DOM detector is still settling. Keep
+// that burst briefly, then collapse back to the steady budget while reserving the two
+// groups closest to the current slide boundary. Retention only — selectPlaying still
+// decides whether the evidence is trustworthy enough to display or learn from.
 const RECENT_STEADY_MAX = 24;
 const RECENT_BURST_MAX = 96;
 const RECENT_BURST_MS = 4_000;
@@ -166,10 +151,14 @@ function recentGroupKey(track: RecentTrack): string {
   return fbAssetKeys(track.url)[0] ?? mediaId(track.url);
 }
 
-function boundaryRecentGroups(recent: RecentRef | null, ref: PlayingRef | null, limit = 2): Map<string, number> {
-  if (ref?.hasVideo !== true || recent == null) return new Map();
+function boundaryRecentGroups(
+  tracks: readonly RecentTrack[] | undefined,
+  ref: PlayingRef | null,
+  limit = 2,
+): Map<string, number> {
+  if (ref?.hasVideo !== true || tracks == null) return new Map();
   const distanceByGroup = new Map<string, number>();
-  for (const track of recent.tracks) {
+  for (const track of tracks) {
     const distance = Math.abs(track.at - ref.at);
     if (distance > RECENT_BOUNDARY_MS) continue;
     const group = recentGroupKey(track);
@@ -180,7 +169,7 @@ function boundaryRecentGroups(recent: RecentRef | null, ref: PlayingRef | null, 
 
 function retainRecentTracks(tracks: RecentTrack[], at: number, ref: PlayingRef | null): RecentTrack[] {
   if (tracks.length <= RECENT_STEADY_MAX) return tracks;
-  const boundary = boundaryRecentGroups({ tracks }, ref);
+  const boundary = boundaryRecentGroups(tracks, ref);
   const chosen = new Set<number>();
 
   // Reserve a bounded number of observations for each boundary-near group.
@@ -272,9 +261,8 @@ function isExactPlayingItem(
     (item.audioUrl != null && fbAssetKeys(item.audioUrl).includes(wanted));
 }
 
-/** Move exact/current-boundary media to the retained end of the FIFO. This
- *  never marks them live; it only ensures selectPlaying still has an item to
- *  return after the storage cap or quota fallback sheds unrelated captures. */
+/** Control state to classify against, when the caller already holds a snapshot.
+ *  An absent field is read from storage; an explicit null means "no such state". */
 interface RetentionOverrides {
   ref?: PlayingRef | null;
   recent?: RecentRef | null;
@@ -286,6 +274,9 @@ interface RetentionPartition {
   reserved: MediaItem[];
 }
 
+/** Split a tab's media so exact/current-boundary captures sit at the retained end of
+ *  the FIFO. This never marks them live; it only ensures selectPlaying still has an
+ *  item to return after the retention cap or a quota reclaim sheds unrelated ones. */
 async function partitionMediaForRetention(
   tabId: number,
   items: MediaItem[],
@@ -299,7 +290,7 @@ async function partitionMediaForRetention(
   const ref = overrides.ref === undefined ? storedRef : overrides.ref;
   const recent = overrides.recent === undefined ? storedRecent : overrides.recent;
   const pin = overrides.pin === undefined ? storedPin : overrides.pin;
-  const boundary = boundaryRecentGroups(recent, ref);
+  const boundary = boundaryRecentGroups(recent?.tracks, ref);
   const retentionIdentity = playingRetentionIdentity(ref);
   const pinnedGroups = pin != null && pin.identity === retentionIdentity ? new Set(pin.groups) : new Set<string>();
   // Built once per batch and reused for every item below: matchesActiveMediaId's
@@ -324,47 +315,6 @@ async function partitionMediaForRetention(
   protectedItems.sort((a, b) => a.priority - b.priority);
   return { ordinary, reserved: protectedItems.map(({ item }) => item) };
 }
-
-// One task queue per key family: read-modify-write cycles on a key must run one
-// at a time, but unrelated keys must never wait on each other's writes.
-function serialQueue(): (task: () => Promise<void>, onError: (err: unknown) => void) => Promise<void> {
-  let chain: Promise<void> = Promise.resolve();
-  return (task, onError) => {
-    chain = chain.then(task).catch(onError);
-    return chain;
-  };
-}
-
-/** One ordered capture-state lane per tab. Media retention reads playing/recent,
- *  so those three keys cannot use independent queues without observing an older
- *  snapshot during a burst. Different tabs still proceed independently. */
-function keyedSerialQueue(): (
-  key: number,
-  task: () => Promise<void>,
-  onError: (err: unknown) => void,
-) => Promise<void> {
-  const chains = new Map<number, Promise<void>>();
-  return (key, task, onError) => {
-    const run = (chains.get(key) ?? Promise.resolve()).then(task);
-    const settled = run.catch(onError);
-    chains.set(key, settled);
-    void settled.then(() => {
-      if (chains.get(key) === settled) chains.delete(key);
-    });
-    return settled;
-  };
-}
-
-// chrome.storage.session shares a ~10MB budget across all tabs. A small
-// single-key write (playing/recent/bind) can't shed bytes of its own to
-// recover — but swallowing its failure silently hides that now-playing or the
-// track fallback stopped updating. Log it so a persistent quota problem is at
-// least visible in the service worker console, like addMedia's failure is.
-const logWriteError =
-  (label: string) =>
-  (err: unknown): void => {
-    console.error(`[FaceScrap] ${label} write failed`, err);
-  };
 
 const enqueueCaptureState = keyedSerialQueue();
 
@@ -398,7 +348,7 @@ export function setFacebookTheme(tabId: number, raw: unknown): Promise<boolean> 
         completed = true;
         return;
       }
-      await writeCaptureState(tabId, { [facebookThemeKey(tabId)]: next });
+      await writeCaptureState({ [facebookThemeKey(tabId)]: next });
       completed = true;
     },
     logWriteError('Facebook theme'),
@@ -465,87 +415,12 @@ export function setPlayingMediaPin(
           completed = true;
           return;
         }
-        await writeCaptureState(tabId, { [playingPinKey(tabId)]: pin }, { retryTransient: false });
+        await writeCaptureState({ [playingPinKey(tabId)]: pin }, { retryTransient: false });
         completed = true;
       });
     },
     logWriteError('playing pin'),
   ).then(() => completed);
-}
-
-function isStorageQuotaError(err: unknown): boolean {
-  const detail = err instanceof Error ? `${err.name}: ${err.message}` : String(err);
-  return /quota|QUOTA_BYTES|MAX_(?:WRITE|SUSTAINED_WRITE|ITEMS)/i.test(detail);
-}
-
-// E8: this type used to extend RetentionOverrides (ref/recent/pin) and every
-// call site threaded its pending retention state through. writeCaptureState
-// below never read those fields — its quota fallback is compact-payload then
-// spend-headroom, and it deliberately never deletes Library rows to fund a
-// pointer write (see its docstring), so there was no retention-aware path for
-// them to feed. Deleted as dead weight rather than wired up, since honouring
-// them would mean deleting Library rows here — the one thing this function is
-// documented not to do.
-interface CaptureWriteOptions {
-  /** Pin writes are retried by the panel render loop; keeping their first
-   *  non-quota failure observable avoids reporting an unconfirmed reservation. */
-  retryTransient?: boolean;
-  /** Smaller equivalent state to try before spending reserved headroom.
-   *  Recent-track history can compact safely; PlayingRef and the pin cannot. */
-  compactValues?: Record<string, unknown>;
-}
-
-/** Persist capture control state with a real success/failure contract. One
- *  ordinary backend hiccup gets an identical retry. Quota pressure first uses
- *  a smaller equivalent payload (when available), then spends the dedicated
- *  headroom. It never deletes Library rows to persist a pointer: before the
- *  panel has correlated a new Story, no row can be proven safe to sacrifice. */
-async function writeCaptureState(
-  _tabId: number,
-  values: Record<string, unknown>,
-  options: CaptureWriteOptions = {},
-): Promise<void> {
-  let failure: unknown;
-  try {
-    await chrome.storage.session.set(values);
-    return;
-  } catch (err) {
-    failure = err;
-  }
-
-  if (!isStorageQuotaError(failure) && options.retryTransient !== false) {
-    try {
-      await chrome.storage.session.set(values);
-      return;
-    } catch (err) {
-      failure = err;
-    }
-  }
-
-  if (!isStorageQuotaError(failure)) throw failure;
-  if (options.compactValues != null) {
-    try {
-      await chrome.storage.session.set(options.compactValues);
-      return;
-    } catch (err) {
-      failure = err;
-      if (!isStorageQuotaError(failure)) throw failure;
-    }
-  }
-  const criticalValues = options.compactValues ?? values;
-  try {
-    await withHeadroomLock(async () => {
-      // One observable storage operation both releases the reserved bytes and
-      // writes the critical state. Other tab lanes cannot interleave their own
-      // headroom recovery, and data-plane writes carry a full reserve themselves.
-      await chrome.storage.session.set({ [CONTROL_HEADROOM_KEY]: '', ...criticalValues });
-      await restoreControlHeadroom();
-    });
-    return;
-  } catch (err) {
-    failure = err;
-  }
-  throw failure;
 }
 
 interface GlobalMediaRow {
@@ -686,16 +561,12 @@ export function addMedia(tabId: number, items: MediaItem[]): Promise<number> {
         if (changed && merged.length > maxItemsCache) {
           const { ordinary, reserved } = await partitionMediaForRetention(tabId, merged);
           merged.splice(0, merged.length, ...ordinary, ...reserved);
-          // Oldest-first, and insertion order is not viewing order — a capture the
-          // user actually watched used to vanish here. Current-boundary candidates
-          // were moved to the retained end above; the counter still records how
-          // much unrelated evidence was shed.
-          // EF6: trimming to EXACTLY the cap made every later batch that adds
-          // even one more item re-run this same partition + O(n) scan once a
-          // tab sits at the cap. Only spend the hysteresis margin when `stored`
-          // (the durable count before this batch) was ALREADY at or over the
-          // cap; a batch that crosses the cap for the first time still trims to
-          // exactly maxItemsCache, unchanged.
+          // Oldest-first, and insertion order is not viewing order — a capture the user
+          // actually watched would vanish here without the partition above. The counter
+          // still records how much unrelated evidence was shed.
+          //
+          // Spend the hysteresis margin only when `stored` (the durable count BEFORE
+          // this batch) was already at or over the cap; see MAX_ITEMS_HYSTERESIS.
           const hysteresis =
             stored.length >= maxItemsCache ? Math.min(MAX_ITEMS_HYSTERESIS, Math.floor(maxItemsCache / 10)) : 0;
           const target = maxItemsCache - hysteresis;
@@ -737,15 +608,11 @@ export function addMedia(tabId: number, items: MediaItem[]): Promise<number> {
   });
 }
 
-// getMedia's self-repair write below must run only in the single-writer
-// service-worker context. Every write lane in this file (enqueueCaptureState,
-// withMediaGlobalLock, ...) is an in-memory promise chain local to ONE JS
-// context, so a write issued from the side panel — this module's other
-// caller — has no lock against the worker's own concurrent addMedia: the
-// panel's read-modify-write can straddle it and silently drop a capture, or
-// resurrect a tab the worker just cleared (see messages.ts's ClearTabMsg
-// note, which exists for exactly this hazard). An MV3 service worker has no
-// window/document; the side panel is a normal HTML page and always does.
+// Every write lane in this file is an in-memory promise chain local to ONE JS context,
+// so a write from the side panel holds no lock against the worker's concurrent
+// addMedia: its read-modify-write could straddle it and drop a capture, or resurrect a
+// tab the worker just cleared. getMedia's self-repair write below is therefore
+// worker-only. An MV3 service worker has no document; the panel is a page and has one.
 const isServiceWorkerContext = typeof document === 'undefined';
 
 export async function getMedia(tabId: number): Promise<MediaItem[]> {
@@ -762,49 +629,6 @@ export async function getMedia(tabId: number): Promise<MediaItem[]> {
   return normalized;
 }
 
-// --- "Now playing" pointer: which video is currently playing in the tab ---
-
-interface PlayingRef {
-  /** Asset ids of the media centered in the viewport (what you're watching). */
-  ids: string[];
-  /** True when a <video> is centered — enables the network-recency fallback. */
-  hasVideo: boolean;
-  /** Video id parsed from the page URL (/reel/<id>, /watch?v=<id>) — an exact,
-   *  prefetch-proof anchor: it matches the efg `vid:` key of every representation
-   *  of the watched video and nothing else. Absent on feed/story surfaces. */
-  vid?: string;
-  /** fbcdn URLs of the cover image(s) centered right now. The panel displays one
-   *  as the playing group's thumbnail when the capture carried none, and LEARNS
-   *  the cover↔video binding so returning to an already-buffered video (which
-   *  fetches nothing) still matches instantly. */
-  coverUrls?: string[];
-  /** Opaque slide marker: a durable DOM story id (`u:`) or provisional pinned-
-   *  path fallback (`p:`), combined with a per-video-load id when present (see
-   *  content.ts). Never fetched; only compared/bound according to provenance. */
-  mark?: string;
-  at: number;
-}
-
-/** Bound an opaque PlayingRef.mark for persistence. An overlong mark is cut
- *  at the story side only: the `#<videoMark>` suffix (already capped at ~200
- *  by video-mark.ts) survives whole so consecutive loads stay distinct, and
- *  the story head becomes a stable prefix so the derived story portion still
- *  re-matches the same card across loads — a plain prefix slice would collapse
- *  loads, a positional head+tail split would shift the portion whenever the
- *  suffix length changes. */
-export function boundPlayingMark(mark: string): string {
-  if (mark.length <= 256) return mark;
-  const i = mark.lastIndexOf('#');
-  if (i < 0) return mark.slice(0, 256);
-  // Fixed budgets, not remainder math: a head that flexed with suffix length
-  // would change the derived story portion between loads `:9` and `:10`. 56
-  // covers a whole synthetic `#vm:<uuid>:<seq>` suffix; an overlong progressive
-  // src keeps its last 56 chars instead — still deterministic per load.
-  return mark.slice(0, Math.min(i, 200)) + mark.slice(i).slice(-56);
-}
-
-const playingKey = (tabId: number): string => `playing_${tabId}`;
-
 export function setPlaying(tabId: number, ref: PlayingRef, receivedAt?: number): Promise<boolean> {
   let completed = false;
   return enqueueCaptureState(
@@ -812,7 +636,7 @@ export function setPlaying(tabId: number, ref: PlayingRef, receivedAt?: number):
     async () => {
       await withRetentionSnapshotLock(async () => {
         const key = playingKey(tabId);
-        const current = (await chrome.storage.session.get(key))[key] as PlayingRef | undefined;
+        const current = await getPlaying(tabId);
         const resetClockEpoch =
           current != null &&
           receivedAt !== undefined &&
@@ -827,7 +651,7 @@ export function setPlaying(tabId: number, ref: PlayingRef, receivedAt?: number):
           return;
         }
         if (!resetClockEpoch) {
-          await writeCaptureState(tabId, { [key]: ref });
+          await writeCaptureState({ [key]: ref });
           completed = true;
           return;
         }
@@ -836,55 +660,31 @@ export function setPlaying(tabId: number, ref: PlayingRef, receivedAt?: number):
         // clock. Repair the whole control snapshot in one durable write so old
         // future evidence cannot immediately re-select or reserve the previous
         // Story after the PlayingRef itself has recovered.
-        const recentStorageKey = recentKey(tabId);
-        const rawRecent = (await chrome.storage.session.get(recentStorageKey))[recentStorageKey] as
-          | RecentRef
-          | undefined;
-        const repairedRecent: RecentRef | null = rawRecent && Array.isArray(rawRecent.tracks)
-          ? {
-              tracks: rawRecent.tracks.filter(
-                (track) =>
-                  track != null &&
-                  typeof track.url === 'string' &&
-                  typeof track.at === 'number' &&
-                  !playingTimestampIsFutureEpoch(track.at, receivedAt),
-              ),
-            }
-          : null;
+        const storedRecent = await getRecent(tabId);
+        const repairedRecent: RecentRef | null =
+          storedRecent == null
+            ? null
+            : {
+                tracks: storedRecent.tracks.filter(
+                  (track) =>
+                    track != null &&
+                    typeof track.url === 'string' &&
+                    typeof track.at === 'number' &&
+                    !playingTimestampIsFutureEpoch(track.at, receivedAt),
+                ),
+              };
         const values: Record<string, unknown> = {
           [key]: ref,
           [playingPinKey(tabId)]: null,
         };
-        if (repairedRecent != null) values[recentStorageKey] = repairedRecent;
-        await writeCaptureState(tabId, values);
+        if (repairedRecent != null) values[recentKey(tabId)] = repairedRecent;
+        await writeCaptureState(values);
         completed = true;
       });
     },
     logWriteError('playing'),
   ).then(() => completed);
 }
-
-export async function getPlaying(tabId: number): Promise<PlayingRef | null> {
-  return readKey<PlayingRef | null>(playingKey(tabId), null);
-}
-
-// --- Recently requested fbcdn media tracks (the video being fetched now) ---
-
-interface RecentTrack {
-  /** Widened URL of a fetched track; the side panel derives match keys
-   *  (fbAssetKeys/mediaId/trackKey) from it, since a single id can't survive
-   *  fbcdn's base64 filenames and rotating origin prefixes. */
-  url: string;
-  at: number;
-}
-
-interface RecentRef {
-  /** Fetched tracks, oldest→newest. Normally a 24-entry tail; a bounded 4s
-   *  transition burst and two boundary-near groups may temporarily widen it. */
-  tracks: RecentTrack[];
-}
-
-const recentKey = (tabId: number): string => `recent_${tabId}`;
 
 export function setRecent(tabId: number, url: string, at: number, receivedAt?: number): Promise<boolean> {
   if (
@@ -904,7 +704,9 @@ export function setRecent(tabId: number, url: string, at: number, receivedAt?: n
       if (receivedAt !== undefined && playingTimestampIsFutureEpoch(at, Date.now())) return;
       await withRetentionSnapshotLock(async () => {
         const key = recentKey(tabId);
-        const cur = ((await chrome.storage.session.get(key))[key] as RecentRef | undefined)?.tracks ?? [];
+        // getRecent, not a raw read: it validates `tracks` is an array, so a corrupt
+        // value degrades to empty instead of throwing inside this write lane.
+        const cur = [...((await getRecent(tabId))?.tracks ?? [])];
         // A worker can lose the ACK after storage accepted the write, then retry
         // the same observation. Keep that retry idempotent so one network segment
         // cannot occupy the bounded ring twice.
@@ -914,18 +716,12 @@ export function setRecent(tabId: number, url: string, at: number, receivedAt?: n
         const compact = retained.slice(-RECENT_STEADY_MAX);
         const value = { tracks: retained } satisfies RecentRef;
         const compactValue = { tracks: compact } satisfies RecentRef;
-        await writeCaptureState(tabId, { [key]: value }, { compactValues: { [key]: compactValue } });
+        await writeCaptureState({ [key]: value }, { compactValues: { [key]: compactValue } });
         completed = true;
       });
     },
     logWriteError('recent'),
   ).then(() => completed);
-}
-
-export async function getRecent(tabId: number): Promise<RecentRef | null> {
-  const key = recentKey(tabId);
-  const raw = (await chrome.storage.session.get(key))[key] as RecentRef | undefined;
-  return raw && Array.isArray(raw.tracks) ? raw : null;
 }
 
 // --- Learned now-playing bindings, persisted so a reopened panel re-matches ---
@@ -1015,33 +811,28 @@ function isCounter(value: unknown): value is number {
   return Number.isSafeInteger(value) && (value as number) >= 0;
 }
 
+const EMPTY_BIND_RECORD: BindRecord = { version: BIND_VERSION, generation: 0, revision: 0, state: null };
+
 function parseBindRecord(raw: unknown): BindRecord {
-  if (raw != null && typeof raw === 'object') {
-    const record = raw as Partial<BindRecord>;
-    if (
-      record.version === BIND_VERSION &&
-      isCounter(record.generation) &&
-      isCounter(record.revision) &&
-      (record.state === null || sanitizeBindState(record.state) != null)
-    ) {
-      return {
-        version: BIND_VERSION,
-        generation: record.generation,
-        revision: record.revision,
-        state: record.state === null ? null : sanitizeBindState(record.state),
-      } as BindRecord;
+  if (raw == null || typeof raw !== 'object') return EMPTY_BIND_RECORD;
+  const record = raw as Partial<BindRecord>;
+  if (record.version === BIND_VERSION && isCounter(record.generation) && isCounter(record.revision)) {
+    // Sanitized once: it JSON-round-trips the state to measure bytes, so calling it
+    // twice (to test, then to keep) paid for that twice.
+    const state = record.state === null ? null : sanitizeBindState(record.state);
+    if (record.state === null || state != null) {
+      return { version: BIND_VERSION, generation: record.generation, revision: record.revision, state };
     }
-    // Legacy BindState: generation/revision zero lets its first durable update
-    // migrate it without making a reopened panel lose the learned mappings.
-    const legacy = sanitizeBindState(raw);
-    if (legacy != null) return { version: BIND_VERSION, generation: 0, revision: 0, state: legacy };
   }
-  return { version: BIND_VERSION, generation: 0, revision: 0, state: null };
+  // Legacy BindState, or a versioned record whose state was corrupt: generation and
+  // revision zero let the first durable update migrate it instead of making a reopened
+  // panel lose every learned mapping.
+  const legacy = sanitizeBindState(raw);
+  return legacy != null ? { version: BIND_VERSION, generation: 0, revision: 0, state: legacy } : EMPTY_BIND_RECORD;
 }
 
 async function readBindRecord(tabId: number): Promise<BindRecord> {
-  const key = bindKey(tabId);
-  return parseBindRecord((await chrome.storage.session.get(key))[key]);
+  return parseBindRecord(await readKey<unknown>(bindKey(tabId), null));
 }
 
 function sameBindState(left: BindState | null, right: BindState): boolean {
@@ -1080,7 +871,7 @@ export function persistBindings(tabId: number, request: PersistBindingsRequest):
         revision: current.revision + 1,
         state,
       };
-      await writeCaptureState(tabId, { [bindKey(tabId)]: next });
+      await writeCaptureState({ [bindKey(tabId)]: next });
       result = { ok: true, generation: next.generation, revision: next.revision };
     },
     (error) => {
@@ -1098,157 +889,6 @@ export function getBindRecord(tabId: number): Promise<BindRecord> {
 
 export async function getBind(tabId: number): Promise<BindState | null> {
   return (await readBindRecord(tabId)).state;
-}
-
-// --- Download receipts for this tab (the panel's "Saved" history) ---
-// One SavedEntry per completed download: enough to RENDER a Saved card after
-// media_<tabId> is wiped (Clear, navigation, eviction), never enough to
-// re-download — media URLs carry rotating fbcdn signatures, so a stored one
-// would be a download button that lies. The receipt's `id` is the panel card id
-// (`v:${groupKey}` / `i:${itemId}`): content-derived, so when the user replays
-// the content the rebuilt live card carries the same id and the receipt
-// re-links to it automatically. That id format is a persisted contract now —
-// change it only with a migration.
-// Per-tab keys, not one global ledger. The service worker owns every receipt,
-// so its one serial queue orders completions from all panel windows.
-
-export interface SavedEntry {
-  id: string;
-  kind: MediaKind;
-  source: MediaSource;
-  /** Download time — the Saved view's sort key. Frozen on the first save. */
-  savedAt: number;
-  /** fbcdn poster/self URL. Its signature expires; the card's <img> error path
-   *  degrades it to the kind icon. Shed first under quota pressure. */
-  thumbUrl?: string;
-  resLabel?: string;
-  durationSec?: number;
-}
-
-const savedKey = (tabId: number): string => `saved_${tabId}`;
-// Insertion-ordered, so the cap below evicts the oldest receipts first.
-const SAVED_MAX = 2000;
-// Soft byte budget for one tab's serialized ledger (Chrome bills key length +
-// JSON length against the ~10MB shared area). Past it, thumbnails are shed
-// oldest-first: the history row is the promise, the thumb is decoration whose
-// signature has usually expired by then anyway.
-const SAVED_BYTE_BUDGET = 262_144;
-export const SAVED_THUMB_MAX = 1024; // fbcdn image URLs run 300–500 chars; drop outliers
-export const SAVED_LABEL_MAX = 16;
-// The card-id contract: a 2-char 'v:'/'i:' prefix over media.ts's 256-char
-// item-id bound. Exported so service-worker.ts's inbound-receipt validation
-// stays compile-time linked to this bound instead of carrying its own copy.
-export const SAVED_ID_MAX = 258;
-const enqueueSaved = serialQueue();
-
-function isSavedEntry(x: unknown): x is SavedEntry {
-  if (x == null || typeof x !== 'object') return false;
-  const e = x as Record<string, unknown>;
-  return (
-    typeof e.id === 'string' &&
-    e.id.length > 0 &&
-    typeof e.kind === 'string' &&
-    MEDIA_KINDS.has(e.kind) &&
-    typeof e.source === 'string' &&
-    MEDIA_SOURCES.has(e.source) &&
-    typeof e.savedAt === 'number' &&
-    Number.isFinite(e.savedAt)
-  );
-}
-
-/** Clamp one receipt to its stored bounds — applied to every entry that enters
- *  the ledger, whether new or refreshing an existing row. */
-function sanitizeEntry(e: SavedEntry): SavedEntry {
-  const out: SavedEntry = {
-    // Slicing at 256 truncated a max-length id, and a truncated receipt can
-    // never re-link to its live card — see SAVED_ID_MAX above for the bound.
-    id: e.id.slice(0, SAVED_ID_MAX),
-    kind: e.kind,
-    source: e.source,
-    savedAt: e.savedAt,
-  };
-  // Optional fields are NOT validated by isSavedEntry, and this runs on every
-  // persisted row (readSaved), so each check must also carry the type test — a
-  // malformed field from a corrupt or foreign write must degrade to absent,
-  // never throw and take the whole ledger read down with it.
-  if (typeof e.thumbUrl === 'string' && e.thumbUrl.length <= SAVED_THUMB_MAX && isFbcdn(e.thumbUrl)) {
-    out.thumbUrl = e.thumbUrl;
-  }
-  if (typeof e.resLabel === 'string') out.resLabel = e.resLabel.slice(0, SAVED_LABEL_MAX);
-  if (typeof e.durationSec === 'number' && Number.isFinite(e.durationSec)) out.durationSec = e.durationSec;
-  return out;
-}
-
-async function readSaved(key: string): Promise<SavedEntry[]> {
-  const raw = await readKey<unknown>(key, []);
-  return Array.isArray(raw) ? raw.filter(isSavedEntry).map(sanitizeEntry) : [];
-}
-
-/** Enforce the byte budget by stripping thumbnails oldest-first — never rows.
- *  The serialized length is computed once and decremented by an estimate of each
- *  shed thumb's JSON footprint (field, quotes, separator) instead of
- *  re-stringifying per iteration; the budget is soft, the estimate is enough. */
-function shedThumbs(key: string, entries: SavedEntry[]): void {
-  let bytes = key.length + JSON.stringify(entries).length;
-  for (const e of entries) {
-    if (bytes <= SAVED_BYTE_BUDGET) return;
-    if (e.thumbUrl == null) continue;
-    bytes -= `"thumbUrl":${JSON.stringify(e.thumbUrl)},`.length;
-    delete e.thumbUrl;
-  }
-}
-
-/** Record one download receipt (each save persists as it lands — see runBulk).
- *  Idempotent: re-saving an id keeps its first position and original savedAt,
- *  refreshing only the display fields (a re-download carries a newer-signed
- *  thumb that will live longer). */
-export function addSaved(tabId: number, entry: SavedEntry): Promise<void> {
-  let failure: unknown;
-  return enqueueSaved(
-    async () => {
-      const key = savedKey(tabId);
-      const cur = await readSaved(key);
-      const e = sanitizeEntry(entry);
-      const kept = cur.find((x) => x.id === e.id);
-      if (kept) Object.assign(kept, e, { savedAt: kept.savedAt });
-      else cur.push(e);
-      if (cur.length > SAVED_MAX) cur.splice(0, cur.length - SAVED_MAX);
-      shedThumbs(key, cur);
-      try {
-        await chrome.storage.session.set(dataValues({ [key]: cur }));
-      } catch (err) {
-        if (!isStorageQuotaError(err)) {
-          // Download completion is a one-shot event. A transient backend error
-          // must retry the intact ledger, never masquerade as quota and delete
-          // half of the user's Saved history.
-          await chrome.storage.session.set(dataValues({ [key]: cur }));
-          return;
-        }
-        // The byte budget is an estimate against a SHARED quota another tab may
-        // have filled: as a last resort drop the oldest half of the history and
-        // retry once (the same pattern addMedia uses); a second failure hits the
-        // queue's onError. Never the receipt being written: on a short ledger
-        // the "oldest half" IS the new entry (or the row it refreshed), and
-        // dropping it would resolve as success while losing the row. Re-append
-        // the MERGED row (kept) when one existed — it carries the original
-        // savedAt this function's contract preserves; e still holds the
-        // caller's fresh timestamp.
-        cur.splice(0, Math.ceil(cur.length / 2));
-        if (!cur.some((x) => x.id === e.id)) cur.push(kept ?? e);
-        await chrome.storage.session.set(dataValues({ [key]: cur }));
-      }
-    },
-    (err) => {
-      failure = err;
-      console.error('[FaceScrap] saved write failed', err);
-    },
-  ).then(() => {
-    if (failure !== undefined) throw failure;
-  });
-}
-
-export async function getSaved(tabId: number): Promise<SavedEntry[]> {
-  return readSaved(savedKey(tabId));
 }
 
 /** Remove the per-tab CAPTURE state (media list + now-playing + recent + bindings).
@@ -1280,7 +920,7 @@ export function clearTab(
       // Land the generation barrier first. If the following capture removal
       // fails, callers see the failure, but an old panel callback still cannot
       // resurrect bindings from the generation that was just cleared.
-      await writeCaptureState(tabId, { [bindKey(tabId)]: tombstone });
+      await writeCaptureState({ [bindKey(tabId)]: tombstone });
       const captureKeys = [keyFor(tabId), playingKey(tabId), recentKey(tabId), playingPinKey(tabId)];
       if (!preserveFacebookTheme) captureKeys.push(facebookThemeKey(tabId));
       await withMediaGlobalLock(() => chrome.storage.session.remove(captureKeys));
@@ -1292,21 +932,9 @@ export function clearTab(
     if (failure !== undefined) throw failure;
   });
 }
-
-/** Remove one tab's saved_ key on the same worker-owned write chain as addSaved. */
-function dropSaved(tabId: number): Promise<void> {
-  return enqueueSaved(
-    () => chrome.storage.session.remove(savedKey(tabId)),
-    (err) => console.error('[FaceScrap] storage clear failed', err),
-  );
-}
-
-/** Full teardown for a CLOSED tab: the capture state AND the download history.
- *  Chrome does not reuse tab ids within a session, so a dead tab can never
- *  render its Saved view again — leaving saved_ would orphan the key in
- *  storage.session until the browser exits. Download completion and purge both
- *  run in the worker, so enqueueSaved orders a finishing receipt before/after
- *  this removal without a cross-context resurrection race. */
+/** Full teardown for a CLOSED tab: the capture state AND the download history. Chrome
+ *  does not reuse tab ids within a session, so a dead tab can never render its Saved
+ *  view again — leaving saved_ would orphan the key until the browser exits. */
 export function purgeTab(tabId: number): Promise<void> {
   const removeBindRecord = (): Promise<void> => {
     let failure: unknown;
@@ -1341,52 +969,5 @@ export async function setCaps(caps: Caps): Promise<void> {
 
 export async function getCaps(): Promise<Caps | null> {
   return readKey<Caps | null>(CAPS_KEY, null);
-}
-
-// --- Diagnostic counters (opt-in; see diag.ts for why they exist) ---
-
-// storage.LOCAL, unlike every other key in this file: the counters answer "what
-// has this install been dropping?", a question asked across sessions. Tying them
-// to storage.session would wipe the evidence at the exact moment a maintainer
-// restarts the browser to reproduce a capture bug.
-const DIAG_KEY = 'diag_counters';
-const enqueueDiag = serialQueue();
-
-/** Merge one context's drained counts into the running totals. Contexts report
- *  independently (page hook via the content script, worker, panel), so this ADDS
- *  rather than replaces — a plain set() would let whichever context flushed last
- *  erase the others' counts. */
-export function addDiagCounters(delta: DiagCounters): Promise<void> {
-  return enqueueDiag(
-    async () => {
-      // Re-sanitize even though the sender already did: the page hook's counts
-      // cross a world boundary it shares with the page, same threat model as
-      // sanitizeIncomingItems. Doing it here covers every caller at once.
-      const clean = sanitizeDiagCounters(delta);
-      if (Object.keys(clean).length === 0) return;
-      const stored = sanitizeDiagCounters((await chrome.storage.local.get(DIAG_KEY))[DIAG_KEY]);
-      for (const [reason, n] of Object.entries(clean)) {
-        const key = reason as DiagReason;
-        stored[key] = (stored[key] ?? 0) + n;
-      }
-      await chrome.storage.local.set({ [DIAG_KEY]: stored });
-    },
-    (err) => console.error('[FaceScrap] diag write failed', err),
-  );
-}
-
-export async function getDiagCounters(): Promise<DiagCounters> {
-  try {
-    return sanitizeDiagCounters((await chrome.storage.local.get(DIAG_KEY))[DIAG_KEY]);
-  } catch {
-    return {};
-  }
-}
-
-export function resetDiagCounters(): Promise<void> {
-  return enqueueDiag(
-    () => chrome.storage.local.remove(DIAG_KEY),
-    (err) => console.error('[FaceScrap] diag clear failed', err),
-  );
 }
 

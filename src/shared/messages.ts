@@ -8,8 +8,9 @@
 
 import type { DiagCounters } from './diag';
 import type { MediaItem, MediaKind } from './media';
-import type { Settings } from './settings';
-import type { BindRecord, BindState, SavedEntry } from './storage';
+import type { SettingsPatch } from './settings';
+import type { BindRecord, BindState } from './storage';
+import type { SavedEntry } from './saved';
 import type { EffectiveTheme } from './theme';
 
 /** content script → service worker: sanitized captures relayed from the page. */
@@ -81,7 +82,7 @@ export interface ContentScriptPingAck {
  * global write queue so separate panels/windows cannot overwrite each other. */
 export interface SettingsUpdateMsg {
   type: 'FACESCRAP_UPDATE_SETTINGS';
-  patch: Partial<Settings>;
+  patch: SettingsPatch;
 }
 
 /** The worker acknowledges only after the merged settings object is durable. */
@@ -407,6 +408,14 @@ interface DiagReportMsg {
   documentToken?: string;
 }
 
+/** The global shortcut's outcome, pushed to the tab it downloaded from. The shortcut starts a
+ *  download the in-page button did not, so without this a failure is indistinguishable from a
+ *  keypress that never arrived; the button shows it on the glyph it already has. */
+export interface ShortcutResultMsg {
+  type: 'FACESCRAP_SHORTCUT_RESULT';
+  ok: boolean;
+}
+
 export type RuntimeMessage =
   | MediaFoundMsg
   | NowPlayingMsg
@@ -424,4 +433,5 @@ export type RuntimeMessage =
   | PinPlayingMediaMsg
   | PlayingDownloadOptionsMsg
   | RequestPlayingDownloadMsg
-  | DiagReportMsg;
+  | DiagReportMsg
+  | ShortcutResultMsg;

@@ -3,12 +3,14 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import test from 'node:test';
 
+import { panelSource } from './panel-source';
+
 const ROOT = process.cwd();
 const HTML_PATH = join(ROOT, 'src', 'sidepanel', 'sidepanel.html');
-const CONTROLLER_PATH = join(ROOT, 'src', 'sidepanel', 'sidepanel.ts');
+// The panel may be split into modules; read the whole directory (see panel-source.ts).
 
 const html = readFileSync(HTML_PATH, 'utf8');
-const controller = readFileSync(CONTROLLER_PATH, 'utf8');
+const controller = panelSource();
 
 function attributes(tag: string): Map<string, string> {
   return new Map(
@@ -63,23 +65,23 @@ test('keeps the 2b route controls in one bottom navigation', () => {
   );
 });
 
-test('names the quality and settings controls and exposes language selection state', () => {
-  const labelledControls = [
+test('names every settings control, whatever kind of control it is', () => {
+  // The claim has not changed — every control carries an accessible name pointing at a
+  // label that exists. What changed is the KINDS: the dropdowns became segmented button
+  // groups, so half of these are now a <div role="group"> rather than an <input>/<select>,
+  // and a group needs the name just as much.
+  const labelledInputs = [
     'now-qselect',
     'set-template',
     'set-subfolder',
-    'set-quality',
     'set-direct',
-    'set-followlang',
-    'set-theme',
-    'set-order',
     'set-videosonly',
-    'set-minres',
     'set-maxitems',
     'set-confirmclear',
     'set-diag',
+    'set-keysenabled',
   ];
-  for (const id of labelledControls) {
+  for (const id of labelledInputs) {
     const tag = html.match(new RegExp(`<(?:input|select)\\b[^>]*id="${id}"[^>]*>`))?.[0];
     assert.ok(tag, `missing #${id}`);
     const labelId = attributes(tag!).get('aria-labelledby');
@@ -87,10 +89,26 @@ test('names the quality and settings controls and exposes language selection sta
     assert.match(html, new RegExp(`\\bid="${labelId}"`), `missing label #${labelId}`);
   }
 
+  for (const name of ['quality', 'theme', 'order', 'cols', 'backdrop', 'corners', 'minres']) {
+    const tag = html.match(new RegExp(`<div\\b[^>]*data-seg="${name}"[^>]*>`))?.[0];
+    assert.ok(tag, `missing segmented control ${name}`);
+    const attrs = attributes(tag!);
+    assert.equal(attrs.get('role'), 'group', `${name} must be a labelled group`);
+    const labelId = attrs.get('aria-labelledby');
+    assert.ok(labelId, `${name} must have aria-labelledby`);
+    assert.match(html, new RegExp(`\\bid="${labelId}"`), `missing label #${labelId}`);
+  }
+  // The accent row has no text of its own at all, so its group name is the only one there is.
+  const accent = html.match(/<div\b[^>]*id="set-accent"[^>]*>/)?.[0];
+  assert.ok(accent, 'missing #set-accent');
+  assert.match(html, new RegExp(`\\bid="${attributes(accent!).get('aria-labelledby')}"`));
+
+  // Auto/EN/ES is one control over two stored facts, and exactly one of the three is lit.
   const langMatch = html.match(/<div\b[^>]*id="lang"[^>]*>([\s\S]*?)<\/div>/);
   assert.ok(langMatch, 'missing #lang');
-  const langButtons = elementTags(langMatch[1]!, 'button');
-  assert.deepEqual(langButtons.map((tag) => attributes(tag).get('aria-pressed')), ['true', 'false']);
+  const langChoices = elementTags(langMatch[1]!, 'button');
+  assert.deepEqual(langChoices.map((tag) => attributes(tag).get('data-lang')), ['auto', 'en', 'es']);
+  assert.equal(langChoices.filter((tag) => attributes(tag).get('aria-pressed') === 'true').length, 1);
 });
 
 test('keeps filter and settings values compatible with the runtime contracts', () => {
@@ -103,31 +121,46 @@ test('keeps filter and settings values compatible with the runtime contracts', (
   );
   assert.equal(filterButtons.filter((tag) => attributes(tag).get('aria-pressed') === 'true').length, 1);
 
-  const checkboxes = ['set-subfolder', 'set-direct', 'set-followlang', 'set-confirmclear', 'set-videosonly', 'set-diag'];
+  const checkboxes = ['set-subfolder', 'set-direct', 'set-confirmclear', 'set-videosonly', 'set-diag', 'set-keysenabled'];
   for (const id of checkboxes) assert.match(html, new RegExp(`<input\\b[^>]*id="${id}"[^>]*type="checkbox"`));
 
-  const optionValues = (id: string): string[] => {
-    const match = html.match(new RegExp(`<select\\b[^>]*id="${id}"[^>]*>([\\s\\S]*?)<\\/select>`));
-    assert.ok(match, `missing #${id}`);
-    return [...match[1]!.matchAll(/<option\b[^>]*value="([^"]+)"/g)].map((item) => item[1]!);
+  // Same claim as when these were <option value>s: what the markup offers has to be what
+  // normalizeSettings accepts, or a lit button writes a value the schema throws away.
+  const segValues = (name: string): string[] => {
+    const match = html.match(new RegExp(`<div\\b[^>]*data-seg="${name}"[^>]*>([\\s\\S]*?)<\\/div>`));
+    assert.ok(match, `missing segmented control ${name}`);
+    return [...match[1]!.matchAll(/<button\b[^>]*data-value="([^"]+)"/g)].map((item) => item[1]!);
   };
-  assert.deepEqual(optionValues('set-quality'), ['highest', 'lowest', 'ask']);
-  assert.deepEqual(optionValues('set-theme'), ['auto', 'light', 'dark']);
-  assert.deepEqual(optionValues('set-order'), ['newest', 'oldest']);
-  assert.deepEqual(optionValues('set-minres'), ['0', '360', '480', '720', '1080']);
+  assert.deepEqual(segValues('quality'), ['highest', 'lowest', 'ask']);
+  assert.deepEqual(segValues('theme'), ['auto', 'light', 'dark']);
+  assert.deepEqual(segValues('order'), ['newest', 'oldest']);
+  assert.deepEqual(segValues('backdrop'), ['solid', 'frosted', 'glass']);
+  assert.deepEqual(segValues('corners'), ['sharp', 'soft', 'round']);
+  // 480 was dropped when this became four buttons on one line; the four that remain are the
+  // steps worth a tap, and normalizeSettings still coerces anything else to the default.
+  assert.deepEqual(segValues('minres'), ['0', '360', '720', '1080']);
+  // Exactly one button pressed per group, so nothing opens claiming two values at once.
+  for (const name of ['quality', 'theme', 'order', 'cols', 'backdrop', 'corners', 'minres']) {
+    const match = html.match(new RegExp(`<div\\b[^>]*data-seg="${name}"[^>]*>([\\s\\S]*?)<\\/div>`))![1]!;
+    const pressed = [...match.matchAll(/aria-pressed="true"/g)];
+    assert.equal(pressed.length, 1, `${name} must open with exactly one value pressed`);
+  }
 });
 
-test('exposes an accessible bilingual theme preference control in Panel settings', () => {
-  const tag = html.match(/<select\b[^>]*id="set-theme"[^>]*>/)?.[0];
-  assert.ok(tag, 'missing #set-theme');
+test('exposes an accessible bilingual theme preference control', () => {
+  // "Auto" needs its hint announced, not merely printed beside it: what automatic MEANS here
+  // (Facebook first, then the device) is not guessable from the word. That is the one thing
+  // this test is really holding, and it survived the control becoming a button group.
+  const tag = html.match(/<div\b[^>]*data-seg="theme"[^>]*>/)?.[0];
+  assert.ok(tag, 'missing the theme control');
   const attrs = attributes(tag);
   assert.equal(attrs.get('aria-labelledby'), 'label-set-theme');
   assert.equal(attrs.get('aria-describedby'), 'hint-set-theme');
   assert.match(html, /id="label-set-theme"[^>]*data-i18n="settingsTheme"/);
   assert.match(html, /id="hint-set-theme"[^>]*data-i18n="settingsThemeHint"/);
-  assert.match(html, /value="auto"[^>]*data-i18n="themeAuto"/);
-  assert.match(html, /value="light"[^>]*data-i18n="themeLight"/);
-  assert.match(html, /value="dark"[^>]*data-i18n="themeDark"/);
+  assert.match(html, /data-value="auto"[^>]*data-i18n="themeAuto"/);
+  assert.match(html, /data-value="light"[^>]*data-i18n="themeLight"/);
+  assert.match(html, /data-value="dark"[^>]*data-i18n="themeDark"/);
 });
 
 test('localizes theme labels and the automatic-theme hint in English and Spanish', () => {
@@ -164,34 +197,12 @@ test('exposes max saved items as a bounded-length digits-only text input', () =>
   assert.equal(attrs.get('aria-labelledby'), 'label-set-maxitems');
 });
 
-test('sanitizes the max saved items draft on input', () => {
-  assert.match(controller, /const maxItemsInput = byId<HTMLInputElement>\('set-maxitems'\)/);
-  assert.match(controller, /maxItemsInput\.addEventListener\('input'/);
-  assert.match(controller, /sanitizeMaxItemsInput/);
-});
-
-test('parses the max saved items value before committing a change', () => {
-  assert.match(controller, /maxItemsInput\.addEventListener\('change'/);
-  assert.match(controller, /parseMaxItemsInput/);
-});
-
-test('reverts an invalid max saved items commit without saving it', () => {
-  assert.match(
-    controller,
-    /if \(maxItems === undefined\) \{\s*maxItemsInput\.value = String\(settings\.maxItems\);\s*return;\s*\}/,
-  );
-});
-
-test('saves a valid max saved items commit only when the value changed', () => {
-  assert.match(controller, /if \(maxItems !== settings\.maxItems\) void applySetting\(\{ maxItems \}\)/);
-});
-
-test('commits max saved items from the keyboard by blurring on Enter', () => {
-  assert.match(
-    controller,
-    /maxItemsInput\.addEventListener\('keydown',[\s\S]*?if \(e\.key !== 'Enter'\) return;[\s\S]*?maxItemsInput\.blur\(\)/,
-  );
-});
+// Five tests regex-matching the retention field's wiring in TS source used to sit here. They
+// asserted the shape of the code, not its behaviour, and outside the CSS/HTML/manifest/i18n
+// exception — a rename or an equivalent rewrite failed them, and a broken field could not.
+// What they were reaching for is already covered properly: sanitizeMaxItemsInput and
+// parseMaxItemsInput are pure and behaviour-tested in settings.test.ts, and the markup contract
+// (type, inputmode, pattern, maxlength, label) is asserted above, where the source IS the artifact.
 
 // This used to only assert that SOME inline 32x32 <svg> sat in the brand, which
 // is exactly how the header's private copy of the glyph drifted away from the

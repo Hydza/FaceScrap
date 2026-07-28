@@ -428,10 +428,36 @@ function keysOf(tid: number, i: MediaItem): ItemKeys {
   return keys;
 }
 
-/** Items for what's on screen: centered DOM media + the video being fetched now,
- *  plus any video still within its post-play grace window. */
-export async function selectPlaying(tid: number, items: MediaItem[]): Promise<MediaItem[]> {
-  const [ref, recent] = await Promise.all([getPlaying(tid), getRecent(tid)]);
+/**
+ * Everything the detector can conclude about a tab from stored evidence alone,
+ * with NO writes and no clock of its own.
+ *
+ * Split out of selectPlaying by pure code motion, because two callers need this
+ * reasoning and only one of them may do the rest of it. selectPlaying goes on to
+ * endorse, learn bindings and write the pin — correct for exactly one caller on
+ * one cadence. The in-page download button polls, so it must never do any of
+ * that; what it needs is only the part above, which is why that part is now a
+ * function instead of the first half of a 540-line one.
+ *
+ * The anti-prefetch scoring below is the whole reason this could not simply be
+ * reimplemented for the button: fbcdn prefetches the NEXT reel, so "the most
+ * recently fetched track" routinely names a video the user is not watching. A
+ * button wired to that would download the wrong video, which is worse than a
+ * button that stays hidden.
+ *
+ * The bind maps are PARAMETERS, not the module globals of the same name: the
+ * service worker holds none of the panel's in-memory state and passes what it
+ * read out of storage. The names match so the moved body needed no edits.
+ */
+export function playingEvidence(
+  tid: number,
+  items: MediaItem[],
+  ref: Awaited<ReturnType<typeof getPlaying>>,
+  recent: Awaited<ReturnType<typeof getRecent>>,
+  now: number,
+  coverBind: Map<string, string>,
+  markBind: Map<string, string>,
+) {
   const active = new Set(ref?.ids ?? []);
   for (const id of [...active]) {
     const canonical = canonicalizeHistoricalMediaId(id);
@@ -443,8 +469,6 @@ export async function selectPlaying(tid: number, items: MediaItem[]): Promise<Me
   // or guessing which photo the old ambiguous id meant. Shared with storage.ts's
   // retention matcher (isExactPlayingItem) so the two can't drift back apart.
   const historicalOwners = historicalAliasOwners(items);
-  const now = Date.now();
-  if (playingTimestampIsFutureEpoch(lastLive.get(tid)?.at ?? 0, now)) lastLive.delete(tid);
 
   // Fetched-track fallback: every fbcdn track streamed within the match window —
   // only trusted while a <video> is actually centered, so a photo story doesn't
@@ -693,6 +717,148 @@ export async function selectPlaying(tid: number, items: MediaItem[]): Promise<Me
     const newest = fetchNewest.get(g) ?? -Infinity;
     return hasSlideStreamEvidence(g) || (blind && now - newest < FETCH_FRESH_MS);
   };
+  return {
+    active,
+    historicalOwners,
+    tracks,
+    trackSigs,
+    slideAt,
+    domMatch,
+    domLive,
+    fetchScore,
+    fetchNewest,
+    fetchClosestToSlide,
+    fetchOldestNear,
+    fetchOldestSince,
+    fetchSustainedAt,
+    freshGroups,
+    bindGroups,
+    hasSlideStreamEvidence,
+    storyPortion,
+    firstUnmatchedTrackAt,
+    captureWait,
+    ranked,
+    bestFetch,
+    activeSig,
+    blind,
+    relayable,
+  };
+}
+
+/**
+ * The single video group this tab is playing — for a caller that may not write.
+ *
+ * A story or reel streams under MSE, so its <video> carries a `blob:` src that
+ * content.ts refuses to turn into an id: nothing in PlayingRef.ids names the
+ * video, only its cover. That is why the in-page button used to be absent on
+ * every video while the panel had no trouble — the panel was never matching on
+ * ids, it was matching on the tracks fbcdn actually streamed.
+ *
+ * Refuses rather than guesses, on all three counts: more than one live group is
+ * an ambiguity the panel can render and a download button cannot (it offers ONE
+ * resolution ladder), an unanchored stream is indistinguishable from the next
+ * reel being prefetched, and captureWait means this slide's track is in flight
+ * with its item not captured yet — picking now would name the previous slide.
+ */
+export function playingVideoGroup(
+  tid: number,
+  items: MediaItem[],
+  ref: Awaited<ReturnType<typeof getPlaying>>,
+  recent: Awaited<ReturnType<typeof getRecent>>,
+  now: number,
+  bindings?: { coverBind: [string, string][]; markBind: [string, string][] } | null,
+): string | undefined {
+  // Re-apply the `${tid}:` prefix the persisted rows had stripped, and drop
+  // provisional marks — the same filter restoreBindingState applies, so a worker
+  // reading storage sees exactly what a panel restoring from it would.
+  const keyed = (rows: [string, string][], durableOnly = false): Map<string, string> =>
+    new Map(
+      rows.filter(([k]) => !durableOnly || !isProvisionalStoryMark(k)).map(([k, v]) => [`${tid}:${k}`, v]),
+    );
+  const evidence = playingEvidence(
+    tid,
+    items,
+    ref,
+    recent,
+    now,
+    keyed(bindings?.coverBind ?? []),
+    keyed(bindings?.markBind ?? [], true),
+  );
+  if (evidence.domLive.size > 0) {
+    return evidence.domLive.size === 1 ? [...evidence.domLive][0] : undefined;
+  }
+  if (evidence.captureWait || evidence.bestFetch == null) return undefined;
+  return evidence.relayable(evidence.bestFetch) ? evidence.bestFetch : undefined;
+}
+
+// The in-page button's own memory of what it last identified, per tab.
+//
+// playingVideoGroup reasons over the tracks fbcdn streamed, and those go stale
+// FETCH_FRESH_MS after the last one arrives. A short reel finishes buffering in a
+// couple of seconds and then streams NOTHING while it loops, so the button showed
+// instantly and vanished a few seconds later — and came back gone after a tab
+// switch, where the poller is throttled and the window ages out untouched.
+// selectPlaying never showed that because it keeps lastLive across ticks. Same
+// idea, scoped to this one consumer and kept out of its way.
+//
+// Not a second writer on the detector's state: an in-memory cache belonging to
+// the handler that reads it, keyed by the slide signature so it expires when the
+// user moves to another reel rather than following them onto it.
+const buttonMemory = new Map<number, { group: string; sig: string; at: number }>();
+
+/** Hold the last identified group for one slide, so evidence ageing out mid-play
+ *  does not take the button down with it. `sig` is playingIdentity(ref). */
+export function rememberedVideoGroup(
+  tid: number,
+  sig: string,
+  found: string | undefined,
+  now: number,
+): string | undefined {
+  if (found != null) {
+    buttonMemory.set(tid, { group: found, sig, at: now });
+    return found;
+  }
+  // A blank signature means the surface exposes nothing to tie the memory to.
+  // Reusing it there would carry one reel's answer onto the next.
+  if (sig === '') return undefined;
+  const held = buttonMemory.get(tid);
+  if (held == null || held.sig !== sig || now - held.at > PLAYING_GRACE_MS) return undefined;
+  return held.group;
+}
+
+/** Drop a closed tab's button memory. */
+export function forgetVideoGroupMemory(tid: number): void {
+  buttonMemory.delete(tid);
+}
+
+/** Items for what's on screen: centered DOM media + the video being fetched now,
+ *  plus any video still within its post-play grace window. */
+export async function selectPlaying(tid: number, items: MediaItem[]): Promise<MediaItem[]> {
+  const [ref, recent] = await Promise.all([getPlaying(tid), getRecent(tid)]);
+  const now = Date.now();
+  if (playingTimestampIsFutureEpoch(lastLive.get(tid)?.at ?? 0, now)) lastLive.delete(tid);
+  const {
+    active,
+    slideAt,
+    domMatch,
+    domLive,
+    fetchNewest,
+    fetchClosestToSlide,
+    fetchOldestNear,
+    fetchOldestSince,
+    fetchSustainedAt,
+    freshGroups,
+    bindGroups,
+    hasSlideStreamEvidence,
+    storyPortion,
+    firstUnmatchedTrackAt,
+    captureWait,
+    ranked,
+    bestFetch,
+    activeSig,
+    blind,
+    relayable,
+  } = playingEvidence(tid, items, ref, recent, now, coverBind, markBind);
   // Second-guess groups that reached domLive on a learned binding ALONE, before
   // ANY of the cascade's inputs are read — a binding contradicted by anchored
   // evidence for another group across BIND_DISAGREE_STREAK consecutive ticks is
