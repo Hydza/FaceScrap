@@ -2,13 +2,17 @@
 //
 // The fixtures are REAL media, not hand-written boxes: a 160x120 AVC track and an
 // AAC track, both recorded by Chromium's own MediaRecorder, which is the closest
-// thing available to what Facebook's packager serves — separate single-track
-// progressive MP4s with real sample tables, a real avcC/esds in stsd, and the
-// audio carrying its own encoder priming. Hand-built fixtures would only prove the
-// writer agrees with the reader.
+// thing available to what Facebook's packager serves — separate single-track MP4s
+// with real sample tables and a real avcC/esds in stsd. Hand-built fixtures would
+// only prove the writer agrees with the reader.
 //
 // The audio is deliberately LONGER than the video, so every run exercises the
 // shortest-track trim that `-c copy -shortest` used to do.
+//
+// Neither fixture carries an edit list, and both happen to use the same movie
+// timescale the writer emits — so the edit-list tests at the end of this file graft
+// one on. That combination is why a verbatim copy of that box read as correct here
+// for as long as it did.
 
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
@@ -181,4 +185,112 @@ test('refuses input it cannot remux instead of writing a file that does not play
   // Two tracks of the same kind is the mistake that would silently produce a
   // video with no sound.
   await assert.rejects(() => remux(videoBlob, videoBlob), /two of the same kind/i);
+});
+
+// ── The edit list ────────────────────────────────────────────────────────────
+// A track's `elst` is the one box whose numbers are expressed in the MOVIE timescale
+// — the source file's, which this writer replaces with its own. It is also the box
+// Facebook's packager uses to carry an audio track's encoder priming, so it cannot
+// simply be dropped: without it the whole track slides against the video.
+
+/** Read a box header at `at`, assuming a 32-bit size (every box in these fixtures). */
+function boxAt(buf: Buffer, at: number): { type: string; bodyStart: number; end: number } {
+  return { type: buf.toString('latin1', at + 4, at + 8), bodyStart: at + 8, end: at + buf.readUInt32BE(at) };
+}
+
+function boxChildren(buf: Buffer, from: number, to: number): Array<ReturnType<typeof boxAt> & { start: number }> {
+  const out: Array<ReturnType<typeof boxAt> & { start: number }> = [];
+  for (let at = from; at + 8 <= to; ) {
+    const box = boxAt(buf, at);
+    out.push({ ...box, start: at });
+    at = box.end > at ? box.end : to;
+  }
+  return out;
+}
+
+/**
+ * The audio fixture with an edit list grafted into its trak and a movie timescale
+ * of the caller's choosing — the two things it does not have, and the two the writer
+ * has to reconcile.
+ *
+ * Inserting into moov shifts every byte after it, which is safe for these fragmented
+ * fixtures: sample positions come from each moof's own trun offsets, so they move
+ * with their moof. Only moov's and trak's own sizes need correcting.
+ */
+function audioWithEditList(segmentDuration: number, movieTimescale: number, mediaTime = -1): Blob {
+  const src = Buffer.from(audioBytes);
+  const moov = boxChildren(src, 0, src.length).find((b) => b.type === 'moov')!;
+  const body = Buffer.from(src.subarray(moov.start, moov.end));
+
+  const inner = boxChildren(body, 8, body.length);
+  const mvhd = inner.find((b) => b.type === 'mvhd')!;
+  // mvhd: version(1) flags(3) creation modification timescale — the timestamps are
+  // 64-bit in version 1.
+  body.writeUInt32BE(movieTimescale, mvhd.bodyStart + 4 + (body[mvhd.bodyStart] === 1 ? 16 : 8));
+
+  const trak = inner.find((b) => b.type === 'trak')!;
+  const tkhd = boxChildren(body, trak.bodyStart, trak.end).find((b) => b.type === 'tkhd')!;
+  const edts = Buffer.alloc(36);
+  edts.writeUInt32BE(36, 0);
+  edts.write('edts', 4, 'latin1');
+  edts.writeUInt32BE(28, 8);
+  edts.write('elst', 12, 'latin1');
+  edts.writeUInt32BE(0, 16); // version 0 + flags
+  edts.writeUInt32BE(1, 20); // one entry
+  edts.writeUInt32BE(segmentDuration, 24);
+  edts.writeInt32BE(mediaTime, 28);
+  edts.writeUInt32BE(0x00010000, 32); // rate 1.0
+
+  const patchedMoov = Buffer.concat([body.subarray(0, tkhd.end), edts, body.subarray(tkhd.end)]);
+  patchedMoov.writeUInt32BE(patchedMoov.length, 0);
+  patchedMoov.writeUInt32BE(trak.end - trak.start + edts.length, trak.start);
+  return new Blob([src.subarray(0, moov.start), patchedMoov, src.subarray(moov.end)]);
+}
+
+test('rescales the edit list into the movie timescale it writes, not the one it read', async () => {
+  // 0.1s of priming, in a source movie timescale of 48000. Copied through verbatim, the
+  // same 4800 units read against this writer's own timescale of 1000 became 4.8 SECONDS
+  // of empty presentation: audio playing over a blank screen until the video appeared.
+  const patched = audioWithEditList(4800, 48000);
+  const source = await parseTrack(patched);
+  assert.ok(source.edits, 'the grafted list must be readable at all');
+  assert.equal(source.edits[0]!.mediaTime, -1, 'an empty edit is signalled by media_time -1');
+  assert.ok(
+    Math.abs(source.edits[0]!.durationSec - 0.1) < 1e-9,
+    'the parse must convert out of the source movie timescale, not carry raw units',
+  );
+
+  const merged = await remux(videoBlob, patched);
+  const audio = (await parseTracks(merged.blob)).find((t) => t.kind === 'audio');
+  assert.ok(audio?.edits, 'the edit list must survive the merge — dropping it slides the track');
+  assert.equal(audio.edits[0]!.mediaTime, -1, 'an empty edit must stay empty');
+  assert.ok(
+    Math.abs(audio.edits[0]!.durationSec - 0.1) < 0.002,
+    `0.1s of priming came out as ${audio.edits[0]!.durationSec}s`,
+  );
+});
+
+test('clamps an edit list that outlives the trimmed media', async () => {
+  // 30 seconds of edit over a track the shortest-track trim cuts to under two. The
+  // source was telling the truth about ITS media; this file's is shorter.
+  const merged = await remux(videoBlob, audioWithEditList(48000 * 30, 48000, 0));
+  const audio = (await parseTracks(merged.blob)).find((t) => t.kind === 'audio');
+  assert.ok(audio?.edits);
+  // The ceiling is the duration as the header states it — whole milliseconds, since that
+  // is the timescale — not the unrounded limit the trim computed.
+  const movieDuration = Math.round(merged.durationSec * 1000) / 1000;
+  assert.ok(
+    audio.edits[0]!.durationSec <= movieDuration + 1e-9,
+    `a ${audio.edits[0]!.durationSec}s edit over a ${movieDuration}s movie`,
+  );
+  assert.ok(audio.edits[0]!.durationSec > 0, 'clamping must not delete the edit');
+});
+
+test('leaves a file with no edit list without one', async () => {
+  // The fixtures carry none, and a track that plays from sample 0 must not acquire an
+  // edit this writer invented.
+  const merged = await remux(videoBlob, audioBlob);
+  for (const track of await parseTracks(merged.blob)) {
+    assert.equal(track.edits, undefined, `${track.kind} grew an edit list out of nothing`);
+  }
 });

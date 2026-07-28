@@ -49,6 +49,21 @@ interface Mp4Sample {
   sync: boolean;
 }
 
+/** One `elst` entry, with the only field that needed converting already converted.
+ *
+ *  `segment_duration` is expressed in the MOVIE timescale — the source file's, which
+ *  is not the one this writer emits. Holding it as seconds means the parse side owns
+ *  that conversion (it read the source `mvhd`) and the writer only has to multiply by
+ *  its own timescale. `mediaTime` is in the track's MEDIA timescale, which the remux
+ *  does not change, so it crosses unconverted. */
+interface Mp4Edit {
+  durationSec: number;
+  /** -1 is an empty edit: a presentation gap before the track starts. */
+  mediaTime: number;
+  /** 16.16 fixed-point rate, as the raw 32 bits. */
+  mediaRate: number;
+}
+
 interface Mp4Track {
   kind: 'video' | 'audio';
   timescale: number;
@@ -58,10 +73,10 @@ interface Mp4Track {
   /** 16.16 fixed-point display size from tkhd; video only. */
   width: number;
   height: number;
-  /** The source's `edts` box, verbatim when present. Audio tracks carry an edit
-   *  list for encoder priming; dropping it shifts the whole track against the
-   *  video by a few tens of milliseconds, permanently. */
-  edts?: Uint8Array;
+  /** The source's edit list. Audio tracks carry one for encoder priming; dropping it
+   *  shifts the whole track against the video by a few tens of milliseconds,
+   *  permanently. Rebuilt rather than copied — see Mp4Edit. */
+  edits?: Mp4Edit[];
   samples: Mp4Sample[];
 }
 
@@ -399,6 +414,61 @@ async function readFragmentedSamples(
   return byTrack;
 }
 
+/** The source file's movie timescale, 0 when it cannot be read. Only the edit list
+ *  needs it, and readEditList treats 0 as "no usable edit list". */
+function readMovieTimescale(moov: Uint8Array, mvhd: BoxHeader): number {
+  const c = new Cursor(moov.subarray(mvhd.bodyStart, mvhd.end));
+  const version = c.u8();
+  c.skip(3);
+  const stamps = version === 1 ? 16 : 8; // creation + modification time
+  if (mvhd.end - mvhd.bodyStart < 4 + stamps + 4) return 0;
+  c.skip(stamps);
+  return c.u32();
+}
+
+/**
+ * The track's edit list, in the units the writer needs (see Mp4Edit).
+ *
+ * Absent, empty or unreadable all return undefined: a file with no edit list plays from
+ * sample 0, which is a defined behaviour, while a wrong one silently delays or truncates
+ * the track — a mis-scaled empty edit shows as audio playing over a blank screen until
+ * the video finally starts. A version-1 media_time outside int32 is refused on the same
+ * grounds, since this writer emits version 0.
+ */
+function readEditList(
+  moov: Uint8Array,
+  trakChildren: BoxHeader[],
+  movieTimescale: number,
+): Mp4Edit[] | undefined {
+  const edts = find(trakChildren, 'edts');
+  if (!edts || movieTimescale <= 0) return undefined;
+  const elstBox = find(children(moov, edts.bodyStart, edts.end), 'elst');
+  if (!elstBox) return undefined;
+  const c = new Cursor(moov.subarray(elstBox.bodyStart, elstBox.end));
+  const version = c.u8();
+  c.skip(3);
+  const entryBytes = version === 1 ? 20 : 12;
+  const count = boundedEntries(c.u32(), elstBox.end - elstBox.bodyStart - 8, entryBytes);
+  const edits: Mp4Edit[] = [];
+  for (let i = 0; i < count; i++) {
+    const segment = version === 1 ? c.u64() : c.u32();
+    let mediaTime: number;
+    if (version === 1) {
+      // int64, and the only two shapes worth writing back as int32: an empty edit
+      // (all ones) or a plain non-negative offset.
+      const hi = c.i32();
+      const lo = c.u32();
+      if (hi === -1 && lo === 0xffffffff) mediaTime = -1;
+      else if (hi === 0 && lo <= 0x7fffffff) mediaTime = lo;
+      else return undefined;
+    } else {
+      mediaTime = c.i32();
+    }
+    edits.push({ durationSec: segment / movieTimescale, mediaTime, mediaRate: c.u32() });
+  }
+  return edits.length > 0 ? edits : undefined;
+}
+
 /** Every video/audio track in an MP4. The remux path only ever wants the first
  *  one (each DASH representation is single-track), but the test suite reads its
  *  own OUTPUT back, which has two. */
@@ -411,6 +481,8 @@ export async function parseTracks(blob: Blob): Promise<Mp4Track[]> {
   const moovChildren = children(moov, moovBox.bodyStart - moovBox.start, moov.byteLength);
   const traks = moovChildren.filter((b) => b.type === 'trak');
   if (traks.length === 0) throw new Error('This MP4 has no track.');
+  const mvhd = find(moovChildren, 'mvhd');
+  const movieTimescale = mvhd ? readMovieTimescale(moov, mvhd) : 0;
 
   // Fragment defaults, and the fragment samples themselves when this is an fMP4.
   const trex = new Map<number, TrexDefaults>();
@@ -492,7 +564,6 @@ export async function parseTracks(blob: Blob): Promise<Mp4Track[]> {
       );
     }
 
-    const edtsBox = find(trakChildren, 'edts');
     found.push({
       kind,
       timescale,
@@ -500,7 +571,7 @@ export async function parseTracks(blob: Blob): Promise<Mp4Track[]> {
       stsd: moov.slice(stsdBox.start, stsdBox.end),
       width,
       height,
-      edts: edtsBox ? moov.slice(edtsBox.start, edtsBox.end) : undefined,
+      edits: readEditList(moov, trakChildren, movieTimescale),
       samples,
     });
   }
@@ -720,10 +791,26 @@ function trackBox(
     stbl,
   );
   const mdia = box('mdia', mdhd, hdlr, minf);
-  // The source edit list is copied through: an audio track's elst carries the
-  // encoder priming offset, and dropping it slides the whole track against the
-  // video for the entire file.
-  return box('trak', tkhd, ...(track.edts ? [track.edts] : []), mdia);
+
+  // The edit list, rebuilt in this file's own units rather than copied byte for byte.
+  // Two things move under it: segment_duration is expressed in the MOVIE timescale,
+  // which is MOVIE_TIMESCALE here and was whatever the source chose, and the
+  // shortest-track trim can leave the media shorter than the source edit claimed. So
+  // each entry is scaled out of seconds and clamped to what is left of the movie.
+  // Version 0 — readEditList refuses any value that would not fit in it.
+  const editEntries: Uint8Array[][] = [];
+  let budget = movieDuration;
+  for (const edit of track.edits ?? []) {
+    const duration = Math.min(Math.round(edit.durationSec * MOVIE_TIMESCALE), budget);
+    if (duration <= 0) continue;
+    budget -= duration;
+    editEntries.push([u32(duration), u32(edit.mediaTime >>> 0), u32(edit.mediaRate)]);
+  }
+  const edts =
+    editEntries.length > 0
+      ? box('edts', fullBox('elst', 0, 0, u32(editEntries.length), ...editEntries.flat()))
+      : undefined;
+  return box('trak', tkhd, ...(edts ? [edts] : []), mdia);
 }
 
 interface RemuxResult {
