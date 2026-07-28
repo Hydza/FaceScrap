@@ -37,7 +37,7 @@ test('coalesces tabs and worker counters into one bounded write', async () => {
   const writes: DiagCounters[] = [];
   const observer = createDiagObserver({
     maxCountPerReason: 10,
-    drainWorker: () => ({ captureNetwork: 4 }),
+    workerCounters: { drain: () => ({ captureNetwork: 4 }), setEnabled: () => {} },
     write: async (delta) => {
       writes.push({ ...delta });
     },
@@ -97,4 +97,59 @@ test('retains the aggregate when a storage write fails transiently', async () =>
   await assert.rejects(observer.flush(), /local storage busy/);
   await observer.flush();
   assert.deepEqual(writes, [{ captureGraphql: 3 }]);
+});
+
+test('a counter the worker raises itself is persisted once diagnostics are on', async () => {
+  // The observer owns two flags, and only one of them was ever set. `enabled` decides
+  // whether renderer reports are persisted; diag.ts's own flag decides whether a
+  // diagBump in the WORKER counts at all — and while it stayed false, every counter
+  // the worker raises for itself was a no-op that reached the panel as zero.
+  const { diagBump, diagDrain, setDiagEnabled } = await import('../src/shared/diag');
+  const writes: DiagCounters[] = [];
+  const observer = createDiagObserver({
+    write: async (delta) => {
+      writes.push({ ...delta });
+    },
+    workerCounters: { drain: diagDrain, setEnabled: setDiagEnabled },
+    schedule: () => 1,
+    cancel: () => {},
+  });
+  try {
+    observer.setEnabled(true);
+    diagBump('captureNetwork');
+    diagBump('buttonHidden', 3);
+    await observer.flush();
+    assert.deepEqual(writes, [{ captureNetwork: 1, buttonHidden: 3 }]);
+
+    // Re-asserting the same value must not clear what has accumulated since: the worker
+    // calls setEnabled on every settings write, and diag.ts clears its counters whenever
+    // its flag is set. Losing them there would empty the report whenever the user changed
+    // any unrelated setting mid-reproduction.
+    diagBump('captureNetwork', 2);
+    observer.setEnabled(true);
+    await observer.flush();
+    assert.deepEqual(writes[1], { captureNetwork: 2 });
+  } finally {
+    observer.setEnabled(false);
+  }
+});
+
+test('turning diagnostics off stops counting in the worker too', async () => {
+  const { diagBump, diagDrain, setDiagEnabled } = await import('../src/shared/diag');
+  const writes: DiagCounters[] = [];
+  const observer = createDiagObserver({
+    write: async (delta) => {
+      writes.push({ ...delta });
+    },
+    workerCounters: { drain: diagDrain, setEnabled: setDiagEnabled },
+    schedule: () => 1,
+    cancel: () => {},
+  });
+  observer.setEnabled(true);
+  observer.setEnabled(false);
+  diagBump('captureNetwork');
+  observer.setEnabled(true);
+  await observer.flush();
+  assert.deepEqual(writes, [], 'a bump raised while off must not surface when it is turned back on');
+  observer.setEnabled(false);
 });

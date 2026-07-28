@@ -17,6 +17,7 @@ import {
   type MediaItem,
 } from './media';
 import { exponentialBackoffMs, withTimeout } from './async';
+import { diagBump } from './diag';
 import {
   playingTimestampIsFutureEpoch,
   type PersistBindingsAck,
@@ -759,6 +760,11 @@ export function playingEvidence(
  * resolution ladder), an unanchored stream is indistinguishable from the next
  * reel being prefetched, and captureWait means this slide's track is in flight
  * with its item not captured yet — picking now would name the previous slide.
+ *
+ * Each refusal counts itself (playing* in diag.ts). They are the difference between
+ * this function and the panel's selectPlaying, so they are also the whole answer to
+ * "the panel shows the piece and the button is not there" — a question the counters
+ * settle in one reproduction instead of a reading of both cascades.
  */
 export function playingVideoGroup(
   tid: number,
@@ -785,10 +791,23 @@ export function playingVideoGroup(
     keyed(bindings?.markBind ?? [], true),
   );
   if (evidence.domLive.size > 0) {
-    return evidence.domLive.size === 1 ? [...evidence.domLive][0] : undefined;
+    if (evidence.domLive.size === 1) return [...evidence.domLive][0];
+    diagBump('playingAmbiguous');
+    return undefined;
   }
-  if (evidence.captureWait || evidence.bestFetch == null) return undefined;
-  return evidence.relayable(evidence.bestFetch) ? evidence.bestFetch : undefined;
+  if (evidence.captureWait) {
+    diagBump('playingCaptureWait');
+    return undefined;
+  }
+  if (evidence.bestFetch == null) {
+    diagBump('playingNoTrackMatch');
+    return undefined;
+  }
+  if (!evidence.relayable(evidence.bestFetch)) {
+    diagBump('playingUnanchored');
+    return undefined;
+  }
+  return evidence.bestFetch;
 }
 
 // The in-page button's own memory of what it last identified, per tab.

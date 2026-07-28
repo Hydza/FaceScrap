@@ -7,6 +7,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import test from 'node:test';
 
+import { resetChromeStorage } from './chrome-fake';
 import {
   createDownloadOverlay,
   pickAnchorElement,
@@ -63,15 +64,76 @@ test('the in-page messages require a Facebook tab and never trust a tab id from 
   assert.doesNotMatch(body, /request\.tabId|\.tabId as number/, 'no caller-supplied tab id in this path');
 });
 
-test('the options reply carries resolution labels only, never a URL', () => {
-  const body = playingHandler;
-  // Every options response in this handler.
-  const replies = [...body.matchAll(/sendResponse\(\{\s*ok: true,\s*media:[\s\S]*?\}\);/g)].map((m) => m[0]);
-  assert.ok(replies.length >= 2, 'expected the video and image option replies');
-  for (const reply of replies) {
-    assert.doesNotMatch(reply, /\burl\b|videoUrl|audioUrl|thumbUrl/i, `an options reply leaks a URL: ${reply}`);
+/** The real handler, with its three injected dependencies stubbed to the harmless
+ *  answers: the tab is alive, it is a Facebook tab, and a receipt write is a no-op. */
+async function playingHandlerUnderTest(): Promise<
+  (
+    message: unknown,
+    sender: chrome.runtime.MessageSender,
+    sendResponse: (response: unknown) => void,
+  ) => true | undefined
+> {
+  const { createPlayingDownloadHandler } = await import('../src/background/playing-download');
+  return createPlayingDownloadHandler({
+    isDead: () => false,
+    isFacebookUrl: () => true,
+    persistReceipt: async () => {},
+  });
+}
+
+interface OptionsReply {
+  ok?: boolean;
+  error?: string;
+  media?: { kind: string; labels: string[] };
+}
+
+function askHandler(
+  handler: Awaited<ReturnType<typeof playingHandlerUnderTest>>,
+  type: string,
+  tabId: number,
+): Promise<OptionsReply> {
+  return new Promise((resolve) => {
+    handler(
+      { type },
+      { tab: { id: tabId, url: 'https://www.facebook.com/reel/1' } } as chrome.runtime.MessageSender,
+      (response) => resolve(response as OptionsReply),
+    );
+  });
+}
+
+test('the options reply carries resolution labels only, never a URL', async () => {
+  // The reply crosses into a content script that shares the page's process, so what
+  // matters is the PAYLOAD, not the shape of the code that built it. Both seeded items
+  // carry every URL field a leak could ride out on — a linked audio track, a poster —
+  // and the assertion is made against the serialized answer.
+  await resetChromeStorage();
+  try {
+    const { addMedia, setPlaying } = await import('../src/shared/storage');
+    const { makeItem } = await import('../src/shared/media');
+    const handler = await playingHandlerUnderTest();
+    const now = Date.now();
+
+    const hd = makeItem('https://video.xx.fbcdn.net/v/t42/hd.mp4?bitrate=900000', 'video', 'reel', 'graphql', now, true);
+    hd.height = 1080;
+    hd.audioUrl = 'https://video.xx.fbcdn.net/v/t42/audio.mp4';
+    hd.thumbUrl = 'https://scontent.xx.fbcdn.net/v/t15/poster.jpg';
+    await addMedia(4301, [hd]);
+    await setPlaying(4301, { ids: [hd.id], hasVideo: true, at: now }, now);
+    const videoReply = await askHandler(handler, 'FACESCRAP_PLAYING_DOWNLOAD_OPTIONS', 4301);
+    assert.equal(videoReply.media?.kind, 'video');
+    assert.deepEqual(videoReply.media?.labels, ['1080p'], 'the reply names resolutions, and only resolutions');
+    assert.doesNotMatch(JSON.stringify(videoReply), /fbcdn|https?:/i, 'the video reply leaked a URL');
+
+    const photo = makeItem('https://scontent.xx.fbcdn.net/v/t39/photo.jpg', 'image', 'story', 'dom', now);
+    await addMedia(4302, [photo]);
+    await setPlaying(4302, { ids: [photo.id], hasVideo: false, at: now }, now);
+    const imageReply = await askHandler(handler, 'FACESCRAP_PLAYING_DOWNLOAD_OPTIONS', 4302);
+    // An image has no ladder: an empty label list is what makes the button save on one click.
+    assert.deepEqual(imageReply.media, { kind: 'image', labels: [] });
+    assert.doesNotMatch(JSON.stringify(imageReply), /fbcdn|https?:/i, 'the image reply leaked a URL');
+  } finally {
+    await resetChromeStorage();
   }
-  assert.match(body, /labels: options\.map\(\(i\) => resolutionOf\(i\)\.label\)/);
 });
 
 test('the overlay never sends a media URL — only a message type and a label', () => {
@@ -177,14 +239,23 @@ test('offers video representations only — never the audio track of the same vi
   assert.match(playingHandler, /videoGroupOf\(video, items\)/);
 });
 
-test('fails a download it cannot serve instead of reporting success', () => {
-  const body = playingHandler;
-  // "Nothing to offer" is a normal answer to the query and a failure for a
-  // download — answering ok would put "Saved" on a button that saved nothing.
-  assert.match(
-    body,
-    /if \(wantsDownload\) sendResponse\(\{ ok: false[\s\S]{0,120}else sendResponse\(\{ ok: true, media: undefined \}\)/,
-  );
+test('fails a download it cannot serve instead of reporting success', async () => {
+  // "Nothing to offer" is a normal answer to the QUERY and a failure for a DOWNLOAD:
+  // answering ok would put "Saved" on a button that saved nothing. Both answers come out
+  // of the same state — a tab with nothing captured — so both are driven from it here.
+  await resetChromeStorage();
+  try {
+    const handler = await playingHandlerUnderTest();
+    assert.deepEqual(await askHandler(handler, 'FACESCRAP_PLAYING_DOWNLOAD_OPTIONS', 4242), {
+      ok: true,
+      media: undefined,
+    });
+    const download = await askHandler(handler, 'FACESCRAP_REQUEST_PLAYING_DOWNLOAD', 4242);
+    assert.equal(download.ok, false, 'a download that saved nothing must not answer ok');
+    assert.equal(download.error, 'Nothing downloadable is playing.');
+  } finally {
+    await resetChromeStorage();
+  }
 });
 
 test('the streamed tracks identify an MSE video no id can name', () => {

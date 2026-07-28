@@ -10,13 +10,14 @@
 // It answers a query and a download with the same resolution rules the panel uses, so
 // the button can never offer what the Library and Now Playing hide.
 
+import { diagBump } from '../shared/diag';
 import { resolutionOf, videoGroupKey } from '../shared/media';
 import { getBind, getMedia, getPlaying, getRecent, playingIdentity } from '../shared/storage';
 import type { SavedEntry } from '../shared/saved';
 import { playingVideoGroup, rememberedVideoGroup } from '../shared/now-playing';
 import { isDownloadable, optionForLabel, playingItems, videoGroupOf, videoOptions } from '../shared/video-options';
 import { downloadFilename, itemCardId, savedEntryForItem, videoCardId } from '../shared/download-naming';
-import type { RequestPlayingDownloadMsg } from '../shared/messages';
+import type { PlayingDownloadOptionsResponse, RequestPlayingDownloadMsg } from '../shared/messages';
 import { hasOffscreen } from '../shared/capabilities';
 import { loadSettings } from '../shared/settings';
 import { downloadDash, downloadDirect } from './dash-download';
@@ -54,6 +55,15 @@ export function createPlayingDownloadHandler(deps: PlayingDownloadDeps) {
     const tid = senderTab.id;
     const wantsDownload = m.type === 'FACESCRAP_REQUEST_PLAYING_DOWNLOAD';
     const requestedLabel = wantsDownload ? (message as Partial<RequestPlayingDownloadMsg>).label : undefined;
+    // Every answer to the OPTIONS query goes through here so the shown/hidden split is
+    // counted in one place. It is the denominator the playing* refusal counters need:
+    // on its own, "the button is hidden" says nothing about how often it is hidden.
+    // The switched-off early return below is deliberately not counted — the button is
+    // not hidden there, it does not exist.
+    const answerOptions = (media: Extract<PlayingDownloadOptionsResponse, { ok: true }>['media']): void => {
+      diagBump(media != null ? 'buttonOffered' : 'buttonHidden');
+      sendResponse({ ok: true, media } satisfies PlayingDownloadOptionsResponse);
+    };
 
     void (async () => {
       try {
@@ -126,14 +136,11 @@ export function createPlayingDownloadHandler(deps: PlayingDownloadDeps) {
             // button hides. A download request must FAIL — answering ok would put
             // "Saved" on a button that saved nothing.
             if (wantsDownload) sendResponse({ ok: false, error: 'Nothing downloadable is playing.' });
-            else sendResponse({ ok: true, media: undefined });
+            else answerOptions(undefined);
             return;
           }
           if (!wantsDownload) {
-            sendResponse({
-              ok: true,
-              media: { kind: 'video', labels: options.map((i) => resolutionOf(i).label) },
-            });
+            answerOptions({ kind: 'video', labels: options.map((i) => resolutionOf(i).label) });
             return;
           }
           const target = optionForLabel(options, requestedLabel, settings.defaultQuality);
@@ -169,7 +176,7 @@ export function createPlayingDownloadHandler(deps: PlayingDownloadDeps) {
         if (image) {
           if (!wantsDownload) {
             // No resolutions to choose from — the overlay downloads on one click.
-            sendResponse({ ok: true, media: { kind: 'image', labels: [] } });
+            answerOptions({ kind: 'image', labels: [] });
             return;
           }
           const cardId = itemCardId(image.id);
@@ -183,7 +190,7 @@ export function createPlayingDownloadHandler(deps: PlayingDownloadDeps) {
         // Nothing downloadable on screen. For the options query that is a normal
         // answer (the button hides); for a download request it is a real failure.
         if (wantsDownload) sendResponse({ ok: false, error: 'Nothing downloadable is playing.' });
-        else sendResponse({ ok: true, media: undefined });
+        else answerOptions(undefined);
       } catch (error) {
         sendResponse({ ok: false, error: String((error as Error)?.message ?? error) });
       }

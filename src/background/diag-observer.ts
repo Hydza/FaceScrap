@@ -12,7 +12,17 @@ type TimerHandle = unknown;
 
 interface DiagObserverOptions {
   write: (delta: DiagCounters) => Promise<void>;
-  drainWorker?: () => DiagCounters;
+  /** diag.ts's counters for the context this observer runs in — its drain and its flag,
+   *  as ONE option so the compiler cannot let a caller wire half of it.
+   *
+   *  There are two flags in play and they are easy to mistake for one: `enabled` below
+   *  decides whether renderer reports are persisted, while `setEnabled` here decides
+   *  whether a diagBump raised in this context is counted at all. The worker passed only
+   *  the drain, so every counter it raises for itself — captureNetwork, the storage
+   *  evictions, the in-page button's refusals — was a no-op that reached the panel as
+   *  zero. A drain without its flag can only ever return nothing, which is why the two
+   *  no longer travel separately. */
+  workerCounters?: { drain: () => DiagCounters; setEnabled: (enabled: boolean) => void };
   intervalMs?: number;
   maxTabs?: number;
   maxCountPerReason?: number;
@@ -70,14 +80,14 @@ export function createDiagObserver(options: DiagObserverOptions): DiagObserver {
     clearTimer();
     if (!enabled) {
       pending.clear();
-      options.drainWorker?.();
+      options.workerCounters?.drain();
       return;
     }
 
     const aggregate: DiagCounters = {};
     for (const counters of pending.values()) addBounded(aggregate, counters, maxCount);
     pending.clear();
-    addBounded(aggregate, sanitizeDiagCounters(options.drainWorker?.()), maxCount);
+    addBounded(aggregate, sanitizeDiagCounters(options.workerCounters?.drain()), maxCount);
     if (Object.keys(aggregate).length > 0) {
       try {
         await options.write(aggregate);
@@ -97,11 +107,15 @@ export function createDiagObserver(options: DiagObserverOptions): DiagObserver {
 
   const api: DiagObserver = {
     setEnabled(on): void {
+      // Only on a real change: setting the flag CLEARS the counters, and the worker calls
+      // this on every settings write, so re-asserting it would wipe the accumulated counts
+      // whenever an unrelated setting moved.
+      if (enabled !== on) options.workerCounters?.setEnabled(on);
       enabled = on;
       if (on) return;
       clearTimer();
       pending.clear();
-      options.drainWorker?.();
+      options.workerCounters?.drain();
     },
 
     report(tabId, counters): boolean {

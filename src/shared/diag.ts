@@ -42,33 +42,67 @@ export type DiagReason =
   | 'storageMaxItemsEvicted'
   /** Globally-oldest safe captures dropped after a shared storage quota failure. */
   | 'storageQuotaEvicted'
+  // --- refusals: identifying what a tab is playing for the in-page button ---
+  // The button offers ONE resolution ladder and downloads without a confirmation,
+  // so it refuses wherever the panel's own view would merely render an ambiguity.
+  // Each refusal is its own counter because each has a different answer: the four
+  // together are the only way to tell "the button is hidden" apart from "the button
+  // is hidden BECAUSE …", which is the question a missing button actually raises.
+  /** More than one video group is live at once — no single ladder to offer. */
+  | 'playingAmbiguous'
+  /** No fbcdn track streamed in the match window matched any captured video. */
+  | 'playingNoTrackMatch'
+  /** A track matched, but its stream is not anchored to this slide, so it is
+   *  indistinguishable from fbcdn prefetching the neighbouring reel. */
+  | 'playingUnanchored'
+  /** This slide's track is in flight with its item not captured yet; picking now
+   *  would name the previous slide. */
+  | 'playingCaptureWait'
   // --- successes, so the discards above can be read as a ratio ---
   | 'captureGraphql'
   | 'captureDom'
   | 'captureNetwork'
+  /** The worker answered the button's query with something downloadable. */
+  | 'buttonOffered'
+  /** …and answered it with nothing, so the button hid. */
+  | 'buttonHidden'
   /** The in-page download button could not reach the worker to ask what the
    *  playing media could be saved as. Counts the query, not the download. */
   | 'overlayQueryFailed';
 
-export const DIAG_REASONS: readonly DiagReason[] = [
-  'graphqlBodyTooLarge',
-  'scanQueueEvicted',
-  'jsonLineTooLarge',
-  'jsonLineParseError',
-  'harvestDepthExceeded',
-  'scanOutputCapped',
-  'documentScanCapped',
-  'mediaIngressRejected',
-  'unknownCodec',
-  'mpdParseError',
-  'drmSkipped',
-  'repNoFbcdnBase',
-  'storageMaxItemsEvicted',
-  'storageQuotaEvicted',
-  'captureGraphql',
-  'captureDom',
-  'captureNetwork',
-];
+// Keyed off a Record, not written out as an array: `Record<DiagReason, true>` makes the
+// COMPILER reject a reason the union declares and this list omits. It was an array, and
+// `overlayQueryFailed` was missing from it — so the one counter that reports why the
+// in-page button could not ask what was playing was dropped by sanitizeDiagCounters at
+// every boundary and could never appear in the panel.
+const REASONS: Record<DiagReason, true> = {
+  graphqlBodyTooLarge: true,
+  scanQueueEvicted: true,
+  jsonLineTooLarge: true,
+  jsonLineParseError: true,
+  harvestDepthExceeded: true,
+  scanOutputCapped: true,
+  documentScanCapped: true,
+  mediaIngressRejected: true,
+  unknownCodec: true,
+  mpdParseError: true,
+  drmSkipped: true,
+  repNoFbcdnBase: true,
+  storageMaxItemsEvicted: true,
+  storageQuotaEvicted: true,
+  playingAmbiguous: true,
+  playingNoTrackMatch: true,
+  playingUnanchored: true,
+  playingCaptureWait: true,
+  captureGraphql: true,
+  captureDom: true,
+  captureNetwork: true,
+  buttonOffered: true,
+  buttonHidden: true,
+  overlayQueryFailed: true,
+};
+
+export const DIAG_REASONS: readonly DiagReason[] = Object.keys(REASONS) as DiagReason[];
 
 export type DiagCounters = Partial<Record<DiagReason, number>>;
 

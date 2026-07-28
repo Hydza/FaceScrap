@@ -8,7 +8,7 @@
 // Service workers are ephemeral: do minimal synchronous work in listeners and
 // persist immediately. Never keep capture state in module-scope variables.
 
-import { diagBump, diagDrain } from '../shared/diag';
+import { diagBump, diagDrain, setDiagEnabled } from '../shared/diag';
 import {
   addMedia,
   clearTab,
@@ -87,7 +87,7 @@ void captureStorageReady
 // own counters join the same write instead of causing a second storage update.
 const diagObserver = createDiagObserver({
   write: addDiagCounters,
-  drainWorker: diagDrain,
+  workerCounters: { drain: diagDrain, setEnabled: setDiagEnabled },
   onError: (error) => console.error('[FaceScrap] diagnostic flush failed', error),
 });
 
