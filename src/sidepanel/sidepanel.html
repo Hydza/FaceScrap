@@ -22,10 +22,12 @@
         </span>
       </header>
 
-      <p id="degraded" class="banner" hidden data-i18n="bannerDegraded">
+      <!-- Both banners change visibility asynchronously, so both are live regions — the
+           degraded notice is informative, the fatal one interrupts. -->
+      <p id="degraded" class="banner" role="status" hidden data-i18n="bannerDegraded">
         This browser can't merge audio and video: HD saves as video only. Use Chrome or Edge to include audio.
       </p>
-      <p id="fatal" class="banner banner-error" hidden></p>
+      <p id="fatal" class="banner banner-error" role="alert" hidden></p>
 
       <section id="view-now" class="view view-now">
         <!-- An empty view is the best place for the two things a first-run user needs:
@@ -67,11 +69,14 @@
             <!-- Progress sits ON the media, over a veil: a running save must not
                  displace the picker and the button under it. -->
             <div id="now-progress" class="preview-progress" hidden>
-              <div class="progress-line">
+              <!-- The phase and the byte count are the only announcement a save makes;
+                   the track itself is the (indeterminate) progressbar, named by the
+                   phase label so no new message key is needed. -->
+              <div class="progress-line" role="status">
                 <p id="now-progress-label" class="progress-label"></p>
                 <p id="now-progress-pct" class="progress-pct"></p>
               </div>
-              <div class="progress-track">
+              <div class="progress-track" role="progressbar" aria-labelledby="now-progress-label">
                 <div class="progress-fill is-indeterminate"></div>
               </div>
             </div>
@@ -92,6 +97,7 @@
                 type="button"
                 aria-haspopup="listbox"
                 aria-expanded="false"
+                aria-controls="now-qlist"
                 aria-labelledby="now-quality-label now-qlabel"
               >
                 <span id="now-qlabel" class="picker-label"></span>

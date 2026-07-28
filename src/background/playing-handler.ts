@@ -1,5 +1,6 @@
-import { isFbcdn, isNumericMediaId, MAX_MEDIA_URL_LEN } from '../shared/media';
-import { normalizePlayingDetectedAt, type NowPlayingAck, type NowPlayingMsg } from '../shared/messages';
+import { isFbcdn, isNumericMediaId, MAX_MEDIA_URL_LEN, MEDIA_ID_MAX_LEN } from '../shared/media';
+import type { NowPlayingAck, NowPlayingMsg } from '../shared/messages';
+import { normalizePlayingDetectedAt } from '../shared/playing-clock';
 import { boundPlayingMark, setPlaying } from '../shared/storage';
 
 /** Validate and persist one untrusted content-script observation. Kept outside
@@ -16,7 +17,7 @@ export async function persistNowPlayingMessage(
   }
 
   const ids = Array.isArray(message.ids)
-    ? (message.ids as unknown[]).slice(0, 24).map((value) => String(value).slice(0, 256))
+    ? (message.ids as unknown[]).slice(0, 24).map((value) => String(value).slice(0, MEDIA_ID_MAX_LEN))
     : [];
   const coverUrls = Array.isArray(message.covers)
     ? (message.covers as unknown[])

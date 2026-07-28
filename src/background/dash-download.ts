@@ -5,7 +5,7 @@
 // the completion dedup that survives a worker restart. Holds no per-tab state — the
 // caller owns tabs, receipts and badges.
 
-import { createJobChain, withHeartbeat } from '../shared/async';
+import { createChainLock, withHeartbeat } from '../shared/async';
 import { hasOffscreen } from '../shared/capabilities';
 import { diagLogEnabled } from '../shared/diag-log';
 import { addDiagEvents } from '../shared/diag-store';
@@ -39,6 +39,18 @@ let creatingOffscreen: Promise<void> | null = null;
 let offscreenClosing: Promise<void> | null = null;
 let cancelPendingOffscreenIdleClose: (() => void) | null = null;
 
+// Whether the document that exists now is one THIS worker instance created.
+//
+// The offscreen document outlives the service worker, and it has its own job queue
+// (muxQueue in offscreen.ts) that dashChain cannot see. So a worker restarted
+// mid-merge comes back, finds a live document, and queues its next job behind an
+// orphan it has no handle on — and because the offscreen only opens the progress
+// port when a job STARTS, the new job never beats, and MUX_IDLE_MS reports a false
+// "the merge expired" three and a half minutes later. Adopting a document we did
+// not create is what breaks dashChain's promise that queue wait never burns the
+// idle budget; discard it instead and start clean.
+let offscreenIsOurs = false;
+
 async function ensureOffscreen(): Promise<void> {
   // Checked here, not only at the call sites: every caller happens to gate on
   // hasOffscreen() today, but a future one that forgets would get a raw TypeError
@@ -49,13 +61,23 @@ async function ensureOffscreen(): Promise<void> {
   const contexts = await chrome.runtime.getContexts({
     contextTypes: [chrome.runtime.ContextType.OFFSCREEN_DOCUMENT],
   });
-  if (contexts.length > 0) return;
+  if (contexts.length > 0) {
+    if (offscreenIsOurs) return;
+    // Left over from a previous worker instance: close it (and whatever it was
+    // still chewing on) before creating one whose queue this instance owns.
+    offscreenClosing = chrome.offscreen.closeDocument().catch(() => {});
+    await offscreenClosing;
+    offscreenClosing = null;
+  }
   if (!creatingOffscreen) {
     creatingOffscreen = chrome.offscreen
       .createDocument({
         url: 'offscreen/offscreen.html',
         reasons: [chrome.offscreen.Reason.BLOBS],
         justification: 'Remux split DASH video+audio tracks into one MP4.',
+      })
+      .then(() => {
+        offscreenIsOurs = true;
       })
       .finally(() => {
         creatingOffscreen = null;
@@ -76,10 +98,10 @@ function startKeepalive(): () => void {
 }
 
 // A DASH download is identified by its (video, audio) track pair. The panel's
-// UI timeout (DASH_UI_TIMEOUT_MS) does NOT cancel the SW job, and once the
-// panel gives up its button turns clickable again, so duplicates are collapsed:
-// a concurrent request shares the one in-flight job, and a request shortly
-// after a completed download is an idempotent no-op.
+// UI wait (DASH_UI_IDLE_MS, capped by DASH_UI_HARD_CAP_MS) does NOT cancel the
+// SW job, and once the panel gives up its button turns clickable again, so
+// duplicates are collapsed: a concurrent request shares the one in-flight job,
+// and a request shortly after a completed download is an idempotent no-op.
 // SETTLE_CAP_MS and MUX_HARD_CAP_MS (imported above from messages.ts) are this
 // job's other two timing constants; they live there — not here — so
 // DASH_UI_HARD_CAP_MS (the panel's own ceiling) can be derived from them
@@ -88,6 +110,12 @@ function startKeepalive(): () => void {
 // longer has a loaded wasm core to amortize, but recreating the document per
 // download would still serialize a page load in front of every merge.
 const OFFSCREEN_IDLE_MS = 60_000;
+
+// How long a progressive download may report NO progress before this worker stops
+// waiting on it. Long enough to cover a slow start or a brief network drop that the
+// browser recovers from on its own; short enough that a paused download does not
+// pin an MV3 worker awake for the rest of the session.
+const DIRECT_STALL_MS = 3 * 60_000;
 
 // Backstop on ONE mux round-trip, measured from job START — jobs are serialized on
 // dashChain below, so queue wait never burns this budget.
@@ -162,18 +190,25 @@ chrome.runtime.onConnect.addListener((port) => {
 // Every DASH job runs one at a time here, whichever panel window sent it, so that
 // each job's timeout starts at JOB START rather than at sendMessage: a request queued
 // behind a long merge would otherwise burn its budget waiting and be reported failed
-// over work that then completed. createJobChain's internal catch keeps one failed job
+// over work that then completed. createChainLock's internal catch keeps one failed job
 // from poisoning the chain, while downloadDash still sees its OWN job's rejection.
 //
 // The panel's ceiling has the same problem from its side, which is why downloadDash
 // broadcasts FACESCRAP_DASH_JOB_STARTED — see DASH_UI_HARD_CAP_MS in messages.ts.
-const dashChain = createJobChain<void>();
+const dashChain = createChainLock();
 
-export async function downloadDash(request: DashDownloadIdentity): Promise<void> {
+/** Resolves `true` when this call actually downloaded, `false` when it was
+ *  collapsed into a download that already completed inside DEDUP_WINDOW_MS.
+ *
+ *  The caller has to know the difference. A silent `void` return meant a second
+ *  Download on the same card answered `ok: true` and rewrote the Saved receipt
+ *  without a byte moving — so a user who deleted the file and asked again was
+ *  told it had been saved, for half an hour. */
+export async function downloadDash(request: DashDownloadIdentity): Promise<boolean> {
   const key = dashDownloadKey(request);
   // Durable check FIRST: dashDeduper's own in-memory hit/miss means nothing
   // right after a worker restart.
-  if (await dashCompletedAcrossRestart(key)) return;
+  if (await dashCompletedAcrossRestart(key)) return false;
   await dashDeduper.run(key, () =>
     // The completion mirror write is folded into the SAME chained job (not
     // appended after it) so it is serialized against every other queued job's
@@ -192,6 +227,7 @@ export async function downloadDash(request: DashDownloadIdentity): Promise<void>
       await recordDashCompletionAcrossRestart(key);
     }),
   );
+  return true;
 }
 
 async function runDownloadDash(
@@ -225,6 +261,7 @@ async function runDownloadDash(
         // Module-scope (not a local var) so a job starting while this is
         // still in flight can await it from ensureOffscreen instead of
         // racing it — see offscreenClosing's comment above.
+        offscreenIsOurs = false;
         offscreenClosing = chrome.offscreen
           .closeDocument()
           .catch(() => {})
@@ -325,7 +362,15 @@ export async function downloadDirect(url: string, filename: string, saveAs: bool
     // A remote progressive file can be legitimately slow, so unlike the local
     // DASH blob this has no wall-clock timeout. The browser's terminal event is
     // the authority; interruption rejects and leaves Retry real.
-    await waitForDownloadSettlement(chrome.downloads, downloadId);
+    //
+    // But slow is not the same as stopped. A download the user pauses from
+    // chrome://downloads stays `in_progress` forever, so this await never
+    // resolved: the keepalive above kept pinging, the service worker never
+    // slept, and the panel's card stayed busy until the panel was closed. Bound
+    // the IDLENESS instead of the duration — the same distinction the mux
+    // budget makes. Giving up does not cancel the download; the browser
+    // finishes it without us.
+    await waitForDownloadSettlement(chrome.downloads, downloadId, { stallMs: DIRECT_STALL_MS });
   } finally {
     stopKeepalive();
   }

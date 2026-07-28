@@ -63,7 +63,10 @@ function encodePNG(size, pixel) {
   return Buffer.concat([
     sig,
     chunk('IHDR', ihdr),
-    chunk('IDAT', deflateSync(raw)),
+    // Level pinned: this writes into the TRACKED icons/ directory from inside
+    // `npm run build`, so the byte output has to be a function of the input
+    // alone. zlib's default level is a runtime choice, not a promise.
+    chunk('IDAT', deflateSync(raw, { level: 9 })),
     chunk('IEND', Buffer.alloc(0)),
   ]);
 }

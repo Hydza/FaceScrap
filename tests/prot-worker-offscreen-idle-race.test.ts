@@ -1,4 +1,4 @@
-// A3 — service-worker.ts's offscreen-document idle-close was check-then-act:
+// A3 — dash-download.ts's offscreen-document idle-close was check-then-act:
 // `if (dashDeduper.inFlightCount === 0) chrome.offscreen.closeDocument().catch(() => {});`
 // fired the close WITHOUT awaiting it, never cancelled the scheduled idle
 // timer when a new job began, and ensureOffscreen trusted getContexts() even
@@ -27,7 +27,7 @@ import { join } from 'node:path';
 
 import { resetChromeStorage } from './chrome-fake';
 
-// service-worker.ts's runDownloadDash() starts a 20s keepalive setInterval on
+// dash-download.ts's runDownloadDash() starts a 20s keepalive setInterval on
 // every job and OFFSCREEN_IDLE_MS's own setTimeout for the idle-close under
 // test — mocking timers is what lets this test fire that timer deterministically
 // (via mock.timers.tick) instead of waiting on it in real time.
@@ -248,4 +248,44 @@ test('A3: ensureOffscreen waits out a close already in flight instead of racing 
   assert.deepEqual(response, { ok: true });
   assert.equal(createDocumentCalls, createsBefore + 1, 'job D must have created a FRESH document once the close finished');
   assert.equal(muxCalls, muxesBefore + 1, "job D must have sent its own mux only after recreating the document");
+});
+
+test('discards an offscreen document this worker instance did not create', async () => {
+  // The document outlives the service worker and keeps its OWN job queue, which
+  // dashChain cannot see. A worker restarted mid-merge used to adopt that orphan
+  // and queue behind it — and since the offscreen only opens its progress port
+  // when a job STARTS, the new job never beat, so the idle budget expired and the
+  // user was told the merge timed out over work that had not begun.
+  assert.ok(onMessage, 'runtime.onMessage listener was not registered');
+  const tabId = 900_503;
+
+  // Land the previous test's document through its idle close, so ownership is
+  // clear the way it is in a fresh worker.
+  mock.timers.tick(OFFSCREEN_IDLE_MS);
+  await flushMicrotasks();
+  await resolveAllPendingCloses();
+  assert.equal(offscreenDocOpen, false, 'the previous document must be gone before this test starts');
+
+  // Now Chrome reports a live document that this instance never created — what a
+  // worker sees after being reaped while the offscreen was still merging.
+  offscreenDocOpen = true;
+  const createsBefore = createDocumentCalls;
+  const closesBefore = closeDocumentCalls;
+
+  const job = sendDash(tabId, 'orphan-adopt');
+  await flushMicrotasks();
+  // The close is held open by the fake, exactly like the cross-process gap above.
+  assert.equal(
+    closeDocumentCalls,
+    closesBefore + 1,
+    'the orphaned document must be closed, not adopted',
+  );
+  await resolveAllPendingCloses();
+
+  assert.deepEqual(await job, { ok: true });
+  assert.equal(
+    createDocumentCalls,
+    createsBefore + 1,
+    'and a fresh document — one whose queue this instance owns — must replace it',
+  );
 });

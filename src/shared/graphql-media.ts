@@ -29,6 +29,8 @@ export function graphqlVideoUrl(value: unknown): string | undefined {
   return directFbcdnUrl(value, GRAPHQL_DIRECT_URL_KEYS);
 }
 
+// The string-tolerant variant of media.ts's normalizeMediaDimension, not a second
+// rule: GraphQL serves these as numbers or as digit strings, so only the parse differs.
 function graphqlDimension(value: unknown): number | undefined {
   const parsed =
     typeof value === 'number'

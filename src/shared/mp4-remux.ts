@@ -323,7 +323,7 @@ function readSampleTable(moov: Uint8Array, stbl: BoxHeader): Mp4Sample[] {
     for (let i = 0; i < runs; i++) {
       const firstChunk = c.u32();
       const samples = c.u32();
-      c.skip(4); // sample_description_index — single-entry stsd only
+      c.skip(4); // sample_description_index — parseTracks refuses a multi-entry stsd
       entries.push({ firstChunk, samples });
     }
     for (let e = 0; e < entries.length; e++) {
@@ -567,6 +567,18 @@ export async function parseTracks(blob: Blob): Promise<Mp4Track[]> {
     if (!stbl) continue;
     const stsdBox = find(children(moov, stbl.bodyStart, stbl.end), 'stsd');
     if (!stsdBox) continue;
+    // The whole codec-agnostic story rests on copying stsd verbatim and rewriting
+    // every stsc entry with sample_description_index = 1. That is only true for a
+    // single-entry stsd; with two, the samples described by the second would be
+    // decoded with the first one's parameters. The assumption used to live in a
+    // comment at the stsc reader — refuse the file instead of assuming.
+    if (stsdBox.end - stsdBox.bodyStart < 8) throw new Error('This track has a truncated sample description box.');
+    const stsdCursor = new Cursor(moov.subarray(stsdBox.bodyStart, stsdBox.end));
+    stsdCursor.skip(4); // version + flags
+    const stsdEntries = stsdCursor.u32();
+    if (stsdEntries !== 1) {
+      throw new Error(`This track declares ${stsdEntries} sample descriptions; this remuxer only handles one.`);
+    }
 
     // Progressive: the samples live in this stbl. Fragmented: the stbl is empty
     // and every moof's trun contributed to fragmentSamples.
@@ -632,6 +644,23 @@ function zeros(n: number): Uint8Array<ArrayBuffer> {
   return new Uint8Array(n);
 }
 
+/** A packed run of big-endian uint32s, in ONE allocation.
+ *
+ *  The tables below (stsz, stss, stco, stsc) carry up to one entry per sample, and
+ *  `box`/`fullBox` are variadic: spreading an argument per entry into them dies at
+ *  ~62k arguments with a RangeError, twenty-four times sooner than the
+ *  MAX_SAMPLES_PER_TRACK this file claims to support. Every table whose length
+ *  grows with the sample count is packed here instead of spread.
+ *
+ *  `>>> 0` is what makes a negative value land as its two's complement, which is
+ *  exactly the encoding a version-1 ctts wants. */
+function u32s(values: number[]): Uint8Array<ArrayBuffer> {
+  const out = new Uint8Array(values.length * 4);
+  const view = new DataView(out.buffer);
+  for (let i = 0; i < values.length; i++) view.setUint32(i * 4, values[i]! >>> 0, false);
+  return out;
+}
+
 function concat(parts: Uint8Array[]): Uint8Array<ArrayBuffer> {
   let total = 0;
   for (const p of parts) total += p.byteLength;
@@ -661,7 +690,18 @@ function runLengths(values: number[]): Uint8Array<ArrayBuffer> {
     if (last && last[1] === v) last[0]++;
     else runs.push([1, v]);
   }
-  return concat([u32(runs.length), ...runs.flatMap(([count, value]) => [u32(count), u32(value)])]);
+  // Packed rather than spread, for the reason u32s() carries: a variable-framerate
+  // track run-length-encodes to one run per sample, and that is an argument count
+  // no variadic call survives.
+  const out = new Uint8Array(4 + runs.length * 8);
+  const view = new DataView(out.buffer);
+  view.setUint32(0, runs.length, false);
+  for (let i = 0; i < runs.length; i++) {
+    const [count, value] = runs[i]!;
+    view.setUint32(4 + i * 8, count, false);
+    view.setUint32(8 + i * 8, value >>> 0, false);
+  }
+  return out;
 }
 
 /** One contiguous run of samples from one source, written as one output chunk. */
@@ -768,14 +808,24 @@ function trackBox(
 
   const stts = fullBox('stts', 0, 0, runLengths(samples.map((s) => s.duration)));
   const hasCts = samples.some((s) => s.cts !== 0);
-  const ctts = hasCts ? fullBox('ctts', 0, 0, runLengths(samples.map((s) => s.cts))) : undefined;
+  // Version 1 the moment any offset is negative: in a version-0 ctts the field is
+  // UNSIGNED, so a -512 read back as signed (both readers above do read it signed,
+  // from ctts v1 and from a v1 trun) would be written out as 4 294 966 784 and the
+  // player would place the frame four billion ticks away. Modern packagers emit
+  // negative composition offsets by default, so this is the common shape, not the
+  // exotic one.
+  const ctts = hasCts
+    ? fullBox('ctts', samples.some((s) => s.cts < 0) ? 1 : 0, 0, runLengths(samples.map((s) => s.cts)))
+    : undefined;
   const syncIndexes = samples.flatMap((s, i) => (s.sync ? [i + 1] : []));
-  // Only meaningful when some samples are NOT sync samples; a table listing every
-  // sample is what "no stss" already means.
+  // Absent stss means "every sample is a sync sample" — which is what the reader
+  // above assumes too. So only the ALL-sync case may omit it: a track where nothing
+  // is a sync sample needs an stss of zero entries to say so, or the output would
+  // claim every inter-frame is a seek target.
   const stss =
-    syncIndexes.length > 0 && syncIndexes.length < samples.length
-      ? fullBox('stss', 0, 0, u32(syncIndexes.length), ...syncIndexes.map(u32))
-      : undefined;
+    syncIndexes.length === samples.length
+      ? undefined
+      : fullBox('stss', 0, 0, u32(syncIndexes.length), u32s(syncIndexes));
 
   const own = chunks.filter((c) => c.track === which);
   const stscRuns: Array<[first: number, perChunk: number]> = [];
@@ -788,15 +838,15 @@ function trackBox(
     0,
     0,
     u32(stscRuns.length),
-    ...stscRuns.flatMap(([first, per]) => [u32(first), u32(per), u32(1)]),
+    u32s(stscRuns.flatMap(([first, per]) => [first, per, 1])),
   );
 
   const uniform = samples.every((s) => s.size === samples[0]!.size);
   const stsz = uniform
     ? fullBox('stsz', 0, 0, u32(samples[0]!.size), u32(samples.length))
-    : fullBox('stsz', 0, 0, u32(0), u32(samples.length), ...samples.map((s) => u32(s.size)));
+    : fullBox('stsz', 0, 0, u32(0), u32(samples.length), u32s(samples.map((s) => s.size)));
 
-  const stco = fullBox('stco', 0, 0, u32(own.length), ...own.map((c) => u32(c.outOffset)));
+  const stco = fullBox('stco', 0, 0, u32(own.length), u32s(own.map((c) => c.outOffset)));
 
   const stbl = box('stbl', track.stsd, stts, ...(ctts ? [ctts] : []), ...(stss ? [stss] : []), stsc, stsz, stco);
   const dinf = box('dinf', box('dref', concat([u32(0), u32(1), fullBox('url ', 0, 1)])));

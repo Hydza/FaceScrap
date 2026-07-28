@@ -64,8 +64,8 @@ if (!alreadyHooked) document.documentElement.setAttribute(HOOK_ALIVE_ATTR, '1');
 setDiagContext('hook');
 window.addEventListener('message', (e) => {
   if (e.source !== window) return;
-  const d = e.data as { __facescrapCtl?: boolean; diag?: unknown } | null;
-  if (d && d.__facescrapCtl === true && typeof d.diag === 'boolean') {
+  const d = e.data as { __vpCtl?: boolean; diag?: unknown } | null;
+  if (d && d.__vpCtl === true && typeof d.diag === 'boolean') {
     setDiagEnabled(d.diag);
     // One user-facing switch drives both: a counter tells you how often a path
     // was taken, the trace tells you which response took it. Split flags would
@@ -74,14 +74,14 @@ window.addEventListener('message', (e) => {
     if (d.diag) diagLog('hookReady', { url: redactUrl(location.href), alreadyHooked });
   }
 });
-window.postMessage({ __facescrapCtl: true, query: true }, '*');
+window.postMessage({ __vpCtl: true, query: true }, '*');
 
 /** Hand this world's counts and trace to the content script, which owns chrome.storage. */
 function flushDiag(): void {
   const counters = diagDrain();
   const events = diagLogDrain();
   if (Object.keys(counters).length === 0 && events.length === 0) return;
-  window.postMessage({ __facescrap: true, diag: counters, log: events }, '*');
+  window.postMessage({ __vpData: true, diag: counters, log: events }, '*');
 }
 
 // The scan drain (drainScans) is this world's natural flush point, but an event
@@ -120,7 +120,7 @@ function post(items: readonly MediaItem[]): void {
   // everything past the cap — typically the DASH ladders of reels nested deepest,
   // i.e. exactly the one being watched. Chunk our own legitimate batch to cap size.
   for (let i = 0; i < items.length; i += MAX_ITEMS_PER_MESSAGE) {
-    window.postMessage({ __facescrap: true, items: items.slice(i, i + MAX_ITEMS_PER_MESSAGE) }, '*');
+    window.postMessage({ __vpData: true, items: items.slice(i, i + MAX_ITEMS_PER_MESSAGE) }, '*');
   }
 }
 
@@ -367,7 +367,14 @@ function dedupeCollector(out: BoundedCollector<MediaItem>): BoundedCollector<Med
   };
 }
 
-function processScan(text: string, source: MediaSource, label?: string): void {
+// Facebook's MSE player appends its buffers on this same thread, so a body of up to
+// MAX_BODY_BYTES must not be parsed in one go — the drain below only ever chopped BETWEEN
+// jobs. Yield between small batches inside every loop, the way scanDocument already does
+// for its script sweep, and let drainScans await the result.
+const SCAN_YIELD_EVERY = 64;
+const yieldToPlayer = (): Promise<void> => new Promise<void>((resolve) => setTimeout(resolve, 0));
+
+async function processScan(text: string, source: MediaSource, label?: string): Promise<void> {
   // Callers pre-gate on fbcdn in scanText(), so text here already contains media candidates.
   // 2,500 leaves ample room above the measured ~1,248-item reels feed while
   // preventing a hostile/changed response from growing work and postMessage
@@ -389,7 +396,12 @@ function processScan(text: string, source: MediaSource, label?: string): void {
   // so recover just that bounded slice below instead of parsing the whole
   // oversized line.
   const MAX_JSON_LINE = 16 * 1024 * 1024;
+  let sinceYield = 0;
   for (const line of text.split('\n')) {
+    if (++sinceYield >= SCAN_YIELD_EVERY) {
+      sinceYield = 0;
+      await yieldToPlayer();
+    }
     if (out.full) break;
     const s = line.trim();
     if (s.length < 2 || s[0] !== '{') continue;
@@ -412,6 +424,10 @@ function processScan(text: string, source: MediaSource, label?: string): void {
   // structured pass above could not reach. dedupeCollector drops any id it
   // already added above, so this only ever contributes a genuinely new one.
   for (const url of extractUrlsByKey(text)) {
+    if (++sinceYield >= SCAN_YIELD_EVERY) {
+      sinceYield = 0;
+      await yieldToPlayer();
+    }
     if (out.full) break;
     out.add(makeItem(url, 'video', source, 'graphql', now));
   }
@@ -422,6 +438,10 @@ function processScan(text: string, source: MediaSource, label?: string): void {
   // recursion guard; pull it straight from the raw text.
   const seenMpd = new Set<string>();
   for (const raw of extractStringsByKey(text)) {
+    if (++sinceYield >= SCAN_YIELD_EVERY) {
+      sinceYield = 0;
+      await yieldToPlayer();
+    }
     if (out.full) break;
     const xml = decodeMpd(raw);
     // Dedupe signature must span more than the head: MPD headers are mostly
@@ -486,11 +506,11 @@ const scanQueue: ScanJob[] = [];
 // at enqueue so XHR and document scans cannot bypass it.
 const MAX_BODY_BYTES = 24 * 1024 * 1024;
 // Bound the queue by BOTH entry count and total retained bytes: a handful of
-// multi-MB feed bodies matters far more than many tiny ones. queuedBytes tracks the
-// live sum so a scroll burst can't pin tens of MB of response text waiting to drain.
+// multi-MB feed bodies matters far more than many tiny ones. trimQueueToBudget
+// re-weighs the whole queue on every enqueue and sheds from it, so a scroll burst
+// can't pin tens of MB of response text waiting to drain.
 const SCAN_QUEUE_MAX = 8;
 const SCAN_QUEUE_MAX_BYTES = MAX_BODY_BYTES;
-let queuedBytes = 0;
 let draining = false;
 function scanText(text: string, source: MediaSource, keep = false, label?: string): void {
   if (!text || text.length < 20) return;
@@ -505,7 +525,6 @@ function scanText(text: string, source: MediaSource, keep = false, label?: strin
   // host intact, so this never hides media behind an unlisted key.
   if (!text.includes('fbcdn.net')) return;
   scanQueue.push({ text, source, keep, label });
-  queuedBytes += text.length;
   // Prefer dropping disposable traffic, but a burst made only of document
   // (`keep`) jobs is still bounded. No job, including the newly queued one, is
   // exempt from the aggregate cap.
@@ -517,7 +536,6 @@ function scanText(text: string, source: MediaSource, keep = false, label?: strin
     isDisposable: (job) => !job.keep,
   });
   for (const dropped of droppedJobs) {
-    queuedBytes -= dropped.text.length;
     // A whole response, not one item: every ladder it carried is gone.
     diagBump('scanQueueEvicted');
     diagLog('graphqlDropped', { q: dropped.label ?? 'unknown', bytes: dropped.text.length, why: 'queueEvicted' }, 'warn');
@@ -527,15 +545,14 @@ function scanText(text: string, source: MediaSource, keep = false, label?: strin
     setTimeout(drainScans, 0);
   }
 }
-function drainScans(): void {
+async function drainScans(): Promise<void> {
   const job = scanQueue.shift();
   if (job === undefined) {
     draining = false;
     return;
   }
-  queuedBytes -= job.text.length;
   try {
-    processScan(job.text, job.source, job.label);
+    await processScan(job.text, job.source, job.label);
   } catch (error) {
     // Was a bare `/* ignore */`. Still ignored — a parser fault must never
     // propagate into Facebook's own promise chains — but no longer invisible:
@@ -629,30 +646,30 @@ XMLHttpRequest.prototype.open = function (this: XMLHttpRequest, _method: string,
     return origOpen.apply(this, arguments as unknown as Parameters<typeof origOpen>);
   }
   const self = this as XMLHttpRequest & {
-    __facescrapUrl?: string;
-    __facescrapSource?: MediaSource;
-    __facescrapHooked?: boolean;
+    __vpUrl?: string;
+    __vpSource?: MediaSource;
+    __vpHooked?: boolean;
   };
-  self.__facescrapUrl = String(url); // refresh the URL on every open()...
+  self.__vpUrl = String(url); // refresh the URL on every open()...
   // ...and the surface, captured HERE at request-ISSUE time (see the fetch patch
   // above for why response-arrival time is the wrong moment to read it).
-  self.__facescrapSource = pageSource();
-  if (!self.__facescrapHooked) {
+  self.__vpSource = pageSource();
+  if (!self.__vpHooked) {
     // ...but attach the load listener only ONCE per instance. If Facebook reuses a
     // long-lived XHR (open() called again), a per-open listener would stack and
     // re-scan/enqueue the same multi-MB body once per prior open(). The listener
-    // itself reads __facescrapUrl/__facescrapSource at fire time, so it always
+    // itself reads __vpUrl/__vpSource at fire time, so it always
     // reflects whichever open() call was most recent.
-    self.__facescrapHooked = true;
+    self.__vpHooked = true;
     this.addEventListener(
       'load',
-      function (this: XMLHttpRequest & { __facescrapUrl?: string; __facescrapSource?: MediaSource }) {
+      function (this: XMLHttpRequest & { __vpUrl?: string; __vpSource?: MediaSource }) {
         try {
-          if (this.__facescrapUrl?.includes('/api/graphql') && typeof this.responseText === 'string') {
+          if (this.__vpUrl?.includes('/api/graphql') && typeof this.responseText === 'string') {
             // No query name here: XHR carries it in send()'s body, and this hook
             // patches open() only — wrapping send() as well would mean touching
             // one more page API for a diagnostics label.
-            scanText(this.responseText, this.__facescrapSource ?? 'video', false, 'xhr');
+            scanText(this.responseText, this.__vpSource ?? 'video', false, 'xhr');
           }
         } catch {
           /* ignore */
@@ -692,7 +709,7 @@ if (!alreadyHooked) {
     try {
       diagLog('nav', { url: redactUrl(location.href) });
       scheduleDiagFlush();
-      window.postMessage({ __facescrap: true, nav: true }, '*');
+      window.postMessage({ __vpData: true, nav: true }, '*');
     } catch {
       /* ignore */
     }

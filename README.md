@@ -121,7 +121,8 @@ decrypted.
 ## Development
 
 `npm run dev` rebuilds on save, `npm run check` runs the type check plus the
-unit suite, and `npm run build` produces the loadable `dist/`.
+unit suite, and `npm run build` produces the loadable `dist/`. `npm run package`
+rebuilds from scratch and writes the `FaceScrap-vX.Y.Z.zip` the Releases page serves.
 
 The public side-panel visual QA runs against a temporary browser profile after
 the build:
@@ -169,7 +170,7 @@ DASH parsing, storage accessors, now-playing inference, settings, i18n and the
 typed message contracts. `rules/referer-rules.json` is a declarativeNetRequest
 rule that sets the Referer on fbcdn requests.
 
-> **Size:** ~600 KB unpacked, all of it built from `src/` — no vendored binaries.
+> **Size:** ~820 KB unpacked, all of it built from `src/` — no vendored binaries.
 > The DASH merge is `src/shared/mp4-remux.ts`, not a bundled ffmpeg build.
 
 ## Diagnostics

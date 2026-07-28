@@ -95,28 +95,3 @@ export function createTokenBudget(options: TokenBudgetOptions): TokenBudget {
     },
   };
 }
-
-interface CounterCoalescer<K extends string> {
-  add(counters: Readonly<Partial<Record<K, number>>>): void;
-  drain(): Partial<Record<K, number>>;
-}
-
-/** Accumulates already-sanitized counters and saturates instead of overflowing
- * Number.MAX_SAFE_INTEGER. Scheduling is intentionally left to the caller. */
-export function createCounterCoalescer<K extends string>(): CounterCoalescer<K> {
-  let pending: Partial<Record<K, number>> = {};
-  return {
-    add(counters) {
-      for (const key of Object.keys(counters) as K[]) {
-        const value = counters[key];
-        if (value === undefined || value <= 0 || !Number.isSafeInteger(value)) continue;
-        pending[key] = Math.min(Number.MAX_SAFE_INTEGER, (pending[key] ?? 0) + value);
-      }
-    },
-    drain() {
-      const drained = pending;
-      pending = {};
-      return drained;
-    },
-  };
-}

@@ -70,11 +70,20 @@ function showPage(name: string): void {
 
 // ── Search ────────────────────────────────────────────────────────────────────
 
+/** Accents folded on BOTH sides: the Spanish copy carries them and a typed query usually
+ *  does not, so "resolucion" has to find "Resolución mínima". */
+function fold(text: string): string {
+  return text.normalize('NFD').replace(/\p{Diacritic}/gu, '').toLowerCase();
+}
+
 /** Every row the search can match, plus the card and the overline above it — both of
  *  which have to disappear when every row under them does, or the page fills with
- *  empty headed cards. */
-function applySearch(): void {
-  const query = byId<HTMLInputElement>('set-search').value.trim().toLowerCase();
+ *  empty headed cards.
+ *
+ *  Exported for localize(): the query is matched against translated text, so a language
+ *  change has to re-filter or the rows stay hidden by the previous language's copy. */
+export function applySearch(): void {
+  const query = fold(byId<HTMLInputElement>('set-search').value.trim());
   const searching = query.length > 0;
   let hits = 0;
 
@@ -82,7 +91,7 @@ function applySearch(): void {
     el.hidden = !searching && el.dataset.page !== page;
   }
   for (const row of document.querySelectorAll<HTMLElement>('[data-search]')) {
-    const match = !searching || (row.textContent ?? '').toLowerCase().includes(query);
+    const match = !searching || fold(row.textContent ?? '').includes(query);
     row.hidden = !match;
     if (match && searching) hits += 1;
   }
@@ -161,15 +170,19 @@ let keysPainted = '';
 /** Built from ACCENTS and PANEL_TINTS rather than written out in the markup, so each
  *  palette has one source and a swatch can never paint a colour the schema would reject. */
 function renderSwatches(accent: AccentId, tint: PanelTintId): void {
-  if (accentPainted !== accent) {
-    accentPainted = accent;
+  // The language is part of the key: the memoized nodes carry t() text, so a repaint
+  // skipped because the accent did not change would leave 23 aria-labels in the old one.
+  const accentKey = `${getLang()}|${accent}`;
+  if (accentPainted !== accentKey) {
+    accentPainted = accentKey;
     for (const group of ['solid', 'gradient'] as AccentGroup[]) {
       const host = byId(`set-accent-${group}`);
       withFocusKept(host, 'accent', () => paintAccents(host, group, accent));
     }
   }
-  if (tintPainted === tint) return;
-  tintPainted = tint;
+  const tintKey = `${getLang()}|${tint}`;
+  if (tintPainted === tintKey) return;
+  tintPainted = tintKey;
   const host = byId('set-tint');
   withFocusKept(host, 'tint', () => paintTints(host, tint));
 }
@@ -286,7 +299,9 @@ let keyRefusal: string | undefined;
  *  cheaper to redraw than to reconcile. */
 function renderKeymapRows(): void {
   const keymap = read?.settings().keymap ?? DEFAULT_KEYMAP;
-  const state = JSON.stringify([keymap, capturing ?? '', keyRefusal ?? '']);
+  // getLang() belongs in the state: the nine row labels and the two cap words are t()
+  // strings, so the keymap alone does not describe what is on screen.
+  const state = JSON.stringify([getLang(), keymap, capturing ?? '', keyRefusal ?? '']);
   if (keysPainted === state) return;
   keysPainted = state;
   const host = byId('set-keys');
@@ -446,6 +461,10 @@ export function reflectSettings(settings: Settings): void {
   renderKeymapRows();
   renderTemplatePreview();
   renderGlobalKeyHint();
+  // #set-bg-state is t()-rendered and nothing else repaints it, so it stayed in the
+  // previous language. A pending refusal is dropped here on purpose: it described the
+  // last file pick, not the setting that just changed.
+  reflectPanelBackground();
 }
 
 /** What the background row says, and why the last attempt was refused if it was. Whether an image

@@ -2,7 +2,14 @@
 // - Observes fbcdn media requests (video/audio streams) via non-blocking
 //   webRequest and records candidates per tab.
 // - Receives media found by the content script / MAIN-world page hook.
-// - Orchestrates DASH remux via an offscreen document (see mp4-remux.ts).
+// - Routes the messages that have an extracted owner to it (binding-handler,
+//   settings, playing-download, download-handler, playing-handler,
+//   diag-observer); the rest — theme, MEDIA_FOUND, pin, clear-tab — are
+//   validated and dispatched inline in the listener. Publishes the capability
+//   flags the panel degrades on. The DASH remux is NOT here: dash-download.ts
+//   owns the offscreen document and the whole lifetime of a merge.
+// - Enables the toolbar action and the side panel on facebook.com tabs and
+//   disables both everywhere else, so the extension is inert off the site.
 // - Keeps the toolbar badge in sync and cleans up per-tab state.
 //
 // Service workers are ephemeral: do minimal synchronous work in listeners and
@@ -610,7 +617,12 @@ chrome.tabs.onRemoved.addListener((tabId) => {
   recentObserver.dispose(tabId); // tab is gone for good — release its dedupe state, not just reset it
   tabSurface.delete(tabId);
   forgetVideoGroupMemory(tabId);
-  void purgeTab(tabId);
+  // Reported like its siblings above: purgeTab really does reject (a session write
+  // under a tab that is going away), and an uncaught one reaches the global handler
+  // stripped of which tab it was about.
+  void purgeTab(tabId).catch((error) => {
+    if (!isExpectedLifecycleStop(error)) diagError('tab purge failed', error, { tab: tabId });
+  });
 });
 
 // 6. Clear per-tab state once a tab has left facebook.com. `changeInfo.url` is
@@ -632,7 +644,12 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
       if (!tab.url) {
         recentObserver.reset(tabId);
         tabLifecycle.invalidate(tabId, true);
-        void tabLifecycle.runIfLive(tabId, () => clearTab(tabId)); // left facebook → drop its captures
+        // Left facebook → drop its captures.
+        void tabLifecycle
+          .runIfLive(tabId, () => clearTab(tabId))
+          .catch((error) => {
+            if (!isExpectedLifecycleStop(error)) diagError('off-site clear failed', error, { tab: tabId });
+          });
       }
     })
     .catch(() => {});

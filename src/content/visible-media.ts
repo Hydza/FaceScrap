@@ -2,10 +2,10 @@ import {
   isFbcdn,
   isStaticFbAsset,
   makeItem,
-  MAX_MEDIA_DIMENSION,
   MAX_MEDIA_URL_LEN,
   type MediaItem,
   type MediaSource,
+  normalizeMediaDimension,
 } from '../shared/media';
 
 interface VisibleMediaSignal {
@@ -15,15 +15,6 @@ interface VisibleMediaSignal {
   imageUrl?: string;
   imageWidth?: number;
   imageHeight?: number;
-}
-
-function naturalDimension(value: unknown): number | undefined {
-  return typeof value === 'number' &&
-    Number.isSafeInteger(value) &&
-    value > 0 &&
-    value <= MAX_MEDIA_DIMENSION
-    ? value
-    : undefined;
 }
 
 /**
@@ -48,7 +39,7 @@ export function visibleMediaCandidate(
       return undefined;
     }
     const item = makeItem(url, 'video', source, 'dom', now);
-    const height = naturalDimension(signal.videoHeight);
+    const height = normalizeMediaDimension(signal.videoHeight);
     if (height != null) item.height = height;
     return item;
   }
@@ -58,8 +49,8 @@ export function visibleMediaCandidate(
     return undefined;
   }
   const item = makeItem(url, 'image', source, 'dom', now);
-  const width = naturalDimension(signal.imageWidth);
-  const height = naturalDimension(signal.imageHeight);
+  const width = normalizeMediaDimension(signal.imageWidth);
+  const height = normalizeMediaDimension(signal.imageHeight);
   if (width != null) item.width = width;
   if (height != null) item.height = height;
   return item;

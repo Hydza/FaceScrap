@@ -4,9 +4,9 @@
 // dropping?", a question asked across sessions. In storage.session the evidence would
 // be wiped at the exact moment a maintainer restarts the browser to reproduce a bug.
 
+import { serialQueue } from './async';
 import { sanitizeDiagCounters, type DiagCounters, type DiagReason } from './diag';
 import { sanitizeDiagEvents, type DiagEvent } from './diag-log';
-import { serialQueue } from './session-write';
 
 const DIAG_KEY = 'diag_counters';
 const LOG_KEY = 'diag_log';
@@ -17,7 +17,7 @@ const enqueueLog = serialQueue();
 
 /** How much trace is kept. Both bounds are enforced on every append — the count
  *  keeps the panel's render cheap, and the byte cap is what keeps this off
- *  storage.local's quota, which the Saved ledger and the settings share. A
+ *  storage.local's quota, which the settings and the language key share. A
  *  session long enough to need more than this is one where the newest events are
  *  the ones being asked about, so the ring drops from the OLD end. */
 export const DIAG_LOG_MAX_EVENTS = 2_000;
@@ -27,12 +27,19 @@ const DIAG_LOG_MAX_BYTES = 700 * 1024;
  *  the bound that cannot be observed from storage without a real quota. */
 export function trimDiagLog(events: DiagEvent[]): DiagEvent[] {
   const out = events.length > DIAG_LOG_MAX_EVENTS ? events.slice(events.length - DIAG_LOG_MAX_EVENTS) : events;
-  // Drop from the front until the serialized array fits. Measured rather than
-  // estimated: one event's size varies by an order of magnitude with its data.
+  // Serialize each event ONCE and drop from the front by subtraction. JSON.stringify over
+  // an array is the sum of its elements plus one comma each and the two brackets, so the
+  // running total is exact and the cap still means bytes. The old loop re-serialized the
+  // whole tail — up to 700 KB, and it had to build that string at least once per append
+  // even when there was nothing to trim.
+  const sizes = out.map((event) => JSON.stringify(event).length);
+  let total = 2;
+  for (const size of sizes) total += size + 1;
+  if (sizes.length > 0) total -= 1; // n elements carry n-1 commas
   let start = 0;
-  while (start < out.length && JSON.stringify(out.slice(start)).length > DIAG_LOG_MAX_BYTES) {
-    // Chunked so a very long log does not re-serialize once per dropped event.
-    start += Math.max(1, Math.ceil((out.length - start) / 8));
+  while (start < out.length && total > DIAG_LOG_MAX_BYTES) {
+    total -= sizes[start] + 1;
+    start++;
   }
   return start === 0 ? out : out.slice(start);
 }

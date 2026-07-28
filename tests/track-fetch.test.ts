@@ -69,6 +69,58 @@ test('resumes from the bytes already held after a mid-body drop', async () => {
   assert.deepEqual(ranges, [null, 'bytes=6-']);
 });
 
+test('does not stitch a 206 that starts somewhere other than where it resumed', async () => {
+  // A 206 says "here is A range", not "here is the range you asked for". Appending a
+  // body that starts at the wrong offset makes the file LONGER than the source, and
+  // the remuxer's bounds check only catches files that are too SHORT — so this used
+  // to ship as a successful download of a broken track.
+  const { fetch, ranges } = fakeFetch([
+    () => new Response(body(['abc', 'def'], 2)), // 6 bytes, then drops
+    () =>
+      new Response(body(['XYZ']), {
+        status: 206,
+        headers: { 'Content-Range': 'bytes 99-101/200' }, // not byte 6
+      }),
+    () => new Response(body(['abcdefghi'])), // clean restart from zero
+  ]);
+
+  const blob = await fetchTrack(URL_OK, () => {}, { fetch, retryDelayMs: 0 });
+
+  assert.equal(await textOf(blob), 'abcdefghi', 'the mismatched range must not be stitched in');
+  assert.deepEqual(ranges, [null, 'bytes=6-', null], 'the third attempt restarts from zero');
+});
+
+test('takes a 206 that carries the whole file as the whole file', async () => {
+  // Content-Range starting at 0 means the head we hold is already in this body;
+  // keeping both would duplicate it.
+  const { fetch } = fakeFetch([
+    () => new Response(body(['abc'], 1)), // 3 bytes, then drops
+    () =>
+      new Response(body(['abcdef']), {
+        status: 206,
+        headers: { 'Content-Range': 'bytes 0-5/6' },
+      }),
+  ]);
+
+  assert.equal(await textOf(await fetchTrack(URL_OK, () => {}, { fetch, retryDelayMs: 0 })), 'abcdef');
+});
+
+test('keeps every byte in order across the seal boundary', async () => {
+  // Chunks are sealed into Blobs every 16 MB so they can leave the JS heap instead
+  // of all staying resident until the end. Sealing must not reorder or lose bytes,
+  // and the tail after the last seal must still make it out.
+  const oneMb = 'x'.repeat(1024 * 1024);
+  const chunks = [...Array.from({ length: 17 }, () => oneMb), 'TAIL'];
+  const { fetch } = fakeFetch([() => new Response(body(chunks))]);
+
+  const blob = await fetchTrack(URL_OK, () => {}, { fetch });
+
+  assert.equal(blob.size, 17 * 1024 * 1024 + 4, 'every byte must survive sealing');
+  const text = await textOf(blob);
+  assert.ok(text.endsWith('TAIL'), 'the unsealed tail must be appended last');
+  assert.equal(text.indexOf('TAIL'), 17 * 1024 * 1024, 'and nothing may be reordered before it');
+});
+
 test('restarts from scratch when the server ignores the Range request', async () => {
   const { fetch } = fakeFetch([
     () => new Response(body(['abc'], 1)), // 3 bytes, then drops

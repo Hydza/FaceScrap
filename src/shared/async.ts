@@ -1,4 +1,5 @@
-// Tiny async helpers shared across contexts (side panel, service worker).
+// Tiny async helpers shared across every extension context: idleness-bounded waits,
+// the chain lock and keyed lanes that serialize storage writes, and the retry backoff.
 
 /** A timeout that measures IDLENESS, not elapsed time: `beat()` restarts the
  *  clock, so work that keeps reporting progress is never cut off. A wall-clock
@@ -9,25 +10,48 @@
  *  died outright and sends neither progress nor an answer.
  *
  *  Returns the guarded promise plus the beat function; the caller wires `beat`
- *  to whatever progress channel it owns. */
+ *  to whatever progress channel it owns.
+ *
+ *  `armStarted()` RESTARTS the hard cap, for the one caller whose wait spans a
+ *  queue it cannot see the length of. dash-download.ts guards a single round-trip
+ *  (the offscreen mux call, never itself queued) and simply ignores it. The
+ *  panel's DASH_UI_HARD_CAP_MS wait (messages.ts) covers an unbounded dashChain
+ *  queue PLUS one job: armed only at send time it budgeted for ONE job's worst
+ *  case while actually covering "queue wait + that job", so a request queued
+ *  behind a long merge could exhaust it while the worker was still entitled to
+ *  keep working on that SAME request — then finish it and write a Saved receipt
+ *  under a card the panel had already tagged Failed. The panel restarts this
+ *  window from FACESCRAP_DASH_JOB_STARTED instead, giving the job its own full
+ *  budget from the moment it actually starts.
+ *
+ *  Both rearming entry points are no-ops once the wait has settled, so a late or
+ *  duplicate signal can never arm a timer against a promise nobody is awaiting
+ *  anymore; and a request whose start signal never arrives — including a worker
+ *  reaped and restarted mid-queue — still terminates at the original send-time
+ *  `hardCapMs`. */
 export function withHeartbeat<T>(
   work: Promise<T>,
   idleMs: number,
   hardCapMs: number,
   message: string,
-): { promise: Promise<T>; beat: () => void } {
-  let idleTimer: ReturnType<typeof setTimeout>;
+): { promise: Promise<T>; beat: () => void; armStarted: () => void } {
   let settled = false;
+  let idleTimer: ReturnType<typeof setTimeout>;
+  let hardTimer: ReturnType<typeof setTimeout>;
   let fail: (e: Error) => void = () => {};
   const guard = new Promise<never>((_, reject) => {
     fail = reject;
   });
-  const arm = (): void => {
+  const armIdle = (): void => {
     clearTimeout(idleTimer);
     idleTimer = setTimeout(() => fail(new Error(message)), idleMs);
   };
-  arm();
-  const hardTimer = setTimeout(() => fail(new Error(message)), hardCapMs);
+  const armHard = (): void => {
+    clearTimeout(hardTimer);
+    hardTimer = setTimeout(() => fail(new Error(message)), hardCapMs);
+  };
+  armIdle();
+  armHard(); // send-time cap: bounds the case where the job's own start signal never arrives
   const promise = Promise.race([work, guard]).finally(() => {
     settled = true;
     clearTimeout(idleTimer);
@@ -38,7 +62,10 @@ export function withHeartbeat<T>(
     // Guarded: a progress report that races the final answer must not leave a
     // timer armed against an already-settled promise (an unhandled rejection).
     beat: () => {
-      if (!settled) arm();
+      if (!settled) armIdle();
+    },
+    armStarted: () => {
+      if (!settled) armHard();
     },
   };
 }
@@ -61,33 +88,64 @@ export function withTimeout<T>(p: Promise<T>, ms: number, message: string): Prom
 }
 
 /**
- * Serializes async jobs on one FIFO chain: each call's work starts only after
- * every job enqueued before it has settled (succeeded OR failed), and one
- * job rejecting never blocks the ones queued behind it. The caller gets back
- * the RAW job promise — it rejects exactly when `run` does; only the internal
- * chain used to sequence FUTURE jobs is caught-and-swallowed so a failure
- * can't wedge the queue.
+ * A chain mutex: each task starts only after every task enqueued before it on the
+ * SAME lock has settled (succeeded OR failed), and one rejection never blocks the
+ * ones queued behind it. The caller gets back the RAW task promise — it rejects
+ * exactly when `task` does; only the internal chain used to sequence FUTURE tasks
+ * is caught-and-swallowed so a failure can't wedge the lane.
  *
- * service-worker.ts's dashChain and offscreen.ts's muxQueue independently grew
- * this exact `chain = job.catch(() => {}); return job;` shape — factored here
- * so the two can't drift apart. Three other serial-queue idioms elsewhere in
- * this codebase are DIFFERENT contracts on purpose and were deliberately left
- * alone rather than forced onto this helper: storage.ts's serialQueue hands
- * the caller the settled/caught chain instead of the raw job (a caller there
- * never sees its own task's rejection the way a caller here does);
- * settings.ts's createSettingsPatchWriter releases a hand-rolled latch in a
- * `finally` block; diag-observer.ts's flushChain reuses one handler for both
- * the fulfilled and rejected branches of `.then()`, so a failure is never
- * swallowed the way it is here. None of the three is "genuinely identical" to
- * this shape, so none was converged onto it.
+ * Each CALL creates its own closed-over `chain`, so separate locks keep guarding
+ * their own resource — never collapse two callers into one shared lock
+ * (tests/found-storage-lock-factory.test.ts exists for exactly that mistake).
+ *
+ * storage.ts's two write locks, session-write.ts's headroom lock,
+ * dash-download.ts's dashChain and offscreen.ts's muxQueue independently grew this
+ * same shape, so it lives here once and they cannot drift apart. Two serial-queue
+ * idioms elsewhere are DIFFERENT contracts on purpose and were deliberately left
+ * alone rather than forced onto this helper: settings.ts's
+ * createSettingsPatchWriter releases a hand-rolled latch in a `finally` block;
+ * diag-observer.ts's flushChain reuses one handler for both the fulfilled and
+ * rejected branches of `.then()`, so a failure is never swallowed the way it is
+ * here. The keyed lanes below are the third shape and DO live here: they hand the
+ * caller the settled/caught chain instead of the raw task, so a caller there never
+ * sees its own task's rejection the way a caller here does.
  */
-export function createJobChain<T>(): (run: () => Promise<T>) => Promise<T> {
-  let chain: Promise<unknown> = Promise.resolve();
-  return (run) => {
-    const job = chain.then(run);
-    chain = job.catch(() => {});
-    return job;
+export function createChainLock(): <T>(task: () => Promise<T>) => Promise<T> {
+  let chain: Promise<void> = Promise.resolve();
+  return function withLock<T>(task: () => Promise<T>): Promise<T> {
+    const run = chain.then(task);
+    chain = run.then(
+      () => undefined,
+      () => undefined,
+    );
+    return run;
   };
+}
+
+/** One ordered lane per key: read-modify-write cycles on a key must run one at a
+ *  time, but unrelated keys must never wait on each other's writes. A failure is
+ *  reported through onError and does NOT poison the lane for the next task. */
+export function keyedSerialQueue(): (
+  key: number,
+  task: () => Promise<void>,
+  onError: (err: unknown) => void,
+) => Promise<void> {
+  const chains = new Map<number, Promise<void>>();
+  return (key, task, onError) => {
+    const run = (chains.get(key) ?? Promise.resolve()).then(task);
+    const settled = run.catch(onError);
+    chains.set(key, settled);
+    void settled.then(() => {
+      if (chains.get(key) === settled) chains.delete(key);
+    });
+    return settled;
+  };
+}
+
+/** The same lane, for a key space with only one member. */
+export function serialQueue(): (task: () => Promise<void>, onError: (err: unknown) => void) => Promise<void> {
+  const lane = keyedSerialQueue();
+  return (task, onError) => lane(0, task, onError);
 }
 
 /**
@@ -97,7 +155,7 @@ export function createJobChain<T>(): (run: () => Promise<T>) => Promise<T> {
  * delay can never overflow regardless of how large a caller's own failure
  * counter grows (2^5 already reaches most `capMs` values in one hop).
  *
- * Shared by content.ts's media-relay retry (pumpMedia) and now-playing.ts's
+ * Shared by content-media-relay.ts's media retry (pump) and now-playing.ts's
  * binding-flush retry (retryBindings) — the two EXPONENTIAL policies among
  * FaceScrap's five capture/ack retry channels. The counter/timer bookkeeping
  * around this math is deliberately NOT unified: the two call sites manage
@@ -106,7 +164,7 @@ export function createJobChain<T>(): (run: () => Promise<T>) => Promise<T> {
  * differ, so only the shared arithmetic moved here.
  *
  * The other three channels (theme: fixed 1s; playing: no timer, rides the
- * content script's 300ms detectPlaying poll; pin: no timer, rides the side
+ * content script's 300ms detect() poller; pin: no timer, rides the side
  * panel's ~500ms render tick) intentionally have NO timer to share — see
  * acked-latest.ts's header comment for the full five-channel map.
  */

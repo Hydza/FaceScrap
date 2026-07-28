@@ -1,9 +1,10 @@
 import {
+  addBoundedCounters,
   DIAG_REASONS,
   sanitizeDiagCounters,
   type DiagCounters,
 } from '../shared/diag';
-import { sanitizeDiagEvents, type DiagEvent } from '../shared/diag-log';
+import { createEventRing, sanitizeDiagEvents, type DiagEvent } from '../shared/diag-log';
 
 const DEFAULT_INTERVAL_MS = 1_500;
 const DEFAULT_MAX_TABS = 128;
@@ -46,12 +47,12 @@ interface DiagObserver {
   flush(): Promise<void>;
 }
 
+/** The receiver's own bound, applied even where the content script already
+ *  sanitized: only whitelisted reasons survive, and no total runs past
+ *  maxCountPerReason. The summing rule itself is diag.ts's — the content script's
+ *  coalescer runs the same one against its own, larger bound. */
 function addBounded(target: DiagCounters, source: DiagCounters, max: number): void {
-  for (const reason of DIAG_REASONS) {
-    const value = source[reason];
-    if (value === undefined || value <= 0) continue;
-    target[reason] = Math.min(max, (target[reason] ?? 0) + Math.min(value, max));
-  }
+  addBoundedCounters(target, source, DIAG_REASONS, max);
 }
 
 /**
@@ -67,8 +68,7 @@ export function createDiagObserver(options: DiagObserverOptions): DiagObserver {
   const schedule = options.schedule ?? ((task, delay) => setTimeout(task, delay));
   const cancel = options.cancel ?? ((handle) => clearTimeout(handle as ReturnType<typeof setTimeout>));
   const pending = new Map<number, DiagCounters>();
-  const pendingEvents: DiagEvent[] = [];
-  let droppedEvents = 0;
+  const pendingEvents = createEventRing(maxEvents);
   let enabled = false;
   let timer: TimerHandle | undefined;
   let flushChain = Promise.resolve();
@@ -87,38 +87,17 @@ export function createDiagObserver(options: DiagObserverOptions): DiagObserver {
     }, intervalMs);
   };
 
-  /** Queue events under the pending bound, dropping oldest first. */
+  /** The ring bounds itself, dropping oldest first; this only spreads one report
+   *  across it. */
   const queueEvents = (events: readonly DiagEvent[]): void => {
-    for (const event of events) {
-      pendingEvents.push(event);
-      if (pendingEvents.length > maxEvents) {
-        pendingEvents.shift();
-        droppedEvents += 1;
-      }
-    }
-  };
-
-  const drainPendingEvents = (): DiagEvent[] => {
-    const out = pendingEvents.splice(0, pendingEvents.length);
-    if (droppedEvents > 0) {
-      out.unshift({
-        at: Date.now(),
-        ctx: 'worker',
-        ev: 'logOverflow',
-        lvl: 'warn',
-        data: { dropped: droppedEvents, where: 'observer' },
-      });
-      droppedEvents = 0;
-    }
-    return out;
+    for (const event of events) pendingEvents.push(event);
   };
 
   const flushOnce = async (): Promise<void> => {
     clearTimer();
     if (!enabled) {
       pending.clear();
-      pendingEvents.length = 0;
-      droppedEvents = 0;
+      pendingEvents.clear();
       options.workerCounters?.drain();
       options.workerEvents?.drain();
       return;
@@ -129,7 +108,9 @@ export function createDiagObserver(options: DiagObserverOptions): DiagObserver {
     pending.clear();
     addBounded(aggregate, sanitizeDiagCounters(options.workerCounters?.drain()), maxCount);
     queueEvents(sanitizeDiagEvents(options.workerEvents?.drain(), maxEvents));
-    const events = drainPendingEvents();
+    // `where` names which ring lost events: this one coalesces across every tab, so
+    // its gap is not the same gap a renderer's own ring reports.
+    const events = pendingEvents.drain('worker', { where: 'observer' });
     if (events.length > 0 && options.writeEvents != null) {
       try {
         await options.writeEvents(events);
@@ -137,7 +118,7 @@ export function createDiagObserver(options: DiagObserverOptions): DiagObserver {
         // Same retention contract as the counters below: a transient local-storage
         // failure must not make the coalescer itself lossy. Requeued at the FRONT so
         // the retained trace keeps its order.
-        pendingEvents.unshift(...events.slice(-maxEvents));
+        pendingEvents.requeue(events);
         scheduleFlush();
         options.onError?.(error);
       }
@@ -172,8 +153,7 @@ export function createDiagObserver(options: DiagObserverOptions): DiagObserver {
       if (on) return;
       clearTimer();
       pending.clear();
-      pendingEvents.length = 0;
-      droppedEvents = 0;
+      pendingEvents.clear();
       options.workerCounters?.drain();
       options.workerEvents?.drain();
     },

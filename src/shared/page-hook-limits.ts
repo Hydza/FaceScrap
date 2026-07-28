@@ -17,7 +17,7 @@ export async function readClonedResponseTextLimited(
   const clone = response.clone();
   const declared = Number(clone.headers.get('content-length'));
   if (Number.isFinite(declared) && declared > maxBytes) {
-    void clone.body?.cancel('FaceScrap body limit').catch(() => undefined);
+    void clone.body?.cancel('body size limit').catch(() => undefined);
     return { ok: false, text: '', bytesRead: 0 };
   }
 
@@ -36,7 +36,7 @@ export async function readClonedResponseTextLimited(
         // A cloned Response is a tee branch. Awaiting cancellation may wait for
         // the untouched original branch too, so request cancellation and return
         // immediately; this hook must never delay Facebook's response consumer.
-        void reader.cancel('FaceScrap body limit').catch(() => undefined);
+        void reader.cancel('body size limit').catch(() => undefined);
         return { ok: false, text: '', bytesRead };
       }
       parts.push(decoder.decode(value, { stream: true }));

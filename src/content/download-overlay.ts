@@ -24,7 +24,7 @@
 //    button anchored to it hopped from row to corner mid-scroll.
 
 import { t, type MsgKey } from '../shared/i18n';
-import { isFbcdn, isStaticFbAsset } from '../shared/media';
+import { fbcdnBackgroundUrl } from '../shared/media';
 import type {
   PlayingDownloadOptionsResponse,
   RequestPlayingDownloadResponse,
@@ -50,7 +50,9 @@ const ANCESTOR_LIMIT = 10;
 const CARD_WIDTH_SLACK = 1.8;
 /** How long the result glyph stays up before the button returns to idle. */
 const RESULT_HOLD_MS = 2_500;
-const HOST_ID = 'facescrap-download-overlay';
+/** Neutral on purpose: this id lands in facebook.com's own DOM, where a product
+ *  name is a one-selector test for which extension is installed. */
+const HOST_ID = 'vp-actions-root';
 
 interface DownloadOverlayPorts {
   /** Injected so tests can drive the overlay without a live extension context. */
@@ -175,7 +177,17 @@ const SVG_NS = 'http://www.w3.org/2000/svg';
 
 /** The media the button should sit on: the element covering the viewport centre
  *  if there is one, else the largest candidate. Videos win over images — a story
- *  video's poster is still in the DOM behind it. */
+ *  video's poster is still in the DOM behind it.
+ *
+ *  Not centreMedia (content-playing.ts), which answers a similar question with
+ *  different rules: it walks the centre stack and reads paused/ended to tell the
+ *  active slide from the ones the viewer keeps stacked behind it, while this scores
+ *  by area and never looks at playback state. On a stack of slides the two can name
+ *  different elements. Left that way on purpose — this one only decides where the
+ *  button is DRAWN, and what a click downloads comes from the worker's capture
+ *  state, so a disagreement costs a button on the wrong box and nothing else.
+ *  Sharing them would mean handing this module the detector's state, which is the
+ *  coupling the injected ports exist to avoid. */
 export function pickAnchorElement(doc: Document, win: Window): Element | undefined {
   const cx = win.innerWidth / 2;
   const cy = win.innerHeight / 2;
@@ -209,10 +221,10 @@ export function pickAnchorElement(doc: Document, win: Window): Element | undefin
   if (best) return best;
 
   // Facebook paints some photo stories as a <div> with a CSS background-image
-  // rather than an <img> — the exact case fbcdnCoverUrl in content.ts was written
-  // to cover. Those reach the worker (the detector reads the same cover URL either
-  // way) and come back offered for download, so a button that can only anchor to
-  // <img> is not intermittently missing on them, it is permanently missing.
+  // rather than an <img> — the exact case fbcdnCoverUrl in content-playing.ts was
+  // written to cover. Those reach the worker (the detector reads the same cover URL
+  // either way) and come back offered for download, so a button that can only anchor
+  // to <img> is not intermittently missing on them, it is permanently missing.
   //
   // elementsFromPoint, not a tree walk: "a div with a background-image" has no tag
   // selector, so the alternative is querySelectorAll('*') plus a style recalc per
@@ -223,13 +235,10 @@ export function pickAnchorElement(doc: Document, win: Window): Element | undefin
   for (const el of doc.elementsFromPoint(cx, cy)) {
     const r = el.getBoundingClientRect();
     if (r.width < MIN_IMAGE_PX || r.height < MIN_IMAGE_PX) continue;
-    const bg = win.getComputedStyle(el).backgroundImage;
-    if (!bg || bg === 'none') continue;
-    const m = bg.match(/url\(["']?(https?:[^"')]+)["']?\)/);
-    // The same pair of guards fbcdnCoverUrl applies: fbcdn-hosted, and not an
-    // rsrc.php sprite — those are fbcdn too, and a big one would anchor the button
-    // to a banner instead of to the photo.
-    if (m && isFbcdn(m[1]) && !isStaticFbAsset(m[1])) return el;
+    // Shared with the detector's fbcdnCoverUrl, guards included: an rsrc.php sprite
+    // is fbcdn too, and a big one would anchor the button to a banner instead of to
+    // the photo.
+    if (fbcdnBackgroundUrl(win.getComputedStyle(el).backgroundImage) != null) return el;
   }
   return undefined;
 }
@@ -573,6 +582,12 @@ export function createDownloadOverlay(ports: DownloadOverlayPorts): DownloadOver
    *  offset is unchanged by scrolling. refresh() re-scans on its own 750ms tick, which is when a
    *  row can have moved. */
   function trackGeometry(): void {
+    // Only a button that is UP can be re-placed. This runs from the scroll listener, so
+    // while the overlay is hidden — nothing downloadable on screen, or the setting off —
+    // every scroll frame was paying a full anchor search (a querySelectorAll over every
+    // video and img, plus an elementsFromPoint walk) to reposition nothing. It cannot show
+    // the button either: only refresh() ever does that.
+    if (!wrap || wrap.getAttribute('data-show') !== '1') return;
     if (frame !== undefined) return;
     frame = win.requestAnimationFrame(() => {
       frame = undefined;

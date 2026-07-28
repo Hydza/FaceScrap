@@ -39,7 +39,7 @@ interface DomScanDeps {
   onImageLoaded: () => void;
 }
 
-export function setupDomScan(runtime: ContentRuntime, deps: DomScanDeps): () => void {
+export function setupDomScan(runtime: ContentRuntime, deps: DomScanDeps): void {
   // scanDom re-walks the WHOLE document on every throttled pass: it has to, because a
   // <video> whose src only resolves once buffering completes, or an <img> whose
   // naturalWidth only clears the minimum once decoded, changes with no childList
@@ -51,6 +51,10 @@ export function setupDomScan(runtime: ContentRuntime, deps: DomScanDeps): () => 
   // state per id and relay again only when it actually differs. FIFO-bounded at the
   // same scale as the outgoing queue so an hours-long scroll cannot grow it forever.
   const signatures = new Map<string, string>();
+  // Images that finished loading since the last sweep. Buffered rather than relayed one by
+  // one: a scroll burst fires a load event per image, and each was a message of its own
+  // that skipped changedOnly, so the sweep then relayed the very same item again.
+  const loadedBuffer: MediaItem[] = [];
   let scanTimer: number | undefined;
   let initialScanTimer: number | undefined;
 
@@ -81,6 +85,13 @@ export function setupDomScan(runtime: ContentRuntime, deps: DomScanDeps): () => 
     const out: MediaItem[] = [];
     const now = Date.now();
     const source = currentMediaSource();
+    // Drained FIRST so the sweep's own, fresher reading of the same <img> wins the
+    // signature. These are still captured at LOAD time — a recycled <img> can be gone by
+    // now — only delivered on this timer, through the same dedupe as everything else.
+    if (loadedBuffer.length > 0) {
+      out.push(...loadedBuffer);
+      loadedBuffer.length = 0;
+    }
 
     document.querySelectorAll('video').forEach((v) => {
       const src = v.currentSrc || v.src;
@@ -136,7 +147,11 @@ export function setupDomScan(runtime: ContentRuntime, deps: DomScanDeps): () => 
       const item = makeItem(src, 'image', currentMediaSource(), 'dom', Date.now());
       item.width = img.naturalWidth;
       item.height = img.naturalHeight;
-      deps.relay([item]);
+      // Bounded like the outgoing queue: a burst that outruns the throttle cannot grow
+      // this without limit, and the oldest reading is the one worth losing.
+      if (loadedBuffer.length >= MEDIA_QUEUE_MAX_ITEMS) loadedBuffer.shift();
+      loadedBuffer.push(item);
+      throttledScan();
       deps.onImageLoaded();
     },
     { capture: true, signal: runtime.signal },
@@ -161,6 +176,4 @@ export function setupDomScan(runtime: ContentRuntime, deps: DomScanDeps): () => 
     if (initialScanTimer !== undefined) clearTimeout(initialScanTimer);
     observer.disconnect();
   });
-
-  return scan;
 }

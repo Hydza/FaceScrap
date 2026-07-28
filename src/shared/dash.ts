@@ -207,7 +207,7 @@ interface Rep {
 
 // Number.isFinite (not just isNaN) on both branches: Number("1e999") is
 // Infinity, not NaN, and an unrejected Infinity height/bandwidth sorts
-// deterministically to the top of ladderPairs' comparator (:236), breaking the
+// deterministically to the top of the .sort() inside ladderPairs, breaking the
 // "highest quality first" ordering it exists to produce.
 function num(v: unknown): number | undefined {
   if (typeof v === 'number') return Number.isFinite(v) ? v : undefined;

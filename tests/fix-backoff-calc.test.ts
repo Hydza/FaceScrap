@@ -1,6 +1,6 @@
 // ALT4 — of FaceScrap's five capture/ack retry policies (media, theme,
 // playing, bindings, pin — see acked-latest.ts's header comment for the full
-// map), two are exponential: content.ts's media-relay retry (500ms base,
+// map), two are exponential: content-media-relay.ts's pump() retry (500ms base,
 // capped 10s) and now-playing.ts's binding-flush retry (250ms base, capped
 // 8s). Both hand-rolled the identical `Math.min(cap, base * 2 **
 // Math.min(n, 5))` formula independently. Extracted the shared MATH only

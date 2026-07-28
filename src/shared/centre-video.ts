@@ -1,7 +1,7 @@
 // Which <video> on screen is the one being watched — the scoring half of
 // centreMedia(), split out so it can be tested without a DOM.
 //
-// The geometry stays in content.ts; this file only decides. No chrome.*, no DOM.
+// The geometry stays in content-playing.ts; this file only decides. No chrome.*, no DOM.
 
 export interface VideoCandidate {
   /** Visible width/height in px, already clipped to the viewport. */

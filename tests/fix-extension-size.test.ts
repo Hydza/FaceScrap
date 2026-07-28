@@ -1,9 +1,9 @@
-// Guards the size budget: ~600 KB unpacked, all of it built from src/. It was 32.7 MB
+// Guards the size budget: ~806 KB unpacked, all of it built from src/. It was 32.7 MB
 // while it carried an ffmpeg core to run one merge, so the rule is one vendored binary
 // away from breaking. The remuxer's own correctness lives in fix-mp4-remux.test.ts.
 
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import test from 'node:test';
 
@@ -21,17 +21,51 @@ test('ships no runtime dependency at all', () => {
   assert.deepEqual(pkg.dependencies ?? {}, {}, 'dependencies must stay empty');
 });
 
-test('no ffmpeg or wasm remains in the extension or its build', () => {
+const DIST = join(ROOT, 'dist');
+// Headroom over today's ~806 KB, and still thirty times under the 32.7 MB the
+// ffmpeg era cost. A tripwire for a vendored binary coming back, not a
+// byte-level ratchet every esbuild bump has to renegotiate.
+const MAX_UNPACKED_BYTES = 1_048_576;
+
+function unpackedBytes(dir: string): number {
+  let total = 0;
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    // Chrome writes _metadata/ into an unpacked extension when it loads one.
+    // The build never emits it, so it is not part of what ships.
+    if (entry.name === '_metadata') continue;
+    const full = join(dir, entry.name);
+    total += entry.isDirectory() ? unpackedBytes(full) : statSync(full).size;
+  }
+  return total;
+}
+
+test(
+  'the unpacked build stays inside that budget',
+  { skip: existsSync(DIST) ? false : 'dist/ is not built here — nothing to weigh' },
+  () => {
+    const bytes = unpackedBytes(DIST);
+    assert.ok(
+      bytes <= MAX_UNPACKED_BYTES,
+      `dist/ is ${Math.round(bytes / 1024)} KB, past the ${MAX_UNPACKED_BYTES / 1024} KB ceiling`,
+    );
+  },
+);
+
+test('no ffmpeg or wasm remains in the extension, its build or its docs', () => {
   for (const file of [
     'scripts/build.mjs',
     'src/offscreen/offscreen.html',
     'src/background/service-worker.ts',
     'manifest.json',
+    'docs/flow.svg',
+    'docs/flow.es.svg',
   ]) {
     const source = read(...file.split('/'));
     // Comments in offscreen.ts and mp4-remux.ts still explain what was replaced and
-    // why, which is worth keeping; these four files must carry no live reference.
-    assert.doesNotMatch(source, /ffmpeg-core|FFmpegWASM|assets\/ffmpeg/, `${file} still wires up ffmpeg`);
+    // why, and both READMEs say outright that there is no bundled ffmpeg — those are
+    // the only places the name may appear. The two diagrams are on this list because
+    // they went on describing a merge this extension stopped doing.
+    assert.doesNotMatch(source, /ffmpeg/i, `${file} still names ffmpeg`);
   }
   // Nothing is loaded into the offscreen page but our own bundle.
   const html = read('src', 'offscreen', 'offscreen.html');
@@ -60,6 +94,24 @@ test('the remuxer never reads sample bytes into memory', () => {
   // Blob slices of the inputs. An arrayBuffer() over a track would quietly
   // reintroduce the heap cost a 500 MB reel used to pay.
   assert.match(remuxer, /blobs\[chunk\.track\]\.slice\(chunk\.srcStart, chunk\.srcEnd\)/);
-  const body = remuxer.slice(remuxer.indexOf('export async function remux('));
-  assert.doesNotMatch(body, /\.arrayBuffer\(\)/, 'remux must not pull any track into an ArrayBuffer');
+  // Banning arrayBuffer() outright would be a lie: the reader has to pull the
+  // metadata boxes in to find where the samples are. What must never be read is
+  // a SAMPLE range — so pin every call site instead of forbidding the call. The
+  // old form sliced the file at `export async function remux(`, which sits near
+  // the bottom, so it covered none of the three reads below.
+  const HEADER_READS = [
+    'at, Math.min(at + 16, blob.size)', // the 16-byte box head
+    'moof.start, moof.end',
+    'moovBox.start, moovBox.end',
+  ];
+  assert.deepEqual(
+    [...remuxer.matchAll(/\.slice\((.*?)\)\.arrayBuffer\(\)/g)].map((m) => m[1]),
+    HEADER_READS,
+    'every arrayBuffer() must read a box header, never a sample range',
+  );
+  assert.equal(
+    (remuxer.match(/\.arrayBuffer\(\)/g) ?? []).length,
+    HEADER_READS.length,
+    'an arrayBuffer() here reads something that is not one of the box headers above',
+  );
 });

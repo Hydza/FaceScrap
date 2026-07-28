@@ -180,14 +180,23 @@ export function paintNow(now: NowState | null, controls: NowControls): void {
     byId('now-qdims').textContent = dimsLabel(target);
     byId('now-qsize').textContent = sizeLabel(target, now.durationSec);
 
-    dl.disabled = controls.downloadsDisabled;
+    // aria-disabled, not `disabled`: this repaint is triggered BY the click on this very
+    // button, and disabling the focused node drops the keyboard to <body> with nothing to
+    // return to. The click handler refuses instead.
+    dl.setAttribute('aria-disabled', String(controls.downloadsDisabled));
+    // The reason was recorded and never read here: "Retry" alone does not say what went
+    // wrong. It rides on the control that retries, which is focusable — unlike the grid's
+    // tag, whose title no keyboard could reach.
+    const failure = failReason.get(nowKey);
     dl.textContent = cardBusy.has(nowKey)
       ? target.audioUrl != null
         ? t('downloadMerging')
         : t('downloadSaving')
-      : failReason.has(nowKey)
+      : failure != null
         ? t('downloadRetry')
         : fmt('nowSave', { kind: t(COMPOSE_KEY[now.kind]) });
+    if (failure == null) dl.removeAttribute('title');
+    else dl.title = failure;
   };
 
   // Videos only: a photo has no ladder to choose from, and its dimensions are on the
@@ -197,10 +206,12 @@ export function paintNow(now: NowState | null, controls: NowControls): void {
   const qcount = byId('now-qcount');
   const top = now.options[0];
   const upTo = top != null ? dimsLabel(top) : '';
+  // No `…One` twin here, unlike piecesInPost: the branch below only runs with two or
+  // more options, because one is what singleOption already answered with a blank note.
   qcount.textContent = singleOption
     ? ''
     : [
-        fmt(now.options.length === 1 ? 'resAvailableOne' : 'resAvailable', { n: now.options.length }),
+        fmt('resAvailable', { n: now.options.length }),
         upTo === '' ? undefined : fmt('resUpTo', { dims: upTo }),
       ]
         .filter((part) => part != null)
@@ -249,8 +260,13 @@ export function paintNow(now: NowState | null, controls: NowControls): void {
     }
   }
 
+  // paintRows() removes the row the keyboard may be standing on, and closing the list
+  // under it drops the focus to <body>. commit() and the Escape handler both hand it back
+  // to the trigger; this path has to as well.
+  const keyboardWasInList = list.contains(document.activeElement);
   paintRows();
   setPickerOpen(false);
+  if (keyboardWasInList) trigger.focus();
 
   trigger.onclick = (): void => {
     if (trigger.disabled) return;
@@ -267,7 +283,10 @@ export function paintNow(now: NowState | null, controls: NowControls): void {
 
   byId('now-dest').textContent = t(controls.subfolder ? 'savesToFolder' : 'savesToRoot');
   byId<HTMLButtonElement>('now-saveas').onclick = (): void => controls.onDownload(now.id, target, true);
-  dl.onclick = (): void => controls.onDownload(now.id, target);
+  dl.onclick = (): void => {
+    if (controls.downloadsDisabled) return;
+    controls.onDownload(now.id, target);
+  };
   paintTarget();
   schedulePlayPositions();
 }

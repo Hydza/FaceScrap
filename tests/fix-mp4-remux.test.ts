@@ -294,3 +294,342 @@ test('leaves a file with no edit list without one', async () => {
     assert.equal(track.edits, undefined, `${track.kind} grew an edit list out of nothing`);
   }
 });
+
+// ── The progressive shape ────────────────────────────────────────────────────
+// Both fixtures above are FRAGMENTED — Chromium's MediaRecorder emits moof/trun and
+// leaves the stbl empty. Facebook serves either shape, so every test up to here has
+// been exercising half the reader. These build the other half: one stbl carrying the
+// real stts/stsc/stsz/stco tables, wrapped around the real avc1 stsd of the fixture.
+//
+// Building it here rather than checking in a third fixture is deliberate: the sample
+// COUNT is the variable under test, and no checked-in file can be both small enough to
+// commit and long enough to reach the writer's limits.
+
+const u32b = (n: number): Buffer => {
+  const b = Buffer.alloc(4);
+  b.writeUInt32BE(n >>> 0, 0);
+  return b;
+};
+const boxOf = (type: string, ...parts: Buffer[]): Buffer => {
+  const body = Buffer.concat(parts);
+  return Buffer.concat([u32b(body.length + 8), Buffer.from(type, 'latin1'), body]);
+};
+const fullBoxOf = (type: string, version: number, flags: number, ...parts: Buffer[]): Buffer =>
+  boxOf(type, Buffer.from([version, (flags >> 16) & 0xff, (flags >> 8) & 0xff, flags & 0xff]), ...parts);
+/** Packed uint32 table. Spreading one argument per entry is what the writer under
+ *  test used to do, and this builder hit the very same RangeError writing the file
+ *  that was meant to expose it. */
+const u32Table = (values: number[]): Buffer => {
+  const out = Buffer.alloc(values.length * 4);
+  for (let i = 0; i < values.length; i++) out.writeUInt32BE(values[i]! >>> 0, i * 4);
+  return out;
+};
+
+interface ProgressiveSpec {
+  stsd: Uint8Array;
+  sampleCount: number;
+  timescale: number;
+  sampleDuration: number;
+  /** Varying sizes force the non-uniform stsz branch — the one with an entry per sample. */
+  size: (i: number) => number;
+  sync: (i: number) => boolean;
+  cts?: (i: number) => number;
+  cttsVersion?: 0 | 1;
+}
+
+/** A single-track progressive MP4: ftyp + moov(one stbl) + mdat, no fragments. */
+function progressiveVideo(spec: ProgressiveSpec): { blob: Blob; media: Buffer } {
+  const sizes = Array.from({ length: spec.sampleCount }, (_, i) => spec.size(i));
+  const media = Buffer.concat(
+    sizes.map((size, i) => Buffer.alloc(size, i & 0xff)),
+  );
+  const duration = spec.sampleCount * spec.sampleDuration;
+
+  const stts = fullBoxOf('stts', 0, 0, u32b(1), u32b(spec.sampleCount), u32b(spec.sampleDuration));
+  const syncIndexes = sizes.map((_, i) => i + 1).filter((_, i) => spec.sync(i));
+  const stss =
+    syncIndexes.length === spec.sampleCount
+      ? undefined
+      : fullBoxOf('stss', 0, 0, u32b(syncIndexes.length), u32Table(syncIndexes));
+  const ctts = spec.cts
+    ? fullBoxOf(
+        'ctts',
+        spec.cttsVersion ?? 0,
+        0,
+        u32b(spec.sampleCount),
+        // One run per sample: the count/value pairs an unencoded ctts carries.
+        u32Table(sizes.flatMap((_, i) => [1, spec.cts!(i)])),
+      )
+    : undefined;
+  // One chunk holding every sample keeps stco a single entry, so the two-pass
+  // offset fixup below only has one number to correct.
+  const stsc = fullBoxOf('stsc', 0, 0, u32b(1), u32b(1), u32b(spec.sampleCount), u32b(1));
+  const stsz = fullBoxOf('stsz', 0, 0, u32b(0), u32b(spec.sampleCount), u32Table(sizes));
+
+  const build = (mdatDataStart: number): Buffer => {
+    const stco = fullBoxOf('stco', 0, 0, u32b(1), u32b(mdatDataStart));
+    const stbl = boxOf(
+      'stbl',
+      Buffer.from(spec.stsd),
+      stts,
+      ...(ctts ? [ctts] : []),
+      ...(stss ? [stss] : []),
+      stsc,
+      stsz,
+      stco,
+    );
+    const dinf = boxOf('dinf', boxOf('dref', Buffer.concat([u32b(0), u32b(1), fullBoxOf('url ', 0, 1)])));
+    const vmhd = fullBoxOf('vmhd', 0, 1, Buffer.alloc(8));
+    const minf = boxOf('minf', vmhd, dinf, stbl);
+    const hdlr = fullBoxOf(
+      'hdlr',
+      0,
+      0,
+      u32b(0),
+      Buffer.from('vide', 'latin1'),
+      Buffer.alloc(12),
+      Buffer.from('VideoHandler\0', 'latin1'),
+    );
+    const mdhd = fullBoxOf(
+      'mdhd',
+      0,
+      0,
+      u32b(0),
+      u32b(0),
+      u32b(spec.timescale),
+      u32b(duration),
+      Buffer.from([0x55, 0xc4, 0, 0]), // 'und' + predefined
+    );
+    const mdia = boxOf('mdia', mdhd, hdlr, minf);
+    const matrix = Buffer.alloc(36);
+    matrix.writeUInt32BE(0x00010000, 0);
+    matrix.writeUInt32BE(0x00010000, 16);
+    matrix.writeUInt32BE(0x40000000, 32);
+    const tkhd = fullBoxOf(
+      'tkhd',
+      0,
+      0x000003,
+      u32b(0),
+      u32b(0),
+      u32b(1),
+      u32b(0),
+      u32b(duration),
+      Buffer.alloc(8),
+      Buffer.alloc(8), // layer, alternate group, volume, reserved
+      matrix,
+      u32b(160 << 16),
+      u32b(120 << 16),
+    );
+    const trak = boxOf('trak', tkhd, mdia);
+    const mvhd = fullBoxOf(
+      'mvhd',
+      0,
+      0,
+      u32b(0),
+      u32b(0),
+      u32b(spec.timescale),
+      u32b(duration),
+      u32b(0x00010000),
+      Buffer.from([1, 0]),
+      Buffer.alloc(10),
+      matrix,
+      Buffer.alloc(24),
+      u32b(2),
+    );
+    const moov = boxOf('moov', mvhd, trak);
+    const ftyp = boxOf('ftyp', Buffer.from('isom', 'latin1'), u32b(0x200), Buffer.from('isomiso2avc1mp41', 'latin1'));
+    return Buffer.concat([ftyp, moov, u32b(media.length + 8), Buffer.from('mdat', 'latin1'), media]);
+  };
+
+  // stco points at bytes whose position depends on the size of the box holding stco.
+  // Build once to measure, then again with the offset that measurement produced; the
+  // entry is fixed-width, so the second build has the same length as the first.
+  const measured = build(0);
+  const mdatDataStart = measured.length - media.length;
+  return { blob: new Blob([new Uint8Array(build(mdatDataStart))]), media };
+}
+
+test('reads a PROGRESSIVE MP4 — one stbl, no fragments — as faithfully as a fragmented one', async () => {
+  const { stsd } = await parseTrack(videoBlob);
+  const { blob, media } = progressiveVideo({
+    stsd,
+    sampleCount: 50,
+    timescale: 1000,
+    sampleDuration: 40,
+    size: (i) => 20 + (i % 5),
+    sync: (i) => i % 10 === 0,
+  });
+
+  const track = await parseTrack(blob);
+  assert.equal(track.kind, 'video');
+  assert.equal(track.timescale, 1000);
+  assert.equal(track.samples.length, 50, 'every stbl sample must be read');
+  assert.deepEqual(Buffer.from(track.stsd), Buffer.from(stsd), 'stsd copied verbatim on the progressive path too');
+  // The tables really were expanded, not defaulted: sizes vary, sync flags alternate,
+  // and the offsets walk the mdat in order.
+  const source = Buffer.from(await blob.arrayBuffer());
+  let walked = 0;
+  for (let i = 0; i < track.samples.length; i++) {
+    const s = track.samples[i]!;
+    assert.equal(s.size, 20 + (i % 5), `sample ${i}: stsz size`);
+    assert.equal(s.duration, 40, `sample ${i}: stts duration`);
+    assert.equal(s.sync, i % 10 === 0, `sample ${i}: stss flag`);
+    assert.deepEqual(source.subarray(s.offset, s.offset + s.size), media.subarray(walked, walked + s.size));
+    walked += s.size;
+  }
+});
+
+test('a progressive stsz declaring four billion samples is bounded by the box, not expanded', async () => {
+  // The same corruption tests/fix-mp4-remux.test.ts tried on the fragmented fixtures,
+  // where an empty stbl meant it never reached readSampleTable and the assertion could
+  // not fail. Here the stbl is the only source of samples, so it does.
+  const { stsd } = await parseTrack(videoBlob);
+  const { blob } = progressiveVideo({
+    stsd,
+    sampleCount: 40,
+    timescale: 1000,
+    sampleDuration: 40,
+    size: () => 16,
+    sync: () => true,
+  });
+  const bytes = Buffer.from(await blob.arrayBuffer());
+  const at = bytes.indexOf('stsz', 0, 'latin1');
+  assert.ok(at > 0, 'the built file must actually contain an stsz');
+  bytes.writeUInt32BE(0xffffffff, at + 12); // sample_count
+
+  const parsed = await parseTrack(new Blob([bytes])).catch((error: Error) => error);
+  if (parsed instanceof Error) return; // refusing outright is also correct
+  assert.ok(
+    parsed.samples.length <= 40,
+    `expanded ${parsed.samples.length} samples from a box that can hold 40`,
+  );
+});
+
+test('writes a sample table far past the argument limit of a variadic call', async () => {
+  // stsz, stss and stco carry one entry per sample. Spreading an argument per entry
+  // into box()/fullBox() threw `RangeError: Maximum call stack size exceeded` at about
+  // 62 400 entries — while the reader accepts MAX_SAMPLES_PER_TRACK = 1 500 000. Any
+  // video past roughly 25 minutes hit it, and the user saw only "Could not merge audio
+  // and video."
+  const { stsd } = await parseTrack(videoBlob);
+  const audio = await parseTrack(audioBlob);
+  const audioSeconds = seconds(audio);
+  const sampleCount = 90_000; // comfortably past the old ceiling
+  // Fit the whole track inside the audio so the shortest-track trim keeps every
+  // sample: it is the sample COUNT reaching the writer that this test is about.
+  const timescale = Math.ceil((sampleCount * 2) / (audioSeconds * 0.9));
+
+  const { blob, media } = progressiveVideo({
+    stsd,
+    sampleCount,
+    timescale,
+    sampleDuration: 2,
+    size: (i) => 8 + (i % 3), // non-uniform: forces the per-sample stsz branch
+    sync: (i) => i % 250 === 0, // sparse keyframes: forces a real stss
+  });
+
+  const merged = await remux(blob, audioBlob);
+  const out = Buffer.from(await merged.blob.arrayBuffer());
+  const outVideo = (await parseTracks(new Blob([out]))).find((t) => t.kind === 'video');
+  if (!outVideo) throw new Error('the output must still carry the video track');
+  const frames = outVideo.samples;
+  assert.equal(frames.length, sampleCount, 'every sample must survive the round trip');
+
+  // Spot-check byte identity at both ends and the middle rather than all 90 000: the
+  // point is that the tables address the right bytes, and a table built from a wrong
+  // offset is wrong everywhere, not in one place.
+  const offsets: number[] = [];
+  let walked = 0;
+  for (const sample of frames) {
+    offsets.push(walked);
+    walked += sample.size;
+  }
+  for (const i of [0, 1, sampleCount >> 1, sampleCount - 1]) {
+    const frame = frames[i]!;
+    assert.equal(frame.size, 8 + (i % 3), `sample ${i}: size`);
+    assert.equal(frame.sync, i % 250 === 0, `sample ${i}: sync flag`);
+    assert.deepEqual(
+      out.subarray(frame.offset, frame.offset + frame.size),
+      media.subarray(offsets[i]!, offsets[i]! + frame.size),
+      `sample ${i}: bytes`,
+    );
+  }
+});
+
+test('writes a version-1 ctts so a negative composition offset survives', async () => {
+  // The reader takes negative offsets from a v1 ctts and from a v1 trun; the writer
+  // always emitted v0, where the field is UNSIGNED. -512 came out as 4 294 966 784 and
+  // the player placed the frame four billion ticks away — a file that downloads
+  // "successfully" and does not present.
+  const { stsd } = await parseTrack(videoBlob);
+  const { blob } = progressiveVideo({
+    stsd,
+    sampleCount: 60,
+    timescale: 1000,
+    sampleDuration: 40,
+    size: () => 24,
+    sync: (i) => i % 10 === 0,
+    cts: () => -512,
+    cttsVersion: 1,
+  });
+
+  const source = await parseTrack(blob);
+  assert.ok(
+    source.samples.every((s) => s.cts === -512),
+    'the reader must take the negative offset, or this test proves nothing',
+  );
+
+  const merged = await remux(blob, audioBlob);
+  const outVideo = (await parseTracks(merged.blob)).find((t) => t.kind === 'video');
+  assert.ok(outVideo);
+  assert.ok(
+    outVideo.samples.every((s) => s.cts === -512),
+    `negative composition offsets must round-trip, got ${outVideo.samples[0]!.cts}`,
+  );
+});
+
+test('writes an empty stss rather than claiming every frame is a seek point', async () => {
+  // "No stss" means "every sample is a sync sample" — the reader says so itself. A
+  // track where NOTHING is a sync sample was falling into the same branch, so the
+  // output told players they could start decoding on any inter frame.
+  const { stsd } = await parseTrack(videoBlob);
+  const { blob } = progressiveVideo({
+    stsd,
+    sampleCount: 40,
+    timescale: 1000,
+    sampleDuration: 40,
+    size: () => 24,
+    sync: () => false,
+  });
+
+  const source = await parseTrack(blob);
+  assert.ok(source.samples.every((s) => !s.sync), 'the reader must see zero sync samples');
+
+  const merged = await remux(blob, audioBlob);
+  const outVideo = (await parseTracks(merged.blob)).find((t) => t.kind === 'video');
+  assert.ok(outVideo);
+  assert.ok(
+    outVideo.samples.every((s) => !s.sync),
+    'a track with no sync samples must not come out with all of them marked sync',
+  );
+});
+
+test('refuses a track whose stsd describes more than one codec', async () => {
+  // Every stsc entry is written with sample_description_index = 1, so a second
+  // description would silently decode its samples with the first one's parameters.
+  const { stsd } = await parseTrack(videoBlob);
+  const { blob } = progressiveVideo({
+    stsd,
+    sampleCount: 20,
+    timescale: 1000,
+    sampleDuration: 40,
+    size: () => 24,
+    sync: () => true,
+  });
+  const bytes = Buffer.from(await blob.arrayBuffer());
+  const at = bytes.indexOf('stsd', 0, 'latin1');
+  assert.ok(at > 0);
+  bytes.writeUInt32BE(2, at + 8); // entry_count, right after version+flags
+
+  await assert.rejects(() => parseTrack(new Blob([bytes])), /sample descriptions/i);
+});

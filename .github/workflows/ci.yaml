@@ -8,13 +8,24 @@ on:
 jobs:
   ci:
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        # Both ends of the supported range: the floor package.json declares (and
+        # scripts/test.mjs compiles the test bundles for) and the current release.
+        # A single pinned Node is how ">=18" survived next to `target: 'node20'`.
+        node-version: [20, 24]
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
         with:
-          node-version: 24
+          node-version: ${{ matrix.node-version }}
           cache: npm
       - run: npm ci
       - run: npm run typecheck
-      - run: npm test
+      # Build before the tests: the unpacked-size guard skips itself when dist/
+      # is absent, so building afterwards left it permanently skipped here.
       - run: npm run build
+      # generate-icons.mjs writes into the TRACKED icons/ directory as part of
+      # that build. It is deterministic; this is what keeps it that way.
+      - run: git diff --exit-code -- icons/
+      - run: npm test

@@ -34,12 +34,12 @@ export function setupPageHookIngress(runtime: ContentRuntime, deps: PageHookDeps
       const data = e.data;
       // Only `query` is honoured: `diag` on this channel is the hook reading its own
       // announcement back, not a request.
-      if (data && data.__facescrapCtl === true && data.query === true) {
+      if (data && data.__vpCtl === true && data.query === true) {
         deps.onHookProven();
         deps.announceDiag();
         return;
       }
-      if (!data || data.__facescrap !== true) return;
+      if (!data || data.__vpData !== true) return;
       if (data.diag !== undefined || data.log !== undefined) {
         deps.reportDiag(data.diag, data.log);
         return;

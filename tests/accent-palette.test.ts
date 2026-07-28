@@ -1,13 +1,19 @@
 // Every accent has to be readable, and the accent is now a user choice.
 //
 // The panel's fixed colours are checked by sidepanel-theme-contrast.test.ts, which reads the
-// tokens straight out of the stylesheet. That cannot see this palette: applyAppearance writes
-// --accent / --on-accent at runtime, so seven pairs bypass those assertions entirely. Two of
-// these entries (the reaction yellow, the signup green) are light enough that white text on
-// them lands near 2:1 — a single hardcoded white would have shipped two unreadable buttons.
+// tokens straight out of the stylesheet. It does not reach this palette: the accent and the
+// tint are one attribute-selected rule per entry, and it measures none of them. Two of these
+// entries (the reaction yellow, the signup green) are light enough that white text on them
+// lands near 2:1 — a single hardcoded white would have shipped two unreadable buttons.
 //
 // So the ratio is COMPUTED here for every entry rather than eyeballed when the hex was
 // picked, and a new accent cannot be added without clearing the same bar.
+//
+// Every ratio below is computed over the table in appearance.ts, and the panel paints the
+// stylesheet's copy of it — of the fields those ratios are made of, only `grad` has a reader
+// in src/ (settings-sheet.ts fills the swatch with it). A guarantee proved on the copy that
+// does not render is worth nothing, so every value of both palettes is also asserted equal to
+// the CSS declaration that does.
 
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
@@ -37,6 +43,26 @@ function contrast(foreground: string, background: string): number {
   const a = luminance(foreground);
   const b = luminance(background);
   return (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05);
+}
+
+/** The gradients are declared with a space after each comma and stated here without any, and
+ *  a rule may be written on one line or on six. Both sides of every comparison below are
+ *  compacted so the parity assertions test colours, not formatting. */
+const compact = (value: string): string => value.replace(/\s+/g, '').toLowerCase();
+
+/** One rule body out of the stylesheet, by exact selector. */
+function ruleBody(css: string, selector: string): string {
+  const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const body = css.match(new RegExp(`${escaped}\\s*\\{([^}]*)\\}`))?.[1];
+  assert.ok(body, `the stylesheet has no ${selector} rule`);
+  return body;
+}
+
+/** One custom property out of that rule. */
+function cssValue(css: string, selector: string, property: string): string {
+  const value = ruleBody(css, selector).match(new RegExp(`--${property}:\\s*([^;]+);`))?.[1];
+  assert.ok(value, `${selector} declares no --${property}`);
+  return compact(value);
 }
 
 test('every accent carries text that clears WCAG AA on it', () => {
@@ -104,6 +130,15 @@ test('every tint moves all four surfaces, in both themes', () => {
       new RegExp(`:root\\[data-theme="light"\\]\\[data-tint="${tint.id}"\\]`),
       `no light rule for ${tint.id}`,
     );
+    // And each half has to state THESE four surfaces. Existence alone would let the rule
+    // drift to colours the contrast assertions above never measured.
+    for (const [selector, surfaces] of [
+      [`:root[data-tint="${tint.id}"]`, tint.dark],
+      [`:root[data-theme="light"][data-tint="${tint.id}"]`, tint.light],
+    ] as const) {
+      const declared = ['cv', 'sf', 'sf2', 'ln'].map((name) => cssValue(css, selector, name));
+      assert.deepEqual(declared, surfaces.map(compact), `${selector} paints a different ${tint.id}`);
+    }
   }
 
   assert.equal(tintById('no-such-tint').id, DEFAULT_TINT);
@@ -127,9 +162,17 @@ test('the stylesheet carries every accent the schema accepts, per theme', () => 
       new RegExp(`:root\\[data-theme="light"\\]\\[data-accent="${accent.id}"\\]`),
       `no light --ach for ${accent.id}`,
     );
-    assert.ok(css.includes(accent.solid), `${accent.id}: --ac missing from the stylesheet`);
-    assert.ok(css.includes(accent.softDark), `${accent.id}: dark --ach missing from the stylesheet`);
-    assert.ok(css.includes(accent.softLight), `${accent.id}: light --ach missing from the stylesheet`);
+    // Every field of the entry, against the rule that renders it. `css.includes(…)` stood
+    // here and passed on a value declared under some OTHER accent — which is exactly how
+    // the two copies drift without anything going red.
+    const dark = `:root[data-accent="${accent.id}"]`;
+    const light = `:root[data-theme="light"][data-accent="${accent.id}"]`;
+    assert.equal(cssValue(css, dark, 'ac'), compact(accent.solid), `${accent.id}: --ac`);
+    assert.equal(cssValue(css, dark, 'acg'), compact(accent.grad), `${accent.id}: --acg`);
+    assert.equal(cssValue(css, dark, 'onac'), compact(accent.onAccent), `${accent.id}: --onac`);
+    assert.equal(cssValue(css, dark, 'ach'), compact(accent.softDark), `${accent.id}: dark --ach`);
+    assert.equal(cssValue(css, dark, 'acrgb'), compact(accent.rgb), `${accent.id}: --acrgb`);
+    assert.equal(cssValue(css, light, 'ach'), compact(accent.softLight), `${accent.id}: light --ach`);
   }
 });
 
@@ -163,8 +206,10 @@ test('ids are unique and every one has its own label', () => {
 
 test('an unknown accent falls back rather than reaching CSS', () => {
   // The stored value is a bare string, so a hand-edited store or a downgrade can hold an id
-  // this build no longer has. applyAppearance writes accentById's answer straight into a
-  // style property, and `undefined` there would silently drop the accent for the session.
+  // this build no longer has. What keeps it off the panel is normalizeSettings: applyAppearance
+  // writes `settings.accent` into a root attribute, and an unknown one there selects no rule at
+  // all. accentById has no caller in src/ today; it is asserted alongside so the table's own
+  // fallback cannot drift away from the schema's.
   assert.equal(accentById('no-such-accent').id, DEFAULT_ACCENT);
   assert.equal(accentById('').id, DEFAULT_ACCENT);
   for (const bad of ['brand ', 'BRAND', 42, null, {}]) {

@@ -10,7 +10,6 @@ test('the resolution note keeps its count and its ceiling in both languages', ()
   try {
     for (const lang of ['en', 'es'] satisfies Lang[]) {
       setLang(lang);
-      assert.match(fmt('resAvailableOne', { n: 1 }), /(^|\s)1(\s|$)/);
       assert.match(fmt('resAvailable', { n: 4 }), /(^|\s)4(\s|$)/);
       assert.ok(fmt('resUpTo', { dims: '2560×1440' }).includes('2560×1440'));
     }

@@ -12,8 +12,16 @@
 // Per-tab keys, not one global ledger. The service worker owns every receipt, so its
 // one serial lane orders completions from all panel windows.
 
-import { isFbcdn, MEDIA_KINDS, MEDIA_SOURCES, type MediaKind, type MediaSource } from './media';
-import { dataValues, isStorageQuotaError, readKey, serialQueue } from './session-write';
+import { serialQueue } from './async';
+import {
+  isFbcdn,
+  MEDIA_ID_MAX_LEN,
+  MEDIA_KINDS,
+  MEDIA_SOURCES,
+  type MediaKind,
+  type MediaSource,
+} from './media';
+import { dataValues, isStorageQuotaError, readKey } from './session-write';
 
 export interface SavedEntry {
   id: string;
@@ -38,10 +46,11 @@ const SAVED_MAX = 2000;
 const SAVED_BYTE_BUDGET = 262_144;
 export const SAVED_THUMB_MAX = 1024; // fbcdn image URLs run 300–500 chars; drop outliers
 export const SAVED_LABEL_MAX = 16;
-/** The card-id contract: a 2-char 'v:'/'i:' prefix over media.ts's 256-char item-id
- *  bound. Exported so the worker's inbound-receipt validation stays compile-time linked
- *  to this bound instead of carrying its own copy. */
-export const SAVED_ID_MAX = 258;
+/** The card-id contract: a 2-char 'v:'/'i:' prefix over media.ts's item-id bound,
+ *  derived from it rather than re-spelled so the two cannot drift. Exported so the
+ *  worker's inbound-receipt validation stays compile-time linked to this bound
+ *  instead of carrying its own copy. */
+export const SAVED_ID_MAX = MEDIA_ID_MAX_LEN + 2;
 const enqueueSaved = serialQueue();
 
 function isSavedEntry(x: unknown): x is SavedEntry {

@@ -52,9 +52,48 @@ class ByteLimitError extends Error {}
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
+/** Bytes received so far, held as sealed Blobs plus a small unsealed tail.
+ *
+ *  Sealing matters: a Uint8Array is always resident in the JS heap, while the
+ *  browser may back a Blob with disk. Holding every chunk of a 512 MB track as
+ *  Uint8Array until the very end made the offscreen document's peak memory the
+ *  size of both tracks at once. Sealing every SEAL_BYTES lets everything before
+ *  the tail leave the heap, and the sealed list is still discardable in one go
+ *  when a resume has to start over. */
 interface Buffered {
-  chunks: Uint8Array[];
+  sealed: Blob[];
+  tail: Uint8Array[];
+  tailBytes: number;
   bytes: number;
+}
+
+/** How much may sit unsealed in the heap. Small enough to bound the resident set,
+ *  large enough that a long track does not accumulate thousands of Blobs. */
+const SEAL_BYTES = 16 * 1024 * 1024;
+
+function sealTail(held: Buffered): void {
+  if (held.tail.length === 0) return;
+  held.sealed.push(new Blob(held.tail as unknown as BlobPart[]));
+  held.tail = [];
+  held.tailBytes = 0;
+}
+
+function discardHeld(held: Buffered, shared: SharedBudget | undefined, onBytes: (total: number) => void): void {
+  if (shared) shared.used -= held.bytes;
+  held.sealed = [];
+  held.tail = [];
+  held.tailBytes = 0;
+  held.bytes = 0;
+  onBytes(0);
+}
+
+/** The first byte a 206 actually starts at, or null if it did not say. */
+function contentRangeStart(res: Response): number | null {
+  const raw = res.headers.get('Content-Range');
+  const match = raw === null ? null : /^bytes\s+(\d+)-/i.exec(raw);
+  if (!match) return null;
+  const parsed = Number(match[1]);
+  return Number.isSafeInteger(parsed) ? parsed : null;
 }
 
 interface SharedBudget {
@@ -110,15 +149,30 @@ async function readAttempt(
         `Couldn't fetch the track (${res.status}). The fbcdn URL may have expired — reload the Facebook page.`,
       );
     }
-    // Asked to resume but got a full body: 206 means "here is the range you
-    // asked for", anything else means "here is the whole file". Appending it to
-    // what we already hold would duplicate the head and corrupt the track, so
-    // drop the old bytes and take this body as the complete one.
-    if (held.bytes > 0 && res.status !== 206) {
-      if (shared) shared.used -= held.bytes;
-      held.chunks.length = 0;
-      held.bytes = 0;
-      onBytes(0);
+    // Reconcile a resumed read with what the server actually sent. The status alone
+    // does not settle it: 206 says "this is A range", not "this is THE range you
+    // asked for", and a CDN node change or a middlebox can answer with a different
+    // offset. Appending that silently produces a file LONGER than the original,
+    // which the remuxer's bounds check (offset+size <= blob.size) cannot catch — so
+    // it would ship as a successful download of a broken file.
+    if (held.bytes > 0) {
+      const start = res.status === 206 ? contentRangeStart(res) : 0;
+      if (start === null) {
+        // A 206 with no Content-Range is malformed, but it is answering the Range
+        // request we just made, and the only other reading — "this is the whole
+        // file" — would DROP the head and truncate the track. Truncation is the
+        // failure mode the remuxer catches loudly; take the resume.
+      } else if (start === 0) {
+        // The whole file, whatever the status said. Keeping the head would
+        // duplicate it, so drop what we hold and take this body as complete.
+        discardHeld(held, shared, onBytes);
+      } else if (start !== held.bytes) {
+        // Some third offset. Nothing here can be stitched into what we hold, and
+        // guessing is how corruption ships. Throw away the partial and let the
+        // retry ladder start this track over from zero.
+        discardHeld(held, shared, onBytes);
+        throw new Error(`The server resumed at byte ${start} instead of the requested offset.`);
+      }
     }
     const advertised = contentLength(res);
     if (advertised !== null) {
@@ -140,9 +194,11 @@ async function readAttempt(
         ctrl.abort();
         throw overflow('combined', shared.limit);
       }
-      held.chunks.push(chunk);
+      held.tail.push(chunk);
+      held.tailBytes += chunk.byteLength;
       held.bytes += chunk.byteLength;
       if (shared) shared.used += chunk.byteLength;
+      if (held.tailBytes >= SEAL_BYTES) sealTail(held);
       onBytes(held.bytes);
     };
     if (!res.body) {
@@ -204,13 +260,15 @@ async function fetchTrackWithBudget(
   const stallMs = opts.stallMs ?? STALL_MS;
   const maxBytes = opts.maxBytes ?? MAX_DASH_TRACK_BYTES;
 
-  const held: Buffered = { chunks: [], bytes: 0 };
+  const held: Buffered = { sealed: [], tail: [], tailBytes: 0, bytes: 0 };
   for (let attempt = 1; ; attempt++) {
     try {
       await readAttempt(url, held, onBytes, doFetch, stallMs, maxBytes, shared, opts.signal);
-      // The cast covers ArrayBufferLike vs ArrayBuffer only: a fetch body is
-      // never backed by a SharedArrayBuffer here (no cross-origin isolation).
-      return new Blob(held.chunks as unknown as BlobPart[]);
+      // Concatenating Blobs copies no bytes through JS — the result references the
+      // same stores. The cast covers ArrayBufferLike vs ArrayBuffer only: a fetch
+      // body is never backed by a SharedArrayBuffer here (no cross-origin isolation).
+      sealTail(held);
+      return new Blob(held.sealed);
     } catch (e) {
       // A status the server will repeat is not worth three round trips.
       if (e instanceof HardHttpError || e instanceof ByteLimitError || opts.signal?.aborted || attempt >= attempts) throw e;

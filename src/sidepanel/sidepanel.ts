@@ -7,20 +7,24 @@
 // Library and Saved share a 9:16 tile grid where a tile does one thing — it selects —
 // and selecting raises the tray that saves the picks.
 //
-// This file is the controller: it owns the panel's state, builds the card model, and
-// decides when to repaint. The surfaces around it own no state — each is handed what
-// to paint and calls back on click, so the state lives in exactly one place:
+// This file is the controller: it owns the panel's MODEL state — settings, view,
+// filter, tracked tab, picks, render signatures — builds the card model, and decides
+// when to repaint. The surfaces own their own INTERACTION state (which Settings page
+// is showing, whether the picker is open, which key is being captured) and expose it
+// as predicates this file reads, so no model state lives outside here:
 //
 //   card-view / now-view     paint a tile, paint the live post
 //   settings-sheet           the four Settings pages, their search and their controls
 //   download                 hand one item to the worker, report whether it landed
 //   panel-theme              which theme is painted, and the signals that change it
 //   media-play               thumbnail pairs and where the play glyph sits
+//   panel-keys               the keyboard cursor and its shortcuts
+//   marquee                  the long-title scroll
+//   panel-background         the custom backdrop behind the panel's surfaces
 //   tab-state, format        per-tab memory; presentation vocabulary
 
 import {
   fbAssetKeys,
-  imagePixelArea,
   legacyMediaId,
   mediaId,
   resolutionOf,
@@ -29,7 +33,7 @@ import {
   type MediaKind,
 } from '../shared/media';
 import { itemCardId, savedEntryForItem, videoCardId } from '../shared/download-naming';
-import { defaultTarget, isDownloadable, videoOptions, willHaveAudio } from '../shared/video-options';
+import { belowMinResolution, defaultTarget, isDownloadable, videoOptions, willHaveAudio } from '../shared/video-options';
 import { fmt, getLang, LANG_KEY, resolveLang, saveLang, setLang, t, type Lang, type MsgKey } from '../shared/i18n';
 import { diagError, diagLogDrain, setDiagContext, setDiagLogEnabled } from '../shared/diag-log';
 import { addDiagEvents } from '../shared/diag-store';
@@ -60,6 +64,7 @@ import { byId, composeLine, estimatedBytes, formatBytes, pressOnly, tn } from '.
 import { downloadOne } from './download';
 import { applyEffectiveTheme, setupPanelTheme } from './panel-theme';
 import {
+  applySearch,
   closeSettingsSheet,
   focusSettingsSearch,
   isDiagOpen,
@@ -159,6 +164,9 @@ function localize(): void {
   }
   // Keep the document language in sync so screen readers announce in the right one.
   document.documentElement.lang = getLang();
+  // Every [data-search] row was just rewritten: an active query filtered against the
+  // previous language's text would go on hiding rows that now match.
+  applySearch();
 }
 
 /** Auto / EN / ES, which is one control over two stored facts: whether to follow the
@@ -289,15 +297,6 @@ function buildVideoCard(group: MediaItem[], tid: number | undefined, playing: Se
   };
 }
 
-/** Does the minimum-resolution setting hide this video group? One predicate, because
- *  the Library grid and Now Playing must agree on what it hides. A group with no
- *  known height is never hidden — an unmeasured video is not a low-quality one. */
-function belowMinResolution(group: MediaItem[]): boolean {
-  if (settings.minResolution <= 0) return false;
-  const maxH = Math.max(0, ...group.map((i) => i.height ?? 0));
-  return maxH > 0 && maxH < settings.minResolution;
-}
-
 /** Card for a non-video item. Videos always go through buildVideoCard — doRender
  *  splits them off before reaching here. */
 function buildItemCard(item: MediaItem, playing: Set<string>): Card {
@@ -337,7 +336,7 @@ function buildNowState(
   if (playingVideo) {
     const key = videoGroupKey(playingVideo);
     const group = groups.get(key) ?? [playingVideo];
-    if (belowMinResolution(group)) return null;
+    if (belowMinResolution(group, settings.minResolution)) return null;
     const { options, gkey, thumbUrl, durationSec } = videoOptions(group, videoOptionsContext(tid));
     if (options.length === 0) return null;
     return {
@@ -353,21 +352,10 @@ function buildNowState(
   }
   // "Videos only" hides images/audio from every view, this one included.
   if (settings.videosOnly) return null;
-  const firstImage = playingItems.find((i) => i.kind === 'image' && isDownloadable(i));
-  // The first active image anchors the visible resource. Rank only equivalent
-  // canonical variants so a larger photo buried in another overlay can never
-  // replace what the centre detector actually selected.
-  const img = firstImage == null
-    ? undefined
-    : playingItems
-        .filter((i) => i.kind === 'image' && isDownloadable(i) && i.id === firstImage.id)
-        .reduce<MediaItem | undefined>((best, candidate) => {
-          if (best == null) return candidate;
-          const areaDelta = imagePixelArea(candidate) - imagePixelArea(best);
-          return areaDelta > 0 || (areaDelta === 0 && candidate.addedAt > best.addedAt)
-            ? candidate
-            : best;
-        }, undefined);
+  // The first active image is the one the centre detector selected, and there is
+  // nothing to rank it against: `items` comes from getMedia, which merges by id, so
+  // no two entries here are variants of the same photo.
+  const img = playingItems.find((i) => i.kind === 'image' && isDownloadable(i));
   if (!img) return null;
   return {
     id: itemCardId(img.id),
@@ -568,8 +556,7 @@ async function runBulk(): Promise<void> {
       for (const { id, err } of failed) failReason.set(tabKey(tid, id), err);
     }
     if (tid === tabId) {
-      lastRenderSig = ''; // the saved list and the failure tags feed the cards
-      lastCheapSig = '';
+      invalidateRenderCache(); // the saved list and the failure tags feed the cards
       await render();
     }
     // Unconditional: `bulkRunning` held every tab's tray button disabled, so every
@@ -588,8 +575,16 @@ let renderQueued = false;
 let lastRenderSig = '';
 // Cheap proxy for `sig` (see doRender), computed from raw inputs alone so an
 // unchanged tick can bail before the card-model rebuild. Must be reset everywhere
-// lastRenderSig is: out of step, it would short-circuit a forced rebuild.
+// lastRenderSig is: out of step, it would short-circuit a forced rebuild — which is
+// why every forced rebuild clears the pair through one function rather than by hand.
 let lastCheapSig = '';
+
+/** Force the next render to rebuild instead of bailing on an unchanged signature. */
+function invalidateRenderCache(): void {
+  lastRenderSig = '';
+  lastCheapSig = '';
+}
+
 // Hold signature-changing rebuilds while the quality picker is open — paintNow
 // rebuilds its options, tearing them out from under the open list, and capture bursts
 // churn the signature exactly while the user is picking. See qualityPickerRenderHoldMs
@@ -722,7 +717,7 @@ async function doRender(): Promise<void> {
   const cards: Card[] = [];
   for (const group of groups.values()) {
     const card = buildVideoCard(group, tid, playing);
-    if (belowMinResolution(group)) card.libraryHidden = true;
+    if (belowMinResolution(group, settings.minResolution)) card.libraryHidden = true;
     cards.push(card);
   }
   // An image that is only a Library-VISIBLE video's cover is a dupe under "All" — but
@@ -996,8 +991,7 @@ function setupSelectAll(): void {
       if (allPicked) selected.delete(c.id);
       else selected.add(c.id);
     }
-    lastRenderSig = ''; // picks paint in place and are not a signature term — force the rebuild
-    lastCheapSig = '';
+    invalidateRenderCache(); // picks paint in place and are not a signature term — force the rebuild
     void render();
   });
 }
@@ -1149,11 +1143,19 @@ async function init(): Promise<void> {
     byId('now-empty-lib').addEventListener('click', () => {
       byId('views').querySelector<HTMLButtonElement>('[data-view="library"]')?.click();
     });
-    byId('clear-picks').addEventListener('click', () => {
+    const clearPicks = (): void => {
+      if (selected.size === 0) return;
       selected.clear();
-      lastRenderSig = ''; // picks paint in place and are not a signature term
-      lastCheapSig = '';
+      invalidateRenderCache(); // picks paint in place and are not a signature term
       void render();
+    };
+    byId('clear-picks').addEventListener('click', clearPicks);
+    // Clicking the empty space around the tiles drops the selection, the way every
+    // file manager does it. Only when the grid ITSELF is the target: a click that
+    // landed on a tile bubbles up here too, and dropping the selection on the way
+    // out of a tile press would make selecting anything impossible.
+    byId('list').addEventListener('click', (event) => {
+      if (event.target === event.currentTarget) clearPicks();
     });
     // The pill has to follow the scroll, not just the render that drew the list.
     byId('list').addEventListener('scroll', paintScrollPill, { passive: true });
@@ -1195,8 +1197,7 @@ async function init(): Promise<void> {
           console.error('[FaceScrap]', e);
         }
       }
-      lastRenderSig = '';
-      lastCheapSig = '';
+      invalidateRenderCache();
       await render();
     });
 
@@ -1319,8 +1320,7 @@ async function init(): Promise<void> {
       // two empty tabs share a signature, and a skipped render would leave the
       // outgoing tab's grid on screen.
       selected.clear();
-      lastRenderSig = '';
-      lastCheapSig = '';
+      invalidateRenderCache();
       await loadBindings(info.tabId); // restore the incoming tab's bindings before its first render
       if (revision !== activationRevision || tabId !== info.tabId) return;
       void render();

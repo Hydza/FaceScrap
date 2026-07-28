@@ -5,6 +5,7 @@
 // the busy/failed/saved bookkeeping — which is keyed by CARD, and an item does not
 // know which card is downloading it — stays with the caller.
 
+import { withHeartbeat } from '../shared/async';
 import type { MediaItem } from '../shared/media';
 import { downloadFilename } from '../shared/download-naming';
 import { t } from '../shared/i18n';
@@ -14,7 +15,6 @@ import { dashDownloadKey } from '../shared/download-settlement';
 import {
   DASH_UI_HARD_CAP_MS,
   DASH_UI_IDLE_MS,
-  withRearmableHardCap,
   type DownloadDirectMsg,
   type DownloadDirectResponse,
   type DownloadDashMsg,
@@ -25,7 +25,7 @@ import {
  *  panel (the caller gates on that), so a single slot suffices — same below. */
 let muxBeat: (() => void) | null = null;
 /** dashDownloadKey of the DASH job THIS panel is waiting on, plus the function that
- *  rebases its hard cap once that job actually starts (withRearmableHardCap,
+ *  rebases its hard cap once that job actually starts (withHeartbeat's armStarted,
  *  DASH_UI_HARD_CAP_MS). Matching by key keeps another window's queued job from
  *  rebasing this wait — unlike FACESCRAP_MUX_PROGRESS, which beats on ANY job's
  *  progress: right for an idle timer, wrong for a hard-cap rebase. */
@@ -67,7 +67,7 @@ async function startDashDownload(
   // this wait recognises its OWN FACESCRAP_DASH_JOB_STARTED without a round trip.
   const key = dashDownloadKey({ tabId: tid, receiptId: receipt.id, videoUrl: item.url, audioUrl, filename, saveAs });
   try {
-    const guarded = withRearmableHardCap(
+    const guarded = withHeartbeat(
       chrome.runtime.sendMessage({
         type: 'FACESCRAP_DOWNLOAD_DASH',
         tabId: tid,

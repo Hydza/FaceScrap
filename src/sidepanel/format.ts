@@ -3,7 +3,7 @@
 // A leaf: reads no panel state, imports no other panel module. Keep it that way and
 // any view can import it without risking a cycle.
 
-import { fmt, t, type MsgKey } from '../shared/i18n';
+import { fmt, getLang, t, type MsgKey } from '../shared/i18n';
 import type { MediaItem, MediaKind, MediaSource } from '../shared/media';
 import { bitrate } from '../shared/video-options';
 
@@ -70,12 +70,34 @@ export function estimatedBytes(item: MediaItem, durationSec: number | undefined)
 }
 
 /** "~18 MB" for an estimate, "18.4 MB" for a counted one. Empty for 0, so a missing
- *  estimate leaves its column blank rather than printing a confident zero. */
+ *  estimate leaves its column blank rather than printing a confident zero.
+ *
+ *  Three units, not one. With only an MB tier, everything under half a megabyte
+ *  rounded to "~0 MB" — which is the confident zero this function exists to avoid,
+ *  and it is the COMMON case: a nine-second reel at a few hundred kbps is a few
+ *  hundred KB, so the picker showed every option weighing nothing.
+ *
+ *  Numbers go through Intl so the decimal separator follows the panel's language:
+ *  toFixed always emits a point, and "18.4 MB" is not how a size is written in
+ *  Spanish. */
 export function formatBytes(bytes: number, exact = false): string {
   if (bytes <= 0) return '';
-  const mb = bytes / 1_048_576;
-  if (exact) return mb >= 1024 ? `${(mb / 1024).toFixed(2)} GB` : `${mb.toFixed(1)} MB`;
-  return mb >= 1024 ? `~${(mb / 1024).toFixed(1)} GB` : `~${Math.round(mb)} MB`;
+  const KB = 1024;
+  const MB = 1_048_576;
+  const GB = 1_073_741_824;
+  const num = (value: number, decimals: number): string =>
+    new Intl.NumberFormat(getLang(), {
+      minimumFractionDigits: decimals,
+      maximumFractionDigits: decimals,
+    }).format(value);
+
+  const [value, decimals, unit] =
+    bytes >= GB
+      ? [bytes / GB, exact ? 2 : 1, 'GB']
+      : bytes >= MB
+        ? [bytes / MB, exact ? 1 : 0, 'MB']
+        : [bytes / KB, 0, 'KB'];
+  return `${exact ? '' : '~'}${num(value, decimals)} ${unit}`;
 }
 
 /** Seconds → "M:SS" (or "H:MM:SS" past an hour). */

@@ -54,6 +54,46 @@ test('remains pending after enqueue and resolves only on matching complete', asy
   assert.equal(fake.listeners.size, 0);
 });
 
+test('stops waiting on a download the user paused instead of holding the worker awake', async () => {
+  // `paused` keeps a download in `in_progress` for as long as the user leaves it
+  // there, so this promise never settled: the caller's keepalive kept pinging, the
+  // MV3 worker never slept, and the panel card stayed busy until the panel closed.
+  const fake = fakeDownloads([{ id: 21, state: 'in_progress' } as chrome.downloads.DownloadItem]);
+  const pending = waitForDownloadSettlement(fake.api, 21, { stallMs: 60_000 });
+  await Promise.resolve();
+  fake.emit({ id: 21, paused: { current: true } });
+  await assert.rejects(pending, /paused/i);
+  assert.equal(fake.listeners.size, 0, 'the listener must be removed on the way out');
+  assert.deepEqual(fake.cancelled, [], 'giving up must not cancel: the browser owns the download');
+});
+
+test('gives up on a download that reports no new bytes for the stall window', async () => {
+  const stuck = { id: 22, state: 'in_progress', bytesReceived: 4096 } as chrome.downloads.DownloadItem;
+  const fake = fakeDownloads([stuck]);
+  // 750 ms window → the 250 ms poll floor, so three samples of an unchanged count.
+  const pending = waitForDownloadSettlement(fake.api, 22, { stallMs: 750 });
+  await assert.rejects(pending, /stopped making progress/i);
+  assert.equal(fake.listeners.size, 0);
+});
+
+test('does not give up on a slow download that is still moving', async () => {
+  const moving = { id: 23, state: 'in_progress', bytesReceived: 0 } as chrome.downloads.DownloadItem;
+  const fake = fakeDownloads([moving]);
+  const pending = waitForDownloadSettlement(fake.api, 23, { stallMs: 750 });
+  // Advance the byte count faster than the window closes, for longer than the
+  // window, then complete. A moving download must never be called stalled.
+  const ticking = setInterval(() => {
+    moving.bytesReceived += 1024;
+  }, 100);
+  const timer = setTimeout(() => fake.emit({ id: 23, state: { current: 'complete' } }), 1_500);
+  try {
+    await pending;
+  } finally {
+    clearInterval(ticking);
+    clearTimeout(timer);
+  }
+});
+
 test('rejects an interrupted download with the browser reason and cleans up', async () => {
   const fake = fakeDownloads();
   const pending = waitForDownloadSettlement(fake.api, 9);

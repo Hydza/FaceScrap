@@ -1,6 +1,9 @@
 # Normalize text to LF in the repo, regardless of each machine's git config.
 * text=auto eol=lf
 
-# Never munge binary assets.
+# Never munge binary assets. The .mp4 fixtures matter as much as the images:
+# tests/fix-mp4-remux.test.ts compares their bytes one by one, and an eol
+# normalization pass would rewrite 0x0d 0x0a runs inside sample data.
 *.png binary
 *.woff2 binary
+*.mp4 binary

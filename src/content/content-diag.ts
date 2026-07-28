@@ -3,18 +3,22 @@
 // This script is the only capture context that can both read settings and talk to the
 // worker, so it owns the flag for the MAIN-world hook as well as for its own DOM scan.
 
-import { sanitizeDiagCounters, setDiagEnabled, type DiagReason } from '../shared/diag';
 import {
+  createCounterCoalescer,
+  sanitizeDiagCounters,
+  setDiagEnabled,
+  type DiagReason,
+} from '../shared/diag';
+import {
+  createEventRing,
   DIAG_EVENT_MAX,
   diagLog,
   diagLogDrain,
   sanitizeDiagEvents,
   setDiagContext,
   setDiagLogEnabled,
-  type DiagEvent,
 } from '../shared/diag-log';
 import { loadSettings } from '../shared/settings';
-import { createCounterCoalescer } from './content-ingress-limits';
 import type { ContentRuntime } from './content-runtime';
 
 const DIAG_REPORT_INTERVAL_MS = 1_000;
@@ -46,8 +50,7 @@ interface DiagChannel {
 export function setupDiagChannel(runtime: ContentRuntime): DiagChannel {
   setDiagContext('content');
   const reports = createCounterCoalescer<DiagReason>();
-  let queued: DiagEvent[] = [];
-  let dropped = 0;
+  const queued = createEventRing(DIAG_EVENT_QUEUE_MAX);
   let enabled = false;
   let flushTimer: number | undefined;
 
@@ -57,8 +60,7 @@ export function setupDiagChannel(runtime: ContentRuntime): DiagChannel {
       flushTimer = undefined;
     }
     reports.drain();
-    queued = [];
-    dropped = 0;
+    queued.clear();
     diagLogDrain();
   };
 
@@ -71,12 +73,9 @@ export function setupDiagChannel(runtime: ContentRuntime): DiagChannel {
     const counters = reports.drain();
     // This script's OWN events (diagLog calls from the detector bands) join
     // whatever the page hook handed over, in one message.
-    const events = [...queued, ...diagLogDrain()];
-    queued = [];
-    if (dropped > 0) {
-      events.unshift({ at: Date.now(), ctx: 'content', ev: 'logOverflow', lvl: 'warn', data: { dropped } });
-      dropped = 0;
-    }
+    // `where` disambiguates the overflow markers: this bundle drains TWO rings
+    // into one message, and an unlabelled logOverflow would not say which lost.
+    const events = [...queued.drain('content', { where: 'hook' }), ...diagLogDrain()];
     if (Object.keys(counters).length === 0 && events.length === 0) return;
     runtime.send({ type: 'DIAG_REPORT', counters, events, documentToken: runtime.documentToken });
   };
@@ -87,7 +86,7 @@ export function setupDiagChannel(runtime: ContentRuntime): DiagChannel {
 
   const announce = (): void => {
     if (!runtime.alive()) return;
-    window.postMessage({ __facescrapCtl: true, diag: enabled }, '*');
+    window.postMessage({ __vpCtl: true, diag: enabled }, '*');
   };
 
   const publish = (): void => {
@@ -107,7 +106,7 @@ export function setupDiagChannel(runtime: ContentRuntime): DiagChannel {
           // never started.
           armFlush();
         }
-        window.postMessage({ __facescrapCtl: true, diag: s.diagEnabled }, '*');
+        window.postMessage({ __vpCtl: true, diag: s.diagEnabled }, '*');
       })
       .catch(() => {
         enabled = false;
@@ -121,14 +120,25 @@ export function setupDiagChannel(runtime: ContentRuntime): DiagChannel {
   // A page being unloaded is exactly when the last events matter (the navigation
   // that lost the capture), and the report timer would not fire again.
   window.addEventListener('pagehide', flush, { signal: runtime.signal });
+  // Named, not anonymous, so teardown can take it back. A torn-down channel that
+  // stays subscribed keeps calling publish() on every settings write, and a
+  // re-injected instance then has two of them racing on the same flag.
+  const onSettingsChanged = (changes: Record<string, chrome.storage.StorageChange>, area: string): void => {
+    if (area === 'local' && 'settings' in changes) publish();
+  };
   try {
-    chrome.storage.onChanged.addListener((changes, area) => {
-      if (area === 'local' && 'settings' in changes) publish();
-    });
+    chrome.storage.onChanged.addListener(onSettingsChanged);
   } catch {
     /* context gone — the flag stays off */
   }
-  runtime.onTeardown(clearPending);
+  runtime.onTeardown(() => {
+    clearPending();
+    try {
+      chrome.storage.onChanged.removeListener(onSettingsChanged);
+    } catch {
+      /* extension context already invalidated */
+    }
+  });
 
   return {
     report: (counters, events) => {
@@ -148,13 +158,7 @@ export function setupDiagChannel(runtime: ContentRuntime): DiagChannel {
       const cleanEvents = sanitizeDiagEvents(events, DIAG_EVENT_MAX + 1);
       if (Object.keys(clean).length === 0 && cleanEvents.length === 0) return;
       if (Object.keys(clean).length > 0) reports.add(clean);
-      for (const event of cleanEvents) {
-        queued.push(event);
-        if (queued.length > DIAG_EVENT_QUEUE_MAX) {
-          queued.shift();
-          dropped += 1;
-        }
-      }
+      for (const event of cleanEvents) queued.push(event);
       armFlush();
     },
     note: (ev, data, lvl) => {

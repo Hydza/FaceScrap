@@ -1,13 +1,15 @@
 // Now-playing inference: given a tab's captured items plus the signals the
 // content script relays (centered ids, slide marker, freshly fetched tracks),
 // decide which video groups the user is actually watching. Storage-backed
-// logic with no DOM access; the side panel is the only consumer — it feeds
-// render() through selectPlaying() and wires the lifecycle hooks
-// (loadBindings / flushBindingsNow / purgeTabBindings / forgetLastLive) to
-// its tab events.
+// logic with no DOM access. Two consumers, and only one of them may write:
+// the side panel feeds render() through selectPlaying() and getGroupCover(),
+// and wires (loadBindings / flushBindingsNow / purgeTabBindings) to its tab
+// events; the worker's in-page button reads the same evidence through
+// playingVideoGroup() / rememberedVideoGroup() and endorses nothing (the
+// split is documented at playingEvidence below).
 
 import {
-  canonicalizeHistoricalMediaId,
+  activeMediaIds,
   fbAssetKeys,
   historicalAliasOwners,
   matchesActiveMediaId,
@@ -18,12 +20,12 @@ import {
 } from './media';
 import { exponentialBackoffMs, withTimeout } from './async';
 import { diagBump } from './diag';
-import {
-  playingTimestampIsFutureEpoch,
-  type PersistBindingsAck,
-  type PersistBindingsMsg,
-  type PinPlayingMediaMsg,
+import type {
+  PersistBindingsAck,
+  PersistBindingsMsg,
+  PinPlayingMediaMsg,
 } from './messages';
+import { playingTimestampIsFutureEpoch } from './playing-clock';
 import {
   getBindRecord,
   getPlaying,
@@ -35,6 +37,7 @@ import {
   setPlayingMediaPin,
   type BindState,
 } from './storage';
+import { DEFAULT_SETTINGS } from './settings';
 import { durableStoryCardKey, durableStoryMarkPortion, isProvisionalStoryMark, storyDomIdFromMark } from './story-mark';
 
 // An MSE-played video (blob: currentSrc, never in ref.ids) only matches via fetched
@@ -152,7 +155,9 @@ export function getGroupCover(tid: number, groupKey: string): string | undefined
   return groupCover.get(`${tid}:${groupKey}`);
 }
 
-/** Forget a closed tab's last-live memory. */
+/** Forget a closed tab's last-live memory. Not on any production path: a strict
+ *  subset of purgeTabBindings, kept because two tests reset state between cases
+ *  with it. */
 export function forgetLastLive(tid: number): void {
   lastLive.delete(tid);
   emptiedUnder.delete(tid);
@@ -204,6 +209,15 @@ async function persistPlayingPin(tid: number, identity: string, groups: Set<stri
 // through a worker-owned versioned CAS. Each tab keeps its own immutable
 // in-flight snapshot, so tab switches and concurrent retries cannot cross-wire.
 // lastLive is intentionally NOT persisted (see storage.ts).
+//
+// Transport, not decision — but not a module of its own either. Its only WRITERS
+// into the maps above are three functions, and all three carry DECISION
+// invariants rather than transport ones: dropBindingMemory also clears
+// bindDisagree, which is never persisted; restoreBindingState re-applies both
+// remember()'s BIND_MAX FIFO and the markBind provenance filter that endorse()
+// and selectPlaying mirror; and purgeTabBindings has to reset the outbox and
+// that memory in ONE call or the F5 race below reopens. (bindingState only
+// READS the maps into a snapshot; it carries no invariant of its own.)
 const BIND_ACK_TIMEOUT_MS = 5_000;
 const BIND_RETRY_MIN_MS = 250;
 const BIND_RETRY_MAX_MS = 8_000;
@@ -412,7 +426,14 @@ interface ItemKeys {
   audioMid: string | null;
 }
 const NO_KEYS: ItemKeys = { keys: [], audioKeys: [], audioMid: null };
-const ITEM_KEYS_CACHE_MAX = 600;
+// Sized ABOVE the retention cap on purpose. selectPlaying walks up to settings.maxItems
+// items per tick, so a cache smaller than one walk evicts each entry a step before the
+// next tick reaches it and the hit rate is exactly 0 — which is what 600 was against a
+// default cap of 1500. Twice the default also leaves room for a second tab's working set
+// (the key is tab+item). A user who raises maxItems past this is back to a cold cache,
+// which is slow, not wrong. Coupled by comment, like ALT_CONFIRM_REFRESH_MS in
+// recent-observer.ts: re-check it if DEFAULT_SETTINGS.maxItems changes.
+const ITEM_KEYS_CACHE_MAX = DEFAULT_SETTINGS.maxItems * 2;
 const itemKeysCache = new Map<string, { url: string; audioUrl: string | undefined; keys: ItemKeys }>();
 function keysOf(tid: number, i: MediaItem): ItemKeys {
   const cacheKey = `${tid}:${i.id}`;
@@ -450,7 +471,7 @@ function keysOf(tid: number, i: MediaItem): ItemKeys {
  * service worker holds none of the panel's in-memory state and passes what it
  * read out of storage. The names match so the moved body needed no edits.
  */
-export function playingEvidence(
+function playingEvidence(
   tid: number,
   items: MediaItem[],
   ref: Awaited<ReturnType<typeof getPlaying>>,
@@ -459,11 +480,7 @@ export function playingEvidence(
   coverBind: Map<string, string>,
   markBind: Map<string, string>,
 ) {
-  const active = new Set(ref?.ids ?? []);
-  for (const id of [...active]) {
-    const canonical = canonicalizeHistoricalMediaId(id);
-    if (canonical != null) active.add(canonical);
-  }
+  const active = activeMediaIds(ref?.ids);
   // A previous release stored generic endpoints as path-only ids. Accept that
   // alias only when it names exactly one current canonical resource; if several
   // safe_image.php rows exist, honest-empty is safer than selecting all of them
@@ -720,13 +737,9 @@ export function playingEvidence(
   };
   return {
     active,
-    historicalOwners,
-    tracks,
-    trackSigs,
     slideAt,
     domMatch,
     domLive,
-    fetchScore,
     fetchNewest,
     fetchClosestToSlide,
     fetchOldestNear,

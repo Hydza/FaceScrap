@@ -8,7 +8,16 @@
  */
 import { isNumericMediaId } from './media';
 
-const STORY_PATH = /\/stories\/([^/]+)\/([^/]+)/;
+// The second segment is OPTIONAL, and that is the whole point.
+//
+// A story opened from the tray lands on /stories/<set>/<card>/. A profile HIGHLIGHT
+// lands on /stories/<set>/ with the card only in ?source=profile_highlight — the exact
+// shape media.ts already documents for labelling the surface. Requiring two segments
+// meant isStoryPath() said "not a story" there, storyCardMark() returned '' before it
+// ever looked at the DOM, and the card got no mark at all: no durable id to bind a
+// cover to, no mark for the revisit rescue, so Now Playing had nothing to anchor on
+// and showed nothing while the Library filled up normally.
+const STORY_PATH = /\/stories\/([^/?#]+)(?:\/([^/?#]+))?/;
 const STORY_DOM_ID = /^Uz[A-Za-z0-9_-]{10,252}={0,2}$/;
 const DECODED_STORY_DOM_ID_PREFIXES = ['S:_ISC:', 'S3:'] as const;
 
@@ -99,7 +108,14 @@ export function isStoryPath(pathname: string): boolean {
 export function storyCardMark(pathname: string, domId?: string): string {
   const match = pathname.match(STORY_PATH);
   if (!match) return '';
-  return isStoryDomId(domId) ? `u:${match[1]}/${domId}` : `p:${match[1]}/${match[2]}`;
+  // A DOM-proven card id makes the URL's second segment irrelevant, which is what
+  // lets the one-segment highlight form mint a durable mark at all.
+  if (isStoryDomId(domId)) return `u:${match[1]}/${domId}`;
+  // Without one, the provisional mark needs the URL to distinguish cards — and on a
+  // highlight it cannot, because every slide shares the same path. Minting
+  // `p:<set>/undefined` there would hand every slide one identity; no mark is the
+  // honest answer, and it is what this surface already produced before.
+  return match[2] != null ? `p:${match[1]}/${match[2]}` : '';
 }
 
 /** Extract the DOM card id only from the durable story portion of a mark. */

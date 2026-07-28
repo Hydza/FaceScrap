@@ -6,20 +6,20 @@
 // only shows that one; this map is here so the other four don't have to be
 // rediscovered by grepping four other files:
 //
-//   media    (content.ts, pumpMedia)          exponential: baseMs=500,
+//   media    (content-media-relay.ts, pump)   exponential: baseMs=500,
 //                                              capMs=10s (exponentialBackoffMs,
 //                                              shared/async.ts). Uses
 //                                              createAckedBatch.
-//   theme    (content.ts, scheduleThemeRetry) fixed 1s. Uses this module
+//   theme    (content-theme.ts, scheduleRetry) fixed 1s. Uses this module
 //                                              (createAckedLatest); pump() is
 //                                              ALSO re-armed by the theme
 //                                              MutationObserver/matchMedia
 //                                              listeners, independent of the
 //                                              timer.
-//   playing  (content.ts, deliverPlaying)     no timer of its own: a 'retry'
+//   playing  (content-playing.ts, deliver)    no timer of its own: a 'retry'
 //                                              outcome just leaves `pending`
 //                                              set below, and the next tick of
-//                                              the 300ms detectPlaying() poller
+//                                              the 300ms detect() poller
 //                                              re-offers and re-pumps it. Uses
 //                                              this module.
 //   bindings (now-playing.ts, retryBindings)  exponential: baseMs=250,

@@ -10,6 +10,33 @@ import {
   storyCardMark,
 } from '../src/shared/story-mark';
 
+// A profile highlight opens at /stories/<set>/ with the card only in the query —
+// one path segment, not two. Requiring two meant this surface produced no mark at
+// all, so Now Playing had nothing to anchor a highlight on and stayed empty while
+// the Library filled with the very same captures.
+const HIGHLIGHT_PATH = '/stories/976731645401448/';
+const CARD_DOM_ID = 'UzM6NTU1NTU1NTU1NTU1NTU1';
+
+test('a profile highlight path is a story path, with or without a trailing card segment', () => {
+  assert.equal(isStoryPath(HIGHLIGHT_PATH), true, 'one-segment highlight');
+  assert.equal(isStoryPath('/stories/976731645401448'), true, 'without the trailing slash');
+  assert.equal(isStoryPath('/stories/owner-name/url-card-id/'), true, 'the two-segment tray form');
+  assert.equal(isStoryPath('/reel/123456789/'), false);
+});
+
+test('a highlight card still earns a durable mark from its DOM id', () => {
+  // The DOM id is what makes a mark durable; the URL's second segment is only the
+  // fallback. A highlight has no second segment, so before this it got neither.
+  assert.equal(storyCardMark(HIGHLIGHT_PATH, CARD_DOM_ID), `u:976731645401448/${CARD_DOM_ID}`);
+  assert.equal(isDurableStoryMark(storyCardMark(HIGHLIGHT_PATH, CARD_DOM_ID)), true);
+});
+
+test('a highlight with no DOM id yields no mark rather than one every slide shares', () => {
+  // `p:976731645401448/undefined` would give every slide of the highlight the same
+  // provisional identity — worse than none, because it compares equal across cards.
+  assert.equal(storyCardMark(HIGHLIGHT_PATH), '');
+});
+
 test('uses a durable u: marker when the active story card exposes a DOM id', () => {
   assert.equal(
     storyCardMark('/stories/owner-name/url-card-id/', 'UzM6NTU1NTU1NTU1NTU1NTU1'),

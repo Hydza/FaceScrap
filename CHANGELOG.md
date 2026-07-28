@@ -4,10 +4,22 @@ All notable changes to FaceScrap are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [1.0.1] - 2026-07-28
 
 ### Added
 
+- **The DASH merge moved in-repo.** `src/shared/mp4-remux.ts` replaces
+  `ffmpeg.wasm`: it merges the video and audio tracks by copying their sample
+  bytes and writing a new sample table around them — the same result
+  `-c copy -shortest` gave, in ~30 KB instead of a 30.7 MB wasm core, and with
+  no sample byte passing through JS. The unpacked extension went from 32.7 MB
+  to ~806 KB, and `manifest.json` no longer grants `wasm-unsafe-eval`: there is
+  no wasm left to compile.
+- **A download button on the video itself**, overlaid on what is playing and
+  switchable off in Settings, plus an `Alt+Shift+D` shortcut that downloads the
+  current video without opening the panel.
+- **Settings rebuilt** as a full-panel sheet, with keyboard navigation and drag
+  selection across the card grid.
 - **Diagnostics report.** The opt-in diagnostics switch now records an event log
   next to its counters: per GraphQL response the query name, its size and what
   was extracted from it (including HTTP failures and bodies dropped for size),
@@ -20,6 +32,12 @@ All notable changes to FaceScrap are documented here. The format follows
   Bounded to 2 000 events / ~700 KB, and it reports its own truncation.
   `faceScrapDiag.log()` and `faceScrapDiag.report()` expose the same data from
   the service-worker console.
+
+### Changed
+
+- The side panel's colour and density were redesigned and 17 audited UI defects
+  were fixed across it; the brand mark now comes from one SVG, which both the
+  panel header and the generated toolbar PNGs read.
 
 ### Fixed
 
@@ -39,6 +57,26 @@ All notable changes to FaceScrap are documented here. The format follows
 - The content script's first diagnostic event (`contentReady`) was recorded
   without arming its report timer, so on an otherwise idle tab it never reached
   the worker — the trace read as if the content script had never started.
+- **Long videos could not be remuxed at all.** Every output table carrying one
+  entry per sample was spread into a variadic call, which throws a `RangeError`
+  at around 62 000 arguments — a small fraction of the sample count this
+  remuxer claims to handle. Those tables are now written in one allocation.
+- **Negative composition offsets were written as ~4.29 billion.** A version-0
+  `ctts` field is unsigned, so the negative offsets modern packagers emit by
+  default placed frames four billion ticks away; the box is now emitted as
+  version 1 whenever any offset is negative.
+- A track with no sync samples at all was written with no `stss` box, which
+  means the opposite — that every sample is a seek target.
+- A track declaring more than one sample description is now refused outright,
+  instead of being remuxed with every sample described by the first codec's
+  parameters.
+- **Resumed track downloads trusted whatever range they were sent.** A 206 says
+  "a range", not "the range that was asked for": the `Content-Range` is now
+  checked, and a mismatch restarts the track rather than producing a file
+  longer than the original, which no later bounds check could have caught.
+- Received bytes are sealed into `Blob`s as they arrive instead of being held
+  as one growing list of `Uint8Array`, so a large track no longer keeps both
+  tracks resident in the offscreen document's heap at once.
 
 ## [1.0.0] - 2026-07-24
 

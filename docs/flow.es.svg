@@ -94,7 +94,7 @@
   <rect x="818" y="1076" width="6" height="70" rx="3" fill="#d29922"/>
   <text x="846" y="1094" font-size="19" font-weight="700" fill="#d29922">HD · DASH (los de blob:)</text>
   <text x="846" y="1124" font-size="15.5" fill="#8b949e">offscreen.ts baja las pistas de video y audio,</text>
-  <text x="846" y="1148" font-size="15.5" fill="#8b949e">luego ffmpeg.wasm las combina — stream copy, sin recodificar.</text>
+  <text x="846" y="1148" font-size="15.5" fill="#8b949e">luego mp4-remux.ts las combina — stream copy, sin recodificar.</text>
 
   <!-- pie -->
   <text x="720" y="1224" font-size="16" font-style="italic" fill="#6e7681" text-anchor="middle">En ambos casos termina como un .mp4 normal en tu carpeta de Descargas.</text>

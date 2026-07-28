@@ -6,7 +6,7 @@
 // id. The log exists to be exported and handed to someone, so a token surviving
 // redaction is not a cosmetic bug: it hands over a working link to media the user
 // may not have meant to share. The bounds tests matter for a duller reason —
-// storage.local is shared with the Saved ledger and the settings.
+// storage.local is shared with the settings and the language key.
 
 import assert from 'node:assert/strict';
 import test from 'node:test';
@@ -45,14 +45,20 @@ const FBCDN =
 test('strips the signature, session and expiry from an fbcdn URL', () => {
   const redacted = redactUrl(FBCDN);
 
-  assert.equal(redacted, 'scontent-mad1-1.xx.fbcdn.net/v/t42.1790-2/487321_1234567890_n.mp4?bytestart=0&byteend=524287');
+  // The filename is the third segment, so it leaves with the rest of the tail:
+  // `487321_1234567890_n` names one asset, `/v/t42.1790-2` only names its kind.
+  assert.equal(redacted, 'scontent-mad1-1.xx.fbcdn.net/v/t42.1790-2/…?bytestart=0&byteend=524287');
   for (const secret of ['oh=', 'oe=', '_nc_sid', '_nc_ohc', 'efg=']) {
     assert.ok(!redacted.includes(secret), `${secret} survived redaction`);
   }
+  assert.ok(!redacted.includes('1234567890'), 'the asset id survived redaction');
 });
 
-test('keeps a facebook.com path but never its query', () => {
-  assert.equal(redactUrl('https://www.facebook.com/reel/1234567890?s=single_unit&t=6'), 'www.facebook.com/reel/1234567890');
+test('keeps what a facebook.com path names, never which item it names', () => {
+  // The surface is what makes a trace readable; the id is what makes the person in
+  // it identifiable, and this log exists to be handed to someone.
+  assert.equal(redactUrl('https://www.facebook.com/reel/1234567890?s=single_unit&t=6'), 'www.facebook.com/reel/<id>');
+  assert.equal(redactUrl('https://www.facebook.com/stories/9876543210987/'), 'www.facebook.com/stories/<id>');
 });
 
 test('records nothing identifying for a blob or data URL', () => {
@@ -254,4 +260,32 @@ test('names an unknown throwable without letting it grow unbounded', () => {
   assert.equal(errorText(new TypeError('bad shape')), 'TypeError: bad shape');
   assert.equal(errorText({ toString: () => 'x'.repeat(500) }).length, 200);
   assert.equal(errorText(null), 'null');
+});
+
+test('the observer names its own ring when a burst outruns the pending bound', () => {
+  // Three rings bound this path, and a gap in the exported trace is only readable if
+  // it says which of them dropped the events. That `where` was the one thing the
+  // three hand-copied rings did NOT have in common.
+  const writes: DiagEvent[][] = [];
+  const observer = createDiagObserver({
+    write: async () => {},
+    writeEvents: async (events) => {
+      writes.push(events);
+    },
+    maxPendingEvents: 2,
+    schedule: () => 1,
+    cancel: () => {},
+  });
+  observer.setEnabled(true);
+
+  for (let i = 1; i <= 4; i += 1) observer.report(7, {}, [{ at: i, ctx: 'hook', ev: `e${i}` }]);
+
+  return observer.flush().then(() => {
+    assert.deepEqual(
+      writes[0]!.map((e) => e.ev),
+      ['logOverflow', 'e3', 'e4'],
+      'the survivors are the newest, and the gap is reported before them',
+    );
+    assert.deepEqual(writes[0]![0]!.data, { dropped: 2, where: 'observer' });
+  });
 });

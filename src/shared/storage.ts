@@ -4,13 +4,23 @@
 // content scripts relay via messages instead.
 //
 // Durability lives in session-write.ts; the Saved ledger in saved.ts and the diagnostic
-// counters in diag-store.ts are separate key spaces and separate files.
+// counters in diag-store.ts are separate key spaces and separate files. One key here is
+// NOT per-tab: `caps`, the runtime capability flags the worker publishes once and the
+// panel reads back (last section of this file).
+//
+// Importing this module has effects. It reads Settings at evaluation and again on every
+// change, caching maxItems and setting this context's diag flag from diagEnabled — so
+// there is no inert import of this file. That is deliberate: every context that imports
+// storage.ts is one that can discard a capture, and the flag has to reach it without each
+// context remembering to ask for it.
 //
 // Order here is dependency order: keys and readers first, then the retention rules that
 // classify against them, then the writers that hold the lanes, then media and bindings.
 
+import { createChainLock, keyedSerialQueue } from './async';
 import { diagBump, setDiagEnabled } from './diag';
 import {
+  activeMediaIds,
   fbAssetKeys,
   historicalAliasOwners,
   isFbcdn,
@@ -21,14 +31,12 @@ import {
   videoGroupKey,
   type MediaItem,
 } from './media';
-import { playingTimestampIsFutureEpoch } from './messages';
+import { playingTimestampIsFutureEpoch } from './playing-clock';
 import { durableStoryMarkPortion, isProvisionalStoryMark, storyDomIdFromMark } from './story-mark';
 import { dropSaved } from './saved';
 import {
-  createChainLock,
   dataValues,
   isStorageQuotaError,
-  keyedSerialQueue,
   logWriteError,
   readKey,
   writeCaptureState,
@@ -146,6 +154,9 @@ const RECENT_BURST_MAX = 96;
 const RECENT_BURST_MS = 4_000;
 const RECENT_BOUNDARY_MS = 12_000;
 const RECENT_PER_BOUNDARY_GROUP_MAX = 8;
+// Two, because a slide boundary has exactly two sides: the card being left and the one
+// being entered. A third would start reserving whatever the viewer preloaded past them.
+const RECENT_BOUNDARY_GROUPS = 2;
 
 function recentGroupKey(track: RecentTrack): string {
   return fbAssetKeys(track.url)[0] ?? mediaId(track.url);
@@ -154,7 +165,6 @@ function recentGroupKey(track: RecentTrack): string {
 function boundaryRecentGroups(
   tracks: readonly RecentTrack[] | undefined,
   ref: PlayingRef | null,
-  limit = 2,
 ): Map<string, number> {
   if (ref?.hasVideo !== true || tracks == null) return new Map();
   const distanceByGroup = new Map<string, number>();
@@ -164,7 +174,7 @@ function boundaryRecentGroups(
     const group = recentGroupKey(track);
     distanceByGroup.set(group, Math.min(distance, distanceByGroup.get(group) ?? Infinity));
   }
-  return new Map([...distanceByGroup].sort((a, b) => a[1] - b[1]).slice(0, limit));
+  return new Map([...distanceByGroup].sort((a, b) => a[1] - b[1]).slice(0, RECENT_BOUNDARY_GROUPS));
 }
 
 function retainRecentTracks(tracks: RecentTrack[], at: number, ref: PlayingRef | null): RecentTrack[] {
@@ -239,18 +249,22 @@ async function getPlayingMediaPin(tabId: number): Promise<PlayingMediaPin | null
   return sanitizePlayingMediaPin(await readKey<unknown>(playingPinKey(tabId), null));
 }
 
-/** `owners` must be historicalAliasOwners(items) built from the SAME batch
- *  `item` is drawn from (see partitionMediaForRetention's one-per-batch build) —
- *  shared with now-playing.ts's selection matcher (domMatchFresh) so a row
- *  whose stored id predates the current canonical scheme is protected from
- *  eviction exactly when the panel is already displaying it as playing. */
+/** `owners` must be historicalAliasOwners(items) and `active` must be
+ *  activeMediaIds(ref.ids), BOTH built once from the same batch `item` is drawn
+ *  from (see partitionMediaForRetention's one-per-batch builds) — shared with
+ *  now-playing.ts's selection matcher (domMatchFresh) so a row whose stored id
+ *  predates the current canonical scheme is protected from eviction exactly
+ *  when the panel is already displaying it as playing. The REF side of that
+ *  parity is the activeMediaIds() expansion: a ref left over from the older
+ *  scheme has to be expanded here too, or the panel selects a row this refuses
+ *  to protect. */
 function isExactPlayingItem(
   item: MediaItem,
   ref: PlayingRef | null,
+  active: ReadonlySet<string>,
   owners: ReadonlyMap<string, Set<string>>,
 ): boolean {
   if (ref == null) return false;
-  const active = new Set(ref.ids);
   if (matchesActiveMediaId(item, active, owners)) return true;
   if (item.thumbUrl != null && active.has(mediaId(item.thumbUrl))) return true;
   const storyId = storyDomIdFromMark(ref.mark);
@@ -297,12 +311,15 @@ async function partitionMediaForRetention(
   // alias branch needs whole-batch ownership to know an alias is unambiguous,
   // and re-deriving that per item would be quadratic in batch size.
   const aliasOwners = historicalAliasOwners(items);
+  // Same one-per-batch rule: expanding the ref's ids re-canonicalizes each one
+  // (URL parsing per alias id), so it must not run once per item either.
+  const activeIds = activeMediaIds(ref?.ids);
   const ordinary: MediaItem[] = [];
   const protectedItems: { item: MediaItem; priority: number }[] = [];
   for (const item of items) {
     const group = item.kind === 'video' ? videoGroupKey(item) : undefined;
     const distance = group == null ? undefined : boundary.get(group);
-    const priority = isExactPlayingItem(item, ref, aliasOwners)
+    const priority = isExactPlayingItem(item, ref, activeIds, aliasOwners)
       ? 3_000_000
       : group != null && pinnedGroups.has(group)
         ? 2_000_000

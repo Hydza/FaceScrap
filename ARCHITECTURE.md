@@ -37,7 +37,7 @@ Three properties of that file are load-bearing:
 detected and discarded on purpose. Widevine cannot be decrypted by any
 extension; do not add code that tries.
 
-**Nothing ships but our own bundles.** The unpacked extension is ~600 KB, and every
+**Nothing ships but our own bundles.** The unpacked extension is ~820 KB, and every
 byte of it is built from `src/`. It was 32.7 MB while it carried an ffmpeg core to
 run one merge; do not reintroduce a vendored binary without a reason that survives
 that comparison. `manifest.json` no longer grants `wasm-unsafe-eval` either — there

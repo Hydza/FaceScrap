@@ -53,6 +53,9 @@ interface QueueEntry<T> {
   item: T;
   weight: number;
   failures: number;
+  /** options.key(item), computed once when the entry is queued. merge() is contracted to
+   *  return an item of the SAME key, so this can never drift from `item`. */
+  key?: unknown;
 }
 
 function positiveInteger(value: number, name: string): void {
@@ -121,11 +124,14 @@ export function createAckedBatch<T, K = never>(options: AckedBatchOptions<T, K>)
 
     for (const incoming of items) {
       const incomingWeight = weigh(incoming);
+      const incomingKey = options.key?.(incoming);
       if (options.key != null) {
-        const incomingKey = options.key(incoming);
         let match = -1;
+        // Compare the key CACHED on each entry instead of recomputing key() per candidate:
+        // this scan runs for every incoming item over a queue of up to maxPending (2,000
+        // for media), so key() was being called once per queued entry per item.
         for (let index = inFlightCount; index < queue.length; index++) {
-          if (Object.is(options.key(queue[index].item), incomingKey)) {
+          if (Object.is(queue[index].key, incomingKey)) {
             match = index;
             break;
           }
@@ -159,9 +165,13 @@ export function createAckedBatch<T, K = never>(options: AckedBatchOptions<T, K>)
             removeAt(evictionIndexes[index]);
             result.dropped++;
           }
-          const currentMatch = queue.indexOf(matchedEntry);
+          // Mutated in place instead of re-inserted: the evictions above may have shifted
+          // the match's index, and finding it again was a second linear pass. Nothing
+          // outside this array holds the entry — a batch in flight copies items, not
+          // entries — and the merged item answers to the same key, so `key` still holds.
           totalWeight += delta;
-          queue[currentMatch] = { item: merged, weight: mergedWeight, failures: matchedEntry.failures };
+          matchedEntry.item = merged;
+          matchedEntry.weight = mergedWeight;
           result.merged++;
           continue;
         }
@@ -171,7 +181,7 @@ export function createAckedBatch<T, K = never>(options: AckedBatchOptions<T, K>)
         result.dropped++;
         continue;
       }
-      queue.push({ item: incoming, weight: incomingWeight, failures: 0 });
+      queue.push({ item: incoming, weight: incomingWeight, failures: 0, key: incomingKey });
       totalWeight += incomingWeight;
       result.added++;
     }

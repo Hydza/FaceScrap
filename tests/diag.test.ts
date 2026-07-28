@@ -1,7 +1,14 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { diagBump, diagDrain, diagSnapshot, sanitizeDiagCounters, setDiagEnabled } from '../src/shared/diag';
+import {
+  createCounterCoalescer,
+  diagBump,
+  diagDrain,
+  diagSnapshot,
+  sanitizeDiagCounters,
+  setDiagEnabled,
+} from '../src/shared/diag';
 
 // The module keeps process-wide counters (one instance per bundled context in
 // production), so every test starts from a known-empty state. setDiagEnabled(false)
@@ -78,4 +85,18 @@ test('sanitization reads only the fixed diagnostic whitelist', () => {
   });
 
   assert.deepEqual(sanitizeDiagCounters(guarded), { captureDom: 2 });
+});
+
+test('counter coalescer combines reports, saturates, and drains once', () => {
+  type Reason = 'graphql' | 'dom';
+  const coalescer = createCounterCoalescer<Reason>();
+
+  coalescer.add({ graphql: Number.MAX_SAFE_INTEGER - 2, dom: 1 });
+  coalescer.add({ graphql: 10, dom: 2 });
+
+  assert.deepEqual(coalescer.drain(), {
+    graphql: Number.MAX_SAFE_INTEGER,
+    dom: 3,
+  });
+  assert.deepEqual(coalescer.drain(), {});
 });

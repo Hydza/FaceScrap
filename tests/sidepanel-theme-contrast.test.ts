@@ -106,15 +106,14 @@ test('keeps primary and supporting text at WCAG AA on every tint, in both themes
   assert.deepEqual([...RECORDED_SHORTFALLS.keys()].filter((key) => !seen.has(key)), []);
 });
 
-test('records what the idle status pill costs, in the handoff’s own colours', () => {
-  // The pill is --ft over rgba(255,255,255,.05) on the header surface — the design's
-  // values verbatim. Composited, that lands at 3.8–4.1:1 across the six dark tints:
-  // under AA for a 11px label. It is the one control the handoff's own contrast rule
-  // ("anything interactive uses --md") argues against, and it is kept because the
-  // handoff draws it that way. Pinned so the number cannot drift further.
+test('keeps the idle status pill at AA over its own wash', () => {
+  // The pill's background is a wash, so its label is not measured against a token but
+  // against the COMPOSITE. The design's --ft lands at 3.8–4.1:1 there — under AA for an
+  // 11px label — so the pill takes --md, which is what the handoff's own contrast rule
+  // ("anything interactive uses --md") points at anyway. Pinned so it cannot drift back.
   assert.match(css, /\.status-pill\.is-idle\s*\{[^}]*background:\s*rgba\(255,\s*255,\s*255,\s*0\.05\)/s);
-  assert.match(css, /\.status-pill\.is-idle\s*\{[^}]*color:\s*var\(--ft\)/s);
-  const ft = token(':root', 'ft');
+  assert.match(css, /\.status-pill\.is-idle\s*\{[^}]*color:\s*var\(--md\)/s);
+  const md = token(':root', 'md');
   for (const tint of PANEL_TINTS) {
     const surface = tint.dark[1];
     const composited =
@@ -125,8 +124,8 @@ test('records what the idle status pill costs, in the handoff’s own colours', 
         .map((channel) => Math.round(255 * 0.05 + Number.parseInt(channel, 16) * 0.95))
         .map((channel) => channel.toString(16).padStart(2, '0'))
         .join('');
-    const ratio = contrast(ft, composited);
-    assert.ok(ratio >= 3.8, `idle pill on ${tint.id}/dark fell to ${ratio.toFixed(2)}:1`);
+    const ratio = contrast(md, composited);
+    assert.ok(ratio >= 4.5, `idle pill on ${tint.id}/dark fell to ${ratio.toFixed(2)}:1`);
   }
 });
 

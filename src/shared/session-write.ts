@@ -1,9 +1,12 @@
 // How this extension writes to chrome.storage.session safely.
 //
-// No domain knowledge: the capture keys, the Saved ledger and the diagnostics
-// counters all sit on top of these. Two hazards are handled here so no caller has to:
-// storage.session's ~10 MB quota is SHARED by every Facebook tab, and a
-// read-modify-write cycle on one key must never interleave with another.
+// No domain knowledge: the capture keys and the Saved ledger both sit on top of
+// these. The hazard handled here so no caller has to: storage.session's ~10 MB quota
+// is SHARED by every Facebook tab, so a control write can find the area already full
+// of someone else's Library rows. The ordering those same callers need is NOT
+// specific to this area — it is async.ts's chain lock and keyed lanes.
+
+import { createChainLock } from './async';
 
 const CONTROL_HEADROOM_KEY = 'capture_control_headroom_v1';
 const CONTROL_HEADROOM_BYTES = 512 * 1024;
@@ -19,46 +22,6 @@ export const readKey = async <T>(key: string, fallback: T): Promise<T> =>
  *  burst cannot leave the panel with media rows but no pointer to what is playing. */
 export function dataValues(values: Record<string, unknown>): Record<string, unknown> {
   return { [CONTROL_HEADROOM_KEY]: CONTROL_HEADROOM, ...values };
-}
-
-// A chain mutex. Each CALL creates its own closed-over `chain`, so separate locks keep
-// guarding their own resource — never collapse two callers into one shared lock.
-export function createChainLock(): <T>(task: () => Promise<T>) => Promise<T> {
-  let chain: Promise<void> = Promise.resolve();
-  return function withLock<T>(task: () => Promise<T>): Promise<T> {
-    const run = chain.then(task);
-    chain = run.then(
-      () => undefined,
-      () => undefined,
-    );
-    return run;
-  };
-}
-
-/** One ordered lane per key: read-modify-write cycles on a key must run one at a
- *  time, but unrelated keys must never wait on each other's writes. A failure is
- *  reported through onError and does NOT poison the lane for the next task. */
-export function keyedSerialQueue(): (
-  key: number,
-  task: () => Promise<void>,
-  onError: (err: unknown) => void,
-) => Promise<void> {
-  const chains = new Map<number, Promise<void>>();
-  return (key, task, onError) => {
-    const run = (chains.get(key) ?? Promise.resolve()).then(task);
-    const settled = run.catch(onError);
-    chains.set(key, settled);
-    void settled.then(() => {
-      if (chains.get(key) === settled) chains.delete(key);
-    });
-    return settled;
-  };
-}
-
-/** The same lane, for a key space with only one member. */
-export function serialQueue(): (task: () => Promise<void>, onError: (err: unknown) => void) => Promise<void> {
-  const lane = keyedSerialQueue();
-  return (task, onError) => lane(0, task, onError);
 }
 
 /** A small single-key write (playing/recent/bind) cannot shed bytes of its own to

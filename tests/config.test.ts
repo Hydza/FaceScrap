@@ -15,9 +15,25 @@ import { resetChromeStorage } from './chrome-fake';
 const readJson = (rel: string): unknown => JSON.parse(readFileSync(join(process.cwd(), rel), 'utf8'));
 const readSrc = (rel: string): string => readFileSync(join(process.cwd(), rel), 'utf8');
 
-test('package.json declares the Node engine the toolchain needs', () => {
+test('package.json declares the Node engine the toolchain actually targets', () => {
   const pkg = readJson('package.json') as { engines?: { node?: string } };
-  assert.ok(pkg.engines?.node, 'a from-source builder on old Node gets no guidance without an engines field');
+  const floor = /^>=(\d+)/.exec(pkg.engines?.node ?? '');
+  assert.ok(floor, 'a from-source builder on old Node gets no guidance without a ">=N" engines field');
+  // A truthy check passed while the field said >=18 next to `target: 'node20'`.
+  // The bundles are down-levelled to exactly one Node; a floor below it promises
+  // support for a runtime nothing was ever compiled for.
+  const target = /target: 'node(\d+)'/.exec(readSrc('scripts/test.mjs'));
+  assert.ok(target, 'scripts/test.mjs must keep declaring its esbuild Node target');
+  assert.equal(Number(floor[1]), Number(target[1]), 'engines.node and the esbuild target must name the same Node');
+});
+
+test('the manifest and package.json ship one version', () => {
+  const pkg = readJson('package.json') as { version?: string };
+  const manifest = readJson('manifest.json') as { version?: string };
+  // The release zip is named from the manifest and the repo is tagged from
+  // package.json. Two numbers here is a release nobody can identify afterwards.
+  assert.match(String(pkg.version), /^\d+\.\d+\.\d+$/);
+  assert.equal(manifest.version, pkg.version);
 });
 
 test('DASH_UI_HARD_CAP_MS is derived strictly above one full worker job worst case', () => {
@@ -202,7 +218,64 @@ test('E4: a dash download completed before a simulated worker restart is not re-
     );
     assert.equal(handled, true);
   });
-  assert.deepEqual(response, { ok: true });
+  // Success, but flagged: nothing was downloaded and no Saved receipt was
+  // rewritten. A bare `{ ok: true }` here is what let a second Download on a card
+  // whose file the user had deleted answer "saved" for half an hour.
+  assert.deepEqual(response, { ok: true, deduped: true });
+});
+
+// C1 regression, the in-page twin of E4: the button (and the global shortcut, which
+// runs the same handler with the active tab as its sender) shares downloadDash with
+// the panel. It used to discard that answer and write the Saved receipt anyway, so a
+// second press on a file the user had deleted reported it saved without moving a byte
+// — the exact regression E4 pins on the panel's own path.
+test('C1: a deduped in-page download writes no Saved receipt', async () => {
+  assert.ok(onMessage, 'runtime.onMessage listener was not registered');
+  const { addMedia, getMedia, setPlaying } = await import('../src/shared/storage');
+  const { makeItem, videoGroupKey } = await import('../src/shared/media');
+  const { downloadFilename, videoCardId } = await import('../src/shared/download-naming');
+  const { loadSettings } = await import('../src/shared/settings');
+
+  const tabId = 900_010;
+  const now = Date.now();
+  const seed = makeItem('https://video-abc.xx.fbcdn.net/v/t42/c1_hd.mp4?bitrate=900000', 'video', 'reel', 'graphql', now, true);
+  seed.height = 1080;
+  seed.audioUrl = 'https://video-abc.xx.fbcdn.net/v/t42/c1_audio.mp4';
+  await addMedia(tabId, [seed]);
+  await setPlaying(tabId, { ids: [seed.id], hasVideo: true, at: now }, now);
+
+  // Keyed off the STORED item and the real settings — the same inputs the handler
+  // resolves its request from. A key that missed would let execution reach the mux
+  // round trip this fake cannot serve, so getting it wrong fails the test rather
+  // than passing it vacuously.
+  const [stored] = await getMedia(tabId);
+  assert.ok(stored, 'the seeded representation must read back');
+  const settings = await loadSettings();
+  await chrome.storage.session.set({
+    dash_dedup_completed_v1: {
+      [dashDownloadKey({
+        tabId,
+        receiptId: videoCardId(videoGroupKey(stored)),
+        videoUrl: stored.url,
+        audioUrl: stored.audioUrl!,
+        filename: downloadFilename(stored, settings),
+        saveAs: settings.defaultQuality === 'ask',
+      })]: now - 1_000,
+    },
+  });
+
+  const answer = await new Promise<unknown>((resolve) => {
+    const handled = onMessage!(
+      { type: 'FACESCRAP_REQUEST_PLAYING_DOWNLOAD' },
+      { tab: { id: tabId, url: 'https://www.facebook.com/reel/1' } } as Sender,
+      resolve,
+    );
+    assert.equal(handled, true);
+  });
+
+  // deduped:true is the proof the collapse happened rather than some earlier refusal.
+  assert.deepEqual(answer, { ok: true, deduped: true });
+  assert.deepEqual(await getSaved(tabId), [], 'a call that wrote no file must write no receipt');
 });
 
 // The worker validates an inbound receipt against saved.ts's own bounds instead of

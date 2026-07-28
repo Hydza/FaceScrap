@@ -79,6 +79,24 @@ export function isStaticFbAsset(url: string): boolean {
 }
 
 /**
+ * The fbcdn media URL inside a CSS `background-image` value, if it holds one.
+ * Facebook paints some photo stories as a <div> background rather than an <img>, so
+ * the centre detector and the in-page button both have to read one, with the same
+ * two guards: fbcdn-hosted, and not an rsrc.php sprite — those are fbcdn too, and a
+ * big one would pass for the photo. Takes the already-computed style string rather
+ * than an element: how each side reaches getComputedStyle is the only part that
+ * legitimately differs (one uses its own window, the other takes one by injection so
+ * it can be driven without a browser), and this file must stay usable from the
+ * worker, which has no DOM at all.
+ */
+export function fbcdnBackgroundUrl(backgroundImage: string | undefined): string | undefined {
+  if (!backgroundImage || backgroundImage === 'none') return undefined;
+  const m = backgroundImage.match(/url\(["']?(https?:[^"')]+)["']?\)/);
+  if (!m || !isFbcdn(m[1]) || isStaticFbAsset(m[1])) return undefined;
+  return m[1];
+}
+
+/**
  * True for profile-picture crop renditions: the fbcdn path type token with the
  * `-1` suffix (`/t39.30808-1/`, `/t1.6435-1/`, …). Facebook serves every
  * avatar and profile-photo crop under it — including the viewer's own face on
@@ -363,8 +381,9 @@ function genericRepresentationKey(url: string, parsed: URL): string | undefined 
 }
 
 // mediaId's ids are assumed to stay well under this bound: PlayingRef ids are
-// truncated at 256 chars in transport (playing-handler.ts) and storage.ts's
-// SavedEntry receipt contract reserves 256 chars for this value. `path` is
+// truncated at it in transport (playing-handler.ts) and saved.ts's SavedEntry
+// receipt contract reserves it under a 2-char card-id prefix. Both import this
+// constant rather than re-spelling the number, so neither can drift. `path` is
 // taken straight from the URL, and the `asset` discriminator inside
 // genericEndpointId can come straight from an attacker-decoded `efg` field
 // (fbAssetKeys) — this whole path is reachable from the untrusted
@@ -376,7 +395,7 @@ function genericRepresentationKey(url: string, parsed: URL): string | undefined 
 // keeps missing a sibling. boundMediaId is therefore applied ONCE, at the
 // single point an id leaves mediaId (see mediaId below), so a future branch
 // added to mediaIdCandidate is bounded automatically instead of by omission.
-const MEDIA_ID_MAX_LEN = 256;
+export const MEDIA_ID_MAX_LEN = 256;
 
 /**
  * Bound one candidate identity string — a mediaId or legacyMediaId candidate —
@@ -565,6 +584,27 @@ export function historicalAliasOwners(items: readonly MediaItem[]): Map<string, 
 }
 
 /**
+ * The id set to match against, built from the raw ids a PlayingRef carries:
+ * every id as stored, plus the re-canonicalized form of any that came from the
+ * short-lived full-query `asset:` scheme (see canonicalizeHistoricalMediaId).
+ *
+ * Built HERE, once, because three matchers pair it with matchesActiveMediaId
+ * below — the panel's selection (now-playing.ts), the retention classifier
+ * (storage.ts) and the in-page button's pure read (video-options.ts) — and one
+ * of them was missing the expansion. A PlayingRef left in session storage by an
+ * older build then selected a row in the panel that retention treated as
+ * ordinary, so the cap could evict the very row on screen.
+ */
+export function activeMediaIds(ids: readonly string[] | undefined): Set<string> {
+  const active = new Set(ids ?? []);
+  for (const id of [...active]) {
+    const canonical = canonicalizeHistoricalMediaId(id);
+    if (canonical != null) active.add(canonical);
+  }
+  return active;
+}
+
+/**
  * Does `item` correspond to one of the ids in `active`? The canonical union
  * for matching a captured MediaItem against a set of "centered/active" media
  * ids: the item's own id, its freshly recomputed mediaId (covers a stored row
@@ -726,7 +766,10 @@ function normalizeAddedAt(raw: unknown, now: number, allowHistorical: boolean): 
   return raw;
 }
 
-function normalizeMediaDimension(raw: unknown): number | undefined {
+/** The stored-dimension rule: a positive safe integer within MAX_MEDIA_DIMENSION.
+ *  Exported for the DOM capture edge (visible-media.ts), which bounds a measured
+ *  natural width/height the same way before it builds an item. */
+export function normalizeMediaDimension(raw: unknown): number | undefined {
   return typeof raw === 'number' &&
     Number.isSafeInteger(raw) &&
     raw > 0 &&
@@ -736,7 +779,7 @@ function normalizeMediaDimension(raw: unknown): number | undefined {
 }
 
 /** Verified natural pixel area for an image, or zero when either dimension is unknown. */
-export function imagePixelArea(item: Pick<MediaItem, 'kind' | 'width' | 'height'>): number {
+function imagePixelArea(item: Pick<MediaItem, 'kind' | 'width' | 'height'>): number {
   if (item.kind !== 'image') return 0;
   const width = normalizeMediaDimension(item.width);
   const height = normalizeMediaDimension(item.height);
@@ -1050,21 +1093,10 @@ export function mergeMedia(existing: MediaItem[], incoming: MediaItem[], now = D
           width: it.width,
           height: it.height,
         });
-      } else if (it.url === prev.url) {
-        // A later observer can learn one missing dimension for the exact same
-        // URL even when it still cannot prove a complete pixel area.
-        const candidate = { ...enriched };
-        let gainsDimension = false;
-        if (candidate.width == null && it.width != null) {
-          candidate.width = it.width;
-          gainsDimension = true;
-        }
-        if (candidate.height == null && it.height != null) {
-          candidate.height = it.height;
-          gainsDimension = true;
-        }
-        if (gainsDimension) accept(candidate);
       }
+      // No else: an equal-URL observation whose only news is a dimension this row
+      // lacks is already absorbed by the generic block above, whose guard is the
+      // exact disjunction such a branch would have to re-test.
     }
     if (enrichedChanged) {
       byId.set(it.id, enriched);

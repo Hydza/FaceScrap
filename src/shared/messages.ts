@@ -5,6 +5,16 @@
 // of failing silently across a context boundary. Receivers keep their runtime
 // field validation where the sender is less trusted: a content script shares
 // a process with the page, so the worker never believes these types blindly.
+//
+// Not only shapes. This file also owns the DASH path's shared runtime values: the
+// mux port's name and report cadence, and the four time budgets (DASH_UI_IDLE_MS,
+// MUX_HARD_CAP_MS, SETTLE_CAP_MS, and the DASH_UI_HARD_CAP_MS DERIVED from the last
+// two). They sit with the protocol because both ends of it import them and one is
+// computed from the others — the derivation is the point, and splitting them would
+// let the panel's ceiling drift under the worker's own worst case. The timer they
+// are armed on is withHeartbeat (async.ts). The rules that mint and validate
+// NowPlayingMsg.detectedAt are NOT here: they are playing-clock.ts, a leaf the
+// storage layer imports without depending on this module.
 
 import type { DiagCounters } from './diag';
 import type { DiagEvent } from './diag-log';
@@ -28,6 +38,12 @@ type RetryableAck = { ok: true } | { ok: false; retryable: boolean; error?: stri
 
 /** Shared ack shape: success, or failure with a required message. */
 type SimpleAck = { ok: true } | { ok: false; error: string };
+
+/** The download ack: `deduped`, present only when true, flags a success that
+ *  wrote no file because the durable dedup mirror had already settled an
+ *  identical download. Emitters `satisfies` this shape so the wire and the
+ *  declared protocol cannot drift apart. */
+export type DownloadAck = { ok: true; deduped?: true } | { ok: false; error: string };
 
 /** The worker acknowledges MEDIA_FOUND only after addMedia has durably stored
  *  the sanitized batch. Content keeps an unacknowledged batch queued. */
@@ -89,51 +105,9 @@ export interface SettingsUpdateMsg {
 /** The worker acknowledges only after the merged settings object is durable. */
 export type SettingsUpdateAck = SimpleAck;
 
-// Preserve the detector's real boundary through ordinary renderer/IPC stalls.
-// A delayed but valid timestamp is much safer than re-stamping it at receipt,
-// which would make neighbour traffic look post-slide. The storage layer also
-// rejects an older boundary once a newer one has landed for the same tab.
-const MAX_PLAYING_MESSAGE_DELAY_MS = 30_000;
-const MAX_PLAYING_FUTURE_SKEW_MS = 1_000;
-const PLAYING_TIME_EPSILON_MS = 0.001;
-
-/** True when a stored timestamp belongs to an older wall-clock epoch. This is
- * deliberately based on worker receive time, not another renderer timestamp:
- * ordinary out-of-order messages remain monotonic, while a system clock
- * rollback cannot strand a future PlayingRef until wall time catches up. */
-export function playingTimestampIsFutureEpoch(storedAt: number, receivedAt: number): boolean {
-  return Number.isFinite(storedAt) &&
-    Number.isFinite(receivedAt) &&
-    storedAt > receivedAt + MAX_PLAYING_FUTURE_SKEW_MS;
-}
-
-/** Date.now() has millisecond resolution, but two different slides can be
- *  observed within one event-loop millisecond. Give each emitted boundary a
- *  strictly increasing value so storage's monotonic guard can order them. */
-export function nextPlayingDetectedAt(previous: number, wallNow: number): number {
-  if (!Number.isFinite(previous)) return wallNow;
-  // A manual/system clock rollback larger than the worker's accepted future
-  // skew must not strand the content script emitting permanently-invalid
-  // timestamps until wall time catches up.
-  if (playingTimestampIsFutureEpoch(previous, wallNow)) return wallNow;
-  return previous >= wallNow ? previous + PLAYING_TIME_EPSILON_MS : wallNow;
-}
-
-/** Validate an untrusted content-script timestamp against worker receive time. */
-export function normalizePlayingDetectedAt(raw: unknown, receivedAt: number): number | undefined {
-  // Compatibility with an older content script that has not reloaded yet.
-  if (raw === undefined) return receivedAt;
-  // A present-but-invalid timestamp must not be silently rewritten into a
-  // plausible current boundary. Ignore that NOW_PLAYING message instead.
-  if (typeof raw !== 'number' || !Number.isFinite(raw)) return undefined;
-  if (playingTimestampIsFutureEpoch(raw, receivedAt)) return undefined;
-  if (receivedAt - raw > MAX_PLAYING_MESSAGE_DELAY_MS) return undefined;
-  return raw;
-}
-
 /** How long the panel waits WITHOUT PROGRESS on FACESCRAP_DOWNLOAD_DASH before
  *  giving up. Idle, not wall-clock, for the same reason the worker's own budget
- *  is (see MUX_IDLE_MS in service-worker.ts): a large track on a slow link is
+ *  is (see MUX_IDLE_MS in background/dash-download.ts): a large track on a slow link is
  *  healthy, and a fixed deadline reports it as failed while it is still
  *  downloading. The worker forwards mux progress here (MuxProgressMsg) to keep
  *  this clock alive. */
@@ -141,10 +115,10 @@ export const DASH_UI_IDLE_MS = 360_000;
 
 /** One mux round-trip's hard backstop (service worker → offscreen): the case no
  *  idle timer can see, an offscreen document that died outright and sends
- *  neither progress nor an answer. Declared HERE, not in service-worker.ts
+ *  neither progress nor an answer. Declared HERE, not in dash-download.ts
  *  (which is the only place that arms it), so DASH_UI_HARD_CAP_MS below can be
  *  DERIVED from it instead of merely asserted to sit above it —
- *  service-worker.ts imports this value rather than redeclaring it. */
+ *  dash-download.ts imports this value rather than redeclaring it. */
 export const MUX_HARD_CAP_MS = 30 * 60_000;
 
 /** Ceiling on waiting for chrome.downloads to reach a terminal state once a mux
@@ -164,11 +138,11 @@ export const SETTLE_CAP_MS = 5 * 60_000;
  *  to report a real result first; this only fires if it died without
  *  answering at all.
  *
- *  Used as a REBASABLE window (see withRearmableHardCap below), not a single
- *  fixed deadline from send time: dashChain (service-worker.ts) serializes
- *  DASH jobs, so a request queued behind another long-running one can sit for
- *  an unbounded time before its OWN mux even starts. Arming this once at send
- *  time — as a plain withHeartbeat call once did — budgeted only for ONE
+ *  Used as a REBASABLE window (withHeartbeat's armStarted, async.ts), not a
+ *  single fixed deadline from send time: dashChain (dash-download.ts)
+ *  serializes DASH jobs, so a request queued behind another long-running one
+ *  can sit for an unbounded time before its OWN mux even starts. Arming this
+ *  once at send time — never calling armStarted — budgeted only for ONE
  *  job's worst case while actually covering "queue wait + that job", so a
  *  queued request could exhaust it while the worker was still entitled to
  *  keep working on that SAME request, then finish it and write a Saved
@@ -181,62 +155,6 @@ export const SETTLE_CAP_MS = 5 * 60_000;
  *  running, so every path still terminates. */
 export const DASH_UI_HARD_CAP_MS = MUX_HARD_CAP_MS + SETTLE_CAP_MS + 5 * 60_000;
 
-/** Bounds ONE wait the same shape withHeartbeat (async.ts) does — an idle
- *  timer `beat()` restarts, plus a hard cap as the backstop for a peer that
- *  answers with neither progress nor a result — except the hard cap here can
- *  be RE-ARMED once, via `armStarted()`. withHeartbeat's own hard timer is
- *  armed exactly once and never exposed for a caller to reset, which is
- *  right for the single round-trip it guards in service-worker.ts (the
- *  offscreen mux call, never itself queued) but wrong for DASH_UI_HARD_CAP_MS's
- *  wait: that wait spans an unbounded dashChain queue PLUS one job, and
- *  re-arming lets the panel give the job its own full window once it actually
- *  starts (see FACESCRAP_DASH_JOB_STARTED below) instead of making it share a
- *  single send-time deadline with however long it sat queued. `armStarted()`
- *  is a no-op once the wait has already settled — the same guard `beat()`
- *  uses — so a late or duplicate signal can never re-arm a promise nobody is
- *  awaiting anymore, and a request that never starts (or never reaches this
- *  call at all) still terminates at the original send-time hardCapMs. Declared
- *  here, not async.ts: it exists only to make DASH_UI_HARD_CAP_MS's own
- *  contract honest, not as a general-purpose primitive. */
-export function withRearmableHardCap<T>(
-  work: Promise<T>,
-  idleMs: number,
-  hardCapMs: number,
-  message: string,
-): { promise: Promise<T>; beat: () => void; armStarted: () => void } {
-  let settled = false;
-  let idleTimer: ReturnType<typeof setTimeout>;
-  let hardTimer: ReturnType<typeof setTimeout>;
-  let fail: (e: Error) => void = () => {};
-  const guard = new Promise<never>((_, reject) => {
-    fail = reject;
-  });
-  const armIdle = (): void => {
-    clearTimeout(idleTimer);
-    idleTimer = setTimeout(() => fail(new Error(message)), idleMs);
-  };
-  const armHard = (): void => {
-    clearTimeout(hardTimer);
-    hardTimer = setTimeout(() => fail(new Error(message)), hardCapMs);
-  };
-  armIdle();
-  armHard(); // send-time cap: bounds the case where the job's own start signal never arrives
-  const promise = Promise.race([work, guard]).finally(() => {
-    settled = true;
-    clearTimeout(idleTimer);
-    clearTimeout(hardTimer);
-  });
-  return {
-    promise,
-    beat: () => {
-      if (!settled) armIdle();
-    },
-    armStarted: () => {
-      if (!settled) armHard();
-    },
-  };
-}
-
 /** service worker → side panel: mux progress, forwarded from the offscreen port.
  *  Fire-and-forget — with no panel open, sendMessage simply has no receiver. */
 export interface MuxProgressMsg extends MuxProgress {
@@ -244,7 +162,7 @@ export interface MuxProgressMsg extends MuxProgress {
 }
 
 /** service worker → side panel: this specific queued DASH job has left
- *  dashChain (service-worker.ts) and its mux has started. Fire-and-forget,
+ *  dashChain (background/dash-download.ts) and its mux has started. Fire-and-forget,
  *  like MuxProgressMsg above — with no panel open, sendMessage simply has no
  *  receiver.
  *
@@ -256,7 +174,7 @@ export interface MuxProgressMsg extends MuxProgress {
  *  which is fine for an idle timer that only needs to see SOME liveness — but
  *  reusing that for a hard-cap rebase would rebase the WRONG panel's clock off
  *  someone else's job, reproducing the very bug this message exists to fix.
- *  See withRearmableHardCap and DASH_UI_HARD_CAP_MS above. */
+ *  See withHeartbeat (async.ts) and DASH_UI_HARD_CAP_MS above. */
 export interface DashJobStartedMsg {
   type: 'FACESCRAP_DASH_JOB_STARTED';
   key: string;
@@ -272,7 +190,7 @@ export interface DownloadDashMsg {
   saveAs?: boolean;
   receipt: SavedEntry;
 }
-export type DownloadDashResponse = SimpleAck;
+export type DownloadDashResponse = DownloadAck;
 
 /** Direct downloads use the same worker-owned terminal settlement + durable
  * receipt path as DASH, so closing the panel cannot lose success/failure. */
@@ -328,7 +246,7 @@ export interface RequestPlayingDownloadMsg {
    *  the representations changed still downloads something sensible. */
   label?: string;
 }
-export type RequestPlayingDownloadResponse = SimpleAck;
+export type RequestPlayingDownloadResponse = DownloadAck;
 
 /** service worker → offscreen: fetch and remux one (video, audio) track pair.
  *

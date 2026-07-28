@@ -124,7 +124,12 @@ function savedBadge(card: Card): HTMLElement {
 export function renderCard(card: Card, controls: CardControls): HTMLElement {
   const el = document.createElement('article');
   el.className = 'tile';
-  if (card.live) el.classList.add('is-live');
+  // Not the accent outline alone: "this is what the tab is playing" was carried by colour
+  // only, which no screen reader reads.
+  if (card.live) {
+    el.classList.add('is-live');
+    el.setAttribute('aria-current', 'true');
+  }
   el.classList.toggle('is-picked', controls.picked);
   // The id the marquee and the keyboard cursor read back off the DOM, and the tabindex
   // that lets the cursor land here. -1, not 0: arrows move the cursor, so putting every
@@ -180,6 +185,16 @@ export function renderCard(card: Card, controls: CardControls): HTMLElement {
 
   el.append(thumb, scrim);
 
+  // Built before the corner controls so the selection dot can borrow its words: N buttons
+  // all named "Select" say nothing about WHICH tile is being selected.
+  const caption = document.createElement('div');
+  caption.className = 'tile-caption';
+  const title = document.createElement('h3');
+  title.className = 'tile-title';
+  title.textContent = t(presentationKey(card.kind, card.source));
+  const meta = cardMeta(card, controls.failure);
+  caption.append(title, meta);
+
   if (controls.saved) {
     el.appendChild(savedBadge(card));
 
@@ -198,8 +213,13 @@ export function renderCard(card: Card, controls: CardControls): HTMLElement {
     pick.type = 'button';
     pick.setAttribute('aria-pressed', String(controls.picked));
     if (card.target != null) {
+      // The tile's own title and meta, not a bare "Select": with a screen reader the N
+      // dots were otherwise indistinguishable from one another.
+      const name = [t('selectItem'), title.textContent, meta.textContent]
+        .filter((part): part is string => part != null && part !== '')
+        .join(' · ');
       pick.title = t('selectItem');
-      pick.setAttribute('aria-label', t('selectItem'));
+      pick.setAttribute('aria-label', name);
       pick.addEventListener('click', () => paintCardPicked(el, controls.onPick()));
     } else {
       pick.disabled = true;
@@ -209,12 +229,13 @@ export function renderCard(card: Card, controls: CardControls): HTMLElement {
     el.appendChild(pick);
   }
 
-  const caption = document.createElement('div');
-  caption.className = 'tile-caption';
-  const title = document.createElement('h3');
-  title.className = 'tile-title';
-  title.textContent = t(presentationKey(card.kind, card.source));
-  caption.append(title, cardMeta(card, controls.failure));
+  // The failure reason travelled only as a `title` on a non-focusable <span>. The tile is
+  // what takes the keyboard cursor, so it is what describes itself with the reason.
+  const failTag = meta.querySelector<HTMLElement>('.tag-fail');
+  if (failTag != null) {
+    failTag.id = `fail-${card.id}`;
+    el.setAttribute('aria-describedby', failTag.id);
+  }
   el.appendChild(caption);
   return el;
 }

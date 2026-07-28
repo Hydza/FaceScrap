@@ -14,6 +14,17 @@ interface DownloadSettlementOptions {
   timeoutMs?: number;
   /** Cancel an in-progress download before exposing Retry after timeout. */
   cancelOnTimeout?: boolean;
+  /**
+   * Give up waiting after this long WITHOUT progress. Distinct from timeoutMs,
+   * which bounds total duration: a remote file can be legitimately slow for
+   * hours, but one that stops moving — or that the user pauses from
+   * chrome://downloads — never settles at all, and the caller waiting on it
+   * holds an MV3 service worker awake for as long as it waits.
+   *
+   * Giving up does not cancel anything: the browser owns the download and
+   * carries on without us. It only stops US tracking it.
+   */
+  stallMs?: number;
 }
 
 export interface DashDownloadIdentity {
@@ -80,6 +91,7 @@ export function waitForDownloadSettlement(
       api.onChanged.removeListener(onChanged);
       if (timer !== undefined) clearTimeout(timer);
       if (raceTimer !== undefined) clearTimeout(raceTimer);
+      if (stallTimer !== undefined) clearInterval(stallTimer);
       if (error == null) resolve();
       else reject(error);
     };
@@ -91,13 +103,55 @@ export function waitForDownloadSettlement(
       return true;
     };
 
+    // Idle watchdog, POLLED rather than event-driven: DownloadDelta reports state,
+    // paused, error and the rest, but deliberately not bytesReceived — there is no
+    // progress event to rearm a timer from. So sample the item instead and compare
+    // the byte count, which is what "no progress" actually means. One search call
+    // per tick, only while a download is being tracked.
+    let stallTimer: ReturnType<typeof setInterval> | undefined;
+    const startStallWatch = (): void => {
+      const stallMs = options.stallMs;
+      if (stallMs == null || !Number.isFinite(stallMs) || stallMs <= 0) return;
+      // A third of the window, so a stall is caught within ~33% of it, capped at
+      // 30 s (the real caller's window is minutes) and floored well above the rate
+      // at which polling would itself be the cost.
+      const tickMs = Math.max(250, Math.min(stallMs / 3, 30_000));
+      let lastBytes = -1;
+      let idleMs = 0;
+      stallTimer = setInterval(() => {
+        void api.search({ id: downloadId }).then(
+          (items) => {
+            if (settled) return;
+            const item = items[0];
+            if (item === undefined) return; // the race retry above owns this case
+            if (inspect(item)) return;
+            if (item.bytesReceived !== lastBytes) {
+              lastBytes = item.bytesReceived;
+              idleMs = 0;
+              return;
+            }
+            idleMs += tickMs;
+            if (idleMs >= stallMs) finish(new Error('The download stopped making progress.'));
+          },
+          () => {}, // a failed sample is not evidence of a stall
+        );
+      }, tickMs);
+    };
+
     const onChanged = (delta: chrome.downloads.DownloadDelta): void => {
       if (delta.id !== downloadId) return;
       const result = terminalError(delta.state?.current, delta.error?.current);
-      if (result !== undefined) finish(result);
+      if (result !== undefined) {
+        finish(result);
+        return;
+      }
+      // A pause is a decision, not a slow link: no amount of waiting resolves it,
+      // and waiting is what pinned the service worker awake.
+      if (delta.paused?.current === true) finish(new Error('The download was paused.'));
     };
 
     api.onChanged.addListener(onChanged);
+    startStallWatch();
 
     // Closes the race where the download already reached its terminal state
     // before the listener above was attached — a found item (terminal or not)

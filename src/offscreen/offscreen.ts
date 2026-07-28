@@ -10,7 +10,7 @@
 // slices, so the media never passes through this document's memory (see
 // ARCHITECTURE.md's remux invariant).
 
-import { createJobChain } from '../shared/async';
+import { createChainLock } from '../shared/async';
 import { diagLog, diagLogDrain, errorText, redactUrl, setDiagContext, setDiagLogEnabled } from '../shared/diag-log';
 import { MUX_PORT, MUX_PROGRESS_MS, type MuxProgress, type MuxResponse, type RuntimeMessage } from '../shared/messages';
 import { remux } from '../shared/mp4-remux';
@@ -130,7 +130,7 @@ function revokeBlob(url: string): void {
 // it was with ffmpeg's single instance and fixed FS filenames. It stays because it
 // bounds memory: two concurrent jobs mean two pairs of fully-fetched tracks held at
 // once, and the worker's own dashChain already expects one job at a time.
-const muxQueue = createJobChain<string>();
+const muxQueue = createChainLock();
 function enqueueMux(videoUrl: string, audioUrl: string): Promise<string> {
   // The port opens when the job STARTS, not when it is queued: the worker times
   // each job from its own start, and a queued job reporting nothing yet would

@@ -8,4 +8,8 @@
 // Chrome-free on purpose: this is the one shared module the MAIN-world bundle may
 // import (see i18n.ts's header for what must NOT go there).
 
-export const HOOK_ALIVE_ATTR = 'data-facescrap-hook';
+// Deliberately says nothing about this extension. The mark lands on <html> in
+// facebook.com's own DOM, so a name that identifies the product hands the page a
+// one-selector test for which extension is installed — the attribution the passive
+// hook exists to avoid.
+export const HOOK_ALIVE_ATTR = 'data-vp-init';

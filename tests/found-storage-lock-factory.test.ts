@@ -1,9 +1,10 @@
 // Regression check for the storage-lane code-review finding S2:
 // withHeadroomLock, withMediaGlobalLock and withRetentionSnapshotLock used to
 // be three byte-identical chain-mutex implementations (differing only in
-// which module-level chain variable each closed over). storage.ts now builds
-// all three from one createChainLock() factory — but as three SEPARATE
-// instances, each with its own closed-over chain.
+// which module-level chain variable each closed over). All three now come from
+// one createChainLock() factory (async.ts) — as three SEPARATE instances, each
+// with its own closed-over chain: two live in storage.ts, and the headroom
+// lock in session-write.ts.
 //
 // This test guards exactly the risk that refactor introduces: if a future
 // edit (or a mistake while doing this one) made the three locks share one

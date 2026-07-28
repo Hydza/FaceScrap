@@ -10,7 +10,7 @@
 // module-global or a cache that lives in one process.
 
 import {
-  canonicalizeHistoricalMediaId,
+  activeMediaIds,
   fbAssetKeys,
   historicalAliasOwners,
   isFbcdn,
@@ -57,16 +57,18 @@ export function playingItems(
   ref: { ids?: string[]; vid?: string } | null | undefined,
   items: MediaItem[],
 ): MediaItem[] {
-  const active = new Set(ref?.ids ?? []);
-  for (const id of [...active]) {
-    const canonical = canonicalizeHistoricalMediaId(id);
-    if (canonical != null) active.add(canonical);
-  }
+  const active = activeMediaIds(ref?.ids);
   const owners = historicalAliasOwners(items);
   // The page URL naming this exact video matches the efg `vid:` key of every one
   // of its representations and nothing else, so it survives fbcdn's prefetching
   // of the neighbouring reel.
   const urlVid = ref?.vid != null ? `vid:${ref.vid}` : undefined;
+  // Deliberately NARROWER than now-playing.ts's domMatchFresh, which also matches a
+  // Story card's DOM id and reads `vid:` out of a DASH pair's audioUrl. Both extra
+  // branches only ever match a VIDEO, and a video this misses is resolved instead by
+  // playingVideoGroup — which REFUSES an ambiguous card rather than picking one of
+  // its groups. That refusal is the whole difference between the button and the
+  // panel; widening this would route those cases around it.
   return items.filter((i) => {
     if (matchesActiveMediaId(i, active, owners)) return true;
     if (i.thumbUrl != null && active.has(mediaId(i.thumbUrl))) return true;
@@ -83,6 +85,16 @@ export function playingItems(
 export function videoGroupOf(video: MediaItem, items: MediaItem[]): MediaItem[] {
   const key = videoGroupKey(video);
   return items.filter((i) => i.kind === 'video' && videoGroupKey(i) === key);
+}
+
+/** Does the minimum-resolution setting hide this video group? One predicate, because
+ *  the Library grid, Now Playing and the in-page button must agree on what it hides.
+ *  A group with no known height is never hidden — an unmeasured video is not a
+ *  low-quality one. */
+export function belowMinResolution(group: MediaItem[], minResolution: number): boolean {
+  if (minResolution <= 0) return false;
+  const maxHeight = Math.max(0, ...group.map((i) => i.height ?? 0));
+  return maxHeight > 0 && maxHeight < minResolution;
 }
 
 /** Only fbcdn media is downloadable — never a URL that slipped in from the page. */

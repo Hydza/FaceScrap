@@ -1,11 +1,11 @@
 // PROTOCOL lane, stage 1 — C5 residual: the side panel's DASH_UI_HARD_CAP_MS
 // wait used to arm at chrome.runtime.sendMessage time, before a request even
-// reached dashChain (service-worker.ts serializes every DASH job on that one
+// reached dashChain (dash-download.ts serializes every DASH job on that one
 // chain). A request queued behind another long-running job could exhaust that
 // whole budget while still queued, then have the worker finish it and write a
 // Saved receipt under a card the panel had already tagged Failed.
 //
-// The fix: service-worker.ts's downloadDash() now broadcasts
+// The fix: dash-download.ts's downloadDash() now broadcasts
 // FACESCRAP_DASH_JOB_STARTED — addressed by dashDownloadKey — the instant a
 // request LEAVES dashChain, so the panel can rebase its hard cap off the job
 // actually starting. The panel's half of this used to be pinned by source-text
@@ -26,7 +26,7 @@ import { mock } from 'node:test';
 import { dashDownloadKey, type DashDownloadIdentity } from '../src/shared/download-settlement';
 import { resetChromeStorage } from './chrome-fake';
 
-// service-worker.ts's runDownloadDash() starts a 20s keepalive setInterval and
+// dash-download.ts's runDownloadDash() starts a 20s keepalive setInterval and
 // a 60s offscreen-idle-close setTimeout on EVERY job, success or failure (by
 // design — see OFFSCREEN_IDLE_MS's comment there). Mocking timers here is not
 // about the fix under test; it is what lets this test exercise a REAL job

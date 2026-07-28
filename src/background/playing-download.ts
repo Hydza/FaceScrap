@@ -15,9 +15,9 @@ import { resolutionOf, videoGroupKey } from '../shared/media';
 import { getBind, getMedia, getPlaying, getRecent, playingIdentity } from '../shared/storage';
 import type { SavedEntry } from '../shared/saved';
 import { playingVideoGroup, rememberedVideoGroup } from '../shared/now-playing';
-import { isDownloadable, optionForLabel, playingItems, videoGroupOf, videoOptions } from '../shared/video-options';
+import { belowMinResolution, isDownloadable, optionForLabel, playingItems, videoGroupOf, videoOptions } from '../shared/video-options';
 import { downloadFilename, itemCardId, savedEntryForItem, videoCardId } from '../shared/download-naming';
-import type { PlayingDownloadOptionsResponse, RequestPlayingDownloadMsg } from '../shared/messages';
+import type { PlayingDownloadOptionsResponse, RequestPlayingDownloadMsg, RequestPlayingDownloadResponse } from '../shared/messages';
 import { hasOffscreen } from '../shared/capabilities';
 import { loadSettings } from '../shared/settings';
 import { downloadDash, downloadDirect } from './dash-download';
@@ -125,10 +125,7 @@ export function createPlayingDownloadHandler(deps: PlayingDownloadDeps) {
           const { options, gkey, thumbUrl, durationSec } = videoOptions(group, context);
           // minResolution hides the whole card in the Library and in Now Playing.
           // Offering it here anyway would make the button contradict both.
-          const maxHeight = Math.max(0, ...group.map((i) => i.height ?? 0));
-          const decluttered =
-            settings.minResolution > 0 && maxHeight > 0 && maxHeight < settings.minResolution;
-          if (options.length === 0 || decluttered) {
+          if (options.length === 0 || belowMinResolution(group, settings.minResolution)) {
             // For the options query "nothing to offer" is a normal answer and the
             // button hides. A download request must FAIL — answering ok would put
             // "Saved" on a button that saved nothing.
@@ -149,12 +146,13 @@ export function createPlayingDownloadHandler(deps: PlayingDownloadDeps) {
           const receipt = savedEntryForItem(cardId, target, { thumbUrl, durationSec });
           const filename = downloadFilename(target, settings);
           const saveAs = settings.defaultQuality === 'ask';
+          let wrote = true;
           if (target.audioUrl != null) {
             if (!hasOffscreen()) {
               sendResponse({ ok: false, error: 'This browser can\'t merge audio and video.' });
               return;
             }
-            await downloadDash({
+            wrote = await downloadDash({
               tabId: tid,
               receiptId: receipt.id,
               videoUrl: target.url,
@@ -165,8 +163,14 @@ export function createPlayingDownloadHandler(deps: PlayingDownloadDeps) {
           } else {
             await downloadDirect(target.url, filename, saveAs);
           }
-          await deps.persistReceipt(tid, receipt);
-          sendResponse({ ok: true });
+          // A deduped call wrote no file, so it must not rewrite the Saved receipt
+          // either — the rule download-handler.ts already holds for the panel's own
+          // requests, on the same downloadDash. Only the DASH branch dedupes; a direct
+          // download always wrote, so its receipt always stands.
+          if (wrote) await deps.persistReceipt(tid, receipt);
+          // Flagged only when TRUE, exactly as the panel's path answers: an ordinary
+          // success keeps the bare { ok: true } the overlay and the shortcut expect.
+          sendResponse((wrote ? { ok: true } : { ok: true, deduped: true }) satisfies RequestPlayingDownloadResponse);
           return;
         }
 

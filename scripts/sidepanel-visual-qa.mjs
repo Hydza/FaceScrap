@@ -2630,6 +2630,16 @@ async function exerciseSettingsControls(page) {
           onAccent: root.getPropertyValue('--onac').trim(),
           readable: root.getPropertyValue('--ach').trim(),
           pressed: document.querySelector('#set-accent-solid [data-accent][aria-pressed="true"]')?.dataset.accent ?? null,
+          // The header mark is painted from --acg and blended, so it is the one piece
+          // of chrome whose colour a user checks by LOOKING rather than by reading a
+          // token. It shipped as a fixed blue tile while everything around it moved.
+          // Half the palette is a flat colour, so the paint lands in background-COLOR
+          // there and in background-image only for the gradients — read whichever is set.
+          logoPaint: (() => {
+            const s = getComputedStyle(document.querySelector('.brand-logo'));
+            return s.backgroundImage !== 'none' ? s.backgroundImage : s.backgroundColor;
+          })(),
+          logoBlend: getComputedStyle(document.querySelector('.brand-logo img')).mixBlendMode,
         };
       })()`,
     );
@@ -2637,6 +2647,11 @@ async function exerciseSettingsControls(page) {
     checks[`accent:${accent}`] =
       applied.pressed === accent &&
       applied.attribute === accent &&
+      // Painted at all, and still rendering the glyph rather than a flat silhouette.
+      // That it actually MOVES with the accent is asserted once, after the loop.
+      applied.logoPaint !== 'none' &&
+      applied.logoPaint !== 'rgba(0, 0, 0, 0)' &&
+      applied.logoBlend === 'luminosity' &&
       applied.flat.length > 0 &&
       applied.paint.length > 0 &&
       applied.onAccent.length > 0 &&
@@ -2645,6 +2660,10 @@ async function exerciseSettingsControls(page) {
       // wrote the wrong half of the pair.
       applied.paint === applied.flat;
   }
+  // The point of the whole exercise: three different accents must leave the mark
+  // three different colours. A logo pinned to one brand blue passes every per-accent
+  // check above and still fails the thing a user notices.
+  checks['accent:logo follows'] = new Set(metrics.accents.map((a) => a.logoPaint)).size > 1;
 
   // The panel tint is the same contract on a second palette: one attribute, four
   // surfaces, resolved per theme by the stylesheet.
@@ -4472,6 +4491,22 @@ async function captureResponsiveSettingsControl(page, width, controlName, expect
       const settingsControlsVisible = rendered(label) && rendered(control) && rendered(hint);
       const settingsControlsWithinViewport =
         withinViewport(label) && withinViewport(control) && withinViewport(hint);
+      // Does each option's text fit inside its OWN box? A segmented button is
+      // white-space: nowrap, so one that flex-shrinks below its label keeps drawing
+      // the text at full width while its background shrinks with the box: the
+      // selected pill stops covering its own word and the text bleeds into its
+      // neighbours. None of the checks around this one can see it: the app shell is
+      // overflow: hidden, so the spill never reaches the document's scrollWidth,
+      // and every rect still sits inside the viewport. It shows up first in the
+      // longest translation, which is why it survived a green run in English.
+      const overflowingOptions = segButtons
+        .filter((button) => button.scrollWidth > button.clientWidth + 1)
+        .map((button) => ({
+          value: button.dataset.value ?? normalizedText(button),
+          scrollWidth: button.scrollWidth,
+          clientWidth: button.clientWidth,
+        }));
+      const optionLabelsFit = overflowingOptions.length === 0;
       const settingsControlsLabeled =
         control instanceof HTMLElement &&
         label instanceof HTMLElement &&
@@ -4509,6 +4544,8 @@ async function captureResponsiveSettingsControl(page, width, controlName, expect
         settingsControlsWithinViewport,
         settingsControlsLabeled,
         settingsControlsUsable,
+        optionLabelsFit,
+        overflowingOptions,
         noHorizontalOverflow,
         metrics: {
           label: rectOf(label),
@@ -4525,6 +4562,7 @@ async function captureResponsiveSettingsControl(page, width, controlName, expect
           result.settingsControlsWithinViewport &&
           result.settingsControlsLabeled &&
           result.settingsControlsUsable &&
+          result.optionLabelsFit &&
           result.noHorizontalOverflow,
       };
     })()`,
@@ -4555,25 +4593,43 @@ async function captureResponsiveSettingsControl(page, width, controlName, expect
   };
 }
 
+/** One message, read from src/shared/i18n.ts — the source the panel itself renders.
+ *
+ *  Kept out of a private copy on purpose: a hardcoded expectation here turns every
+ *  wording change into a red harness run that says "localisation broke" when nothing
+ *  did, and the fix is always to retype the string in a second place. The same
+ *  read-the-constant-from-source technique tests/config.test.ts uses for its timings. */
+let messageTables;
+async function message(language, key) {
+  if (!messageTables) {
+    const source = await readFile(join(ROOT, 'src', 'shared', 'i18n.ts'), 'utf8');
+    // MESSAGES is `{ en: { … }, es: { … } }`; the ES table opens at its own key.
+    const split = source.indexOf('\n  es: {');
+    if (split < 0) throw new Error('sidepanel-visual-qa: could not find the es message table in i18n.ts');
+    messageTables = { en: source.slice(0, split), es: source.slice(split) };
+  }
+  const table = messageTables[language];
+  const match = new RegExp(`^\\s+${key}: '((?:[^'\\\\]|\\\\.)*)',$`, 'm').exec(table);
+  if (!match) throw new Error(`sidepanel-visual-qa: no ${language} message for ${key}`);
+  return match[1].replace(/\\'/g, "'").replace(/\\\\/g, '\\');
+}
+
 async function exerciseResponsiveWidths(page, language) {
-  const expectedSettingsText =
-    language === 'es'
-      ? {
-          theme: {
-            label: 'Tema',
-            hint: 'Sigue Facebook y luego tu dispositivo',
-            options: ['Automático', 'Claro', 'Oscuro'],
-          },
-          maxItems: { label: 'Máx. de items guardados', hint: '0 = Sin límite' },
-        }
-      : {
-          theme: {
-            label: 'Theme',
-            hint: 'Follows Facebook, then your device',
-            options: ['Auto', 'Light', 'Dark'],
-          },
-          maxItems: { label: 'Max saved items', hint: '0 = Unlimited' },
-        };
+  const expectedSettingsText = {
+    theme: {
+      label: await message(language, 'settingsTheme'),
+      hint: await message(language, 'settingsThemeHint'),
+      options: [
+        await message(language, 'themeAuto'),
+        await message(language, 'themeLight'),
+        await message(language, 'themeDark'),
+      ],
+    },
+    maxItems: {
+      label: await message(language, 'settingsMaxItems'),
+      hint: `0 = ${await message(language, 'maxUnlimited')}`,
+    },
+  };
   await activateSurface(page, 'settings');
   const widths = [];
   for (const width of RESPONSIVE_WIDTHS) {
@@ -4614,6 +4670,33 @@ async function exerciseResponsiveWidths(page, language) {
           document.documentElement.scrollWidth <= document.documentElement.clientWidth &&
           document.body.scrollWidth <= document.body.clientWidth &&
           (!app || app.scrollWidth <= app.clientWidth);
+        // Every visible element whose own text is wider than its own box, across the
+        // whole panel. This is the class of defect the document-level scrollWidth
+        // check above can never see: the app shell is overflow: hidden, so a label
+        // that spills out of its background is clipped silently and every rect still
+        // sits inside the viewport. Deliberate truncation is excluded — a node that
+        // asked for ellipsis or that scrolls is doing what it was told.
+        const overflowingText = [...document.querySelectorAll('#app *')]
+          .filter((el) => {
+            if (el.children.length > 0) return false; // measure leaves, not containers
+            if (!el.textContent || el.textContent.trim() === '') return false;
+            if (el.scrollWidth <= el.clientWidth + 1) return false;
+            // A screen-reader-only label is a 1px box holding real text on purpose.
+            // Nothing is being clipped from anyone looking at the panel.
+            if (el.clientWidth <= 1 || el.clientHeight <= 1) return false;
+            const style = getComputedStyle(el);
+            if (style.display === 'none' || style.visibility === 'hidden') return false;
+            if (style.textOverflow === 'ellipsis') return false;
+            return style.overflowX !== 'auto' && style.overflowX !== 'scroll';
+          })
+          .slice(0, 12)
+          .map((el) => ({
+            selector: el.tagName.toLowerCase() + (el.id ? '#' + el.id : '') + (el.className ? '.' + String(el.className).split(' ')[0] : ''),
+            text: (el.textContent ?? '').trim().slice(0, 40),
+            scrollWidth: el.scrollWidth,
+            clientWidth: el.clientWidth,
+          }));
+        const noClippedText = overflowingText.length === 0;
         const settingsSurfaceActive =
           app?.classList.contains('is-settings') === true &&
           document.querySelector('#settings')?.hidden === false &&
@@ -4634,6 +4717,8 @@ async function exerciseResponsiveWidths(page, language) {
           actualWidth: innerWidth,
           language: document.documentElement.lang,
           noHorizontalOverflow,
+          noClippedText,
+          overflowingText,
           navItemsComplete,
           navVisible: Boolean(navRect && navRect.width > 0 && navRect.height > 0),
           settingsSurfaceActive,
@@ -4641,6 +4726,7 @@ async function exerciseResponsiveWidths(page, language) {
             innerWidth === ${JSON.stringify(width)} &&
             document.documentElement.lang === ${JSON.stringify(language)} &&
             noHorizontalOverflow &&
+            noClippedText &&
             navItemsComplete &&
             settingsSurfaceActive,
         };

@@ -373,7 +373,7 @@ test('mediaId bounds the unknown-generic-endpoint fallback so an over-long query
 
   const id = mediaId(longQuery);
 
-  // PlayingRef ids are truncated at 256 chars in transport and storage.ts's
+  // PlayingRef ids are truncated at 256 chars in transport and saved.ts's
   // SavedEntry receipt contract reserves 256 chars for this value; an id past
   // that bound breaks download requests and now-playing matching.
   assert.ok(id.length <= 256, `bounded id must fit the shared 256-char id contract, got ${id.length}`);

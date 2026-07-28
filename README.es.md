@@ -129,6 +129,8 @@ descifrarse.
 
 `npm run dev` recompila al guardar, `npm run check` corre la verificación de tipos
 más la suite de pruebas, y `npm run build` produce el `dist/` cargable.
+`npm run package` recompila desde cero y escribe el `FaceScrap-vX.Y.Z.zip` que
+sirve la página de Releases.
 
 El QA visual público del panel lateral se ejecuta en un perfil temporal del
 navegador después de compilar:
@@ -179,7 +181,7 @@ reproducción, la configuración, i18n y los contratos de mensajes tipados.
 `rules/referer-rules.json` es una regla de declarativeNetRequest que fija el
 Referer en las solicitudes a fbcdn.
 
-> **Tamaño:** ~600 KB sin empaquetar, todo compilado desde `src/` — sin binarios
+> **Tamaño:** ~820 KB sin empaquetar, todo compilado desde `src/` — sin binarios
 > de terceros. La mezcla DASH es `src/shared/mp4-remux.ts`. Normal
 > para uso personal.
 

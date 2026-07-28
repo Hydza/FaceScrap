@@ -339,8 +339,14 @@ export const ACCENTS: readonly Accent[] = [
 
 export const DEFAULT_ACCENT: AccentId = 'brand';
 
+/** Falls back by NAME, not by position: `ACCENTS` is ordered for the swatch rows, so
+ *  `ACCENTS[0]` is a layout decision, while settings.ts coerces an unknown stored id to
+ *  DEFAULT_ACCENT. Reordering a row must not be able to make the two answers disagree.
+ *  No production caller today — settings.ts coerces before anything reads this table —
+ *  kept, with tintById, so accent-palette.test.ts can pin the table-side fallback to
+ *  the same rule the settings coercion follows. */
 export function accentById(id: string): Accent {
-  return ACCENTS.find((accent) => accent.id === id) ?? ACCENTS[0]!;
+  return ACCENTS.find((accent) => accent.id === id) ?? ACCENTS.find((accent) => accent.id === DEFAULT_ACCENT)!;
 }
 
 /** The panel's own background family. Each entry moves the canvas, the two surfaces and
@@ -398,8 +404,9 @@ export const PANEL_TINTS: readonly PanelTint[] = [
 
 export const DEFAULT_TINT: PanelTintId = 'slate';
 
+/** Nominal fallback, for the same reason as accentById's. */
 export function tintById(id: string): PanelTint {
-  return PANEL_TINTS.find((tint) => tint.id === id) ?? PANEL_TINTS[0]!;
+  return PANEL_TINTS.find((tint) => tint.id === id) ?? PANEL_TINTS.find((tint) => tint.id === DEFAULT_TINT)!;
 }
 
 /** How much of a custom background shows through the panel's own surfaces. Inert without

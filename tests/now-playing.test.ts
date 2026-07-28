@@ -16,7 +16,7 @@ import {
   videoGroupKey,
   type MediaItem,
 } from '../src/shared/media';
-import { nextPlayingDetectedAt, normalizePlayingDetectedAt } from '../src/shared/messages';
+import { nextPlayingDetectedAt, normalizePlayingDetectedAt } from '../src/shared/playing-clock';
 
 const { forgetLastLive, flushBindingsNow, loadBindings, purgeTabBindings, selectPlaying } = await import(
   '../src/shared/now-playing'

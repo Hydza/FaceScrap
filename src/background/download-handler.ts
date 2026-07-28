@@ -14,7 +14,7 @@ import { isFbcdn, MEDIA_KINDS, MEDIA_SOURCES } from '../shared/media';
 import { addSaved, SAVED_ID_MAX, SAVED_LABEL_MAX, SAVED_THUMB_MAX, type SavedEntry } from '../shared/saved';
 import { diagError, diagLog, errorText, redactUrl } from '../shared/diag-log';
 import { hasOffscreen } from '../shared/capabilities';
-import type { DownloadDirectMsg, DownloadDirectResponse, RuntimeMessage } from '../shared/messages';
+import type { DownloadAck, DownloadDirectMsg, DownloadDirectResponse, RuntimeMessage } from '../shared/messages';
 import { downloadDash, downloadDirect } from './dash-download';
 
 interface DownloadHandlerDeps {
@@ -90,10 +90,17 @@ export function createDownloadHandler(deps: DownloadHandlerDeps): DownloadHandle
     tabId: number,
     startedAt: number,
     sendResponse: (response: unknown) => void,
-  ): { done: () => void; failed: (error: unknown) => void } => ({
-    done: () => {
-      diagLog('downloadDone', { mode, tab: tabId, ms: Date.now() - startedAt });
-      sendResponse({ ok: true });
+  ): { done: (downloaded?: boolean) => void; failed: (error: unknown) => void } => ({
+    // `downloaded === false` means the request was collapsed into one that had
+    // already completed. It still succeeded from the caller's point of view, but
+    // nothing was written, and saying so is the difference between "saved" and
+    // "you already have this".
+    done: (downloaded = true) => {
+      diagLog('downloadDone', { mode, tab: tabId, ms: Date.now() - startedAt, deduped: !downloaded });
+      // Present only when it is TRUE: an ordinary success keeps answering the
+      // exact `{ ok: true }` every caller and test already expects, and the flag
+      // stays a signal rather than a field to be ignored everywhere.
+      sendResponse((downloaded ? { ok: true } : { ok: true, deduped: true }) satisfies DownloadAck);
     },
     failed: (error: unknown) => {
       // The panel shows this on the card; the log is what keeps it after the
@@ -156,7 +163,14 @@ export function createDownloadHandler(deps: DownloadHandlerDeps): DownloadHandle
         audio: redactUrl(audioUrl),
       });
       downloadDash({ tabId, receiptId: receipt.id, videoUrl, audioUrl, filename, saveAs: saveAs === true })
-        .then(() => persistCompletedDownload(tabId, receipt))
+        .then(async (downloaded) => {
+          // A deduped call wrote no file, so it must not rewrite the Saved
+          // receipt either — that write is what made a no-op indistinguishable
+          // from a real save. The answer still carries the distinction, so the
+          // diagnostics trace shows which of the two happened.
+          if (downloaded) await persistCompletedDownload(tabId, receipt);
+          return downloaded;
+        })
         .then(outcome.done, outcome.failed);
       return true; // async response
     }
@@ -186,7 +200,7 @@ export function createDownloadHandler(deps: DownloadHandlerDeps): DownloadHandle
       diagLog('downloadStart', { mode: 'direct', tab: tabId, file: filename, url: redactUrl(request.url) });
       downloadDirect(request.url, filename, request.saveAs === true)
         .then(() => persistCompletedDownload(tabId, receipt))
-        .then(outcome.done, outcome.failed);
+        .then(() => outcome.done(), outcome.failed);
       return true;
     }
 

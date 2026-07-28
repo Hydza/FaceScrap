@@ -1,7 +1,19 @@
-// User settings, persisted in chrome.storage.local under a single key. Read by the
-// side panel (all fields) and the service worker (maxItems only). A partial or
-// corrupt stored shape is coerced back onto the defaults, so adding a field here
-// is backward-safe and a bad value can never reach a filename builder or a splice().
+// User settings, persisted in chrome.storage.local under a single key. Three jobs live
+// here because all three turn on the same SETTINGS_KEY, SETTINGS_FIELDS and
+// normalizeSettings; splitting them would only copy that coupling into a second file.
+//
+// - The model: every field, its default, and the coercion that pulls a partial or corrupt
+//   stored shape back onto them, so adding a field is backward-safe and a bad value can
+//   never reach a filename builder or a splice(). Read by the side panel (all fields), the
+//   worker (diagEnabled, plus the in-page download policy in playing-download.ts), the
+//   content scripts (inPageButton, diagEnabled) and storage.ts's retention cache (maxItems).
+// - The worker's write lane: createSettingsMessageHandler admits only an extension page as
+//   the sender, then feeds one serialized read-modify-write queue, so two pages patching
+//   different fields at once cannot clobber each other.
+// - The client half of that lane: saveSettings refuses any context that is not an extension
+//   page and routes the patch through the worker, writing locally only when no receiver
+//   exists; writeSettingOptimistically paints the value before the write lands and puts the
+//   old one back if it rejects.
 
 import {
   ACCENTS,

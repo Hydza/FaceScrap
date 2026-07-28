@@ -6,7 +6,7 @@
 //
 // No chrome.* here: this file is bundled into the MAIN-world page hook too, and
 // that context has no extension APIs. The flag arrives by message instead (see
-// content.ts), and drained counts ride the same channel back out.
+// content-diag.ts), and drained counts ride the same channel back out.
 
 export type DiagReason =
   // --- discards: page hook (GraphQL capture) ---
@@ -153,4 +153,48 @@ export function sanitizeDiagCounters(raw: unknown): DiagCounters {
     out[key] = value;
   }
   return out;
+}
+
+/** Sum one already-sanitized counter map into another, saturating at `max` instead
+ *  of overflowing. Two places coalesce on this same path — the content script,
+ *  between reports, and the worker's observer, per tab — and they had drifted to
+ *  different saturation rules over identical data. Both parameters stay the
+ *  caller's on purpose: the BOUND, because the content side only has to stay
+ *  countable while the worker's is what actually reaches storage; and the KEYS,
+ *  because the worker re-reads the whitelist as defence in depth while the content
+ *  side sums what sanitizeDiagCounters already handed it. */
+export function addBoundedCounters<K extends string>(
+  target: Partial<Record<K, number>>,
+  source: Readonly<Partial<Record<K, number>>>,
+  keys: readonly K[],
+  max: number,
+): void {
+  for (const key of keys) {
+    const value = source[key];
+    if (value === undefined || value <= 0 || !Number.isSafeInteger(value)) continue;
+    target[key] = Math.min(max, (target[key] ?? 0) + value);
+  }
+}
+
+interface CounterCoalescer<K extends string> {
+  add(counters: Readonly<Partial<Record<K, number>>>): void;
+  drain(): Partial<Record<K, number>>;
+}
+
+/** Accumulates already-sanitized counters between reports; scheduling is
+ *  deliberately left to the caller. Lives here rather than beside the ingress token
+ *  buckets it used to share a file with: this is the counter contract, and the
+ *  buckets have nothing to do with diagnostics. */
+export function createCounterCoalescer<K extends string>(): CounterCoalescer<K> {
+  let pending: Partial<Record<K, number>> = {};
+  return {
+    add(counters) {
+      addBoundedCounters(pending, counters, Object.keys(counters) as K[], Number.MAX_SAFE_INTEGER);
+    },
+    drain() {
+      const drained = pending;
+      pending = {};
+      return drained;
+    },
+  };
 }

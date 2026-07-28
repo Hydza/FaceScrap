@@ -11,7 +11,7 @@
  *  the DOM on every call, so it advances no matter how the objects churn.
  *  Undefined off reels — stories have no such attribute and keep the bare mark.
  *
- *  Separator is ':' and not '#': detectPlaying joins the story and video marks
+ *  Separator is ':' and not '#': content-playing.ts's detect() joins the story and video marks
  *  with '#', and storage bounds an overlong mark by its LAST '#'. An inner '#'
  *  would move that cut point. */
 export function combineVideoMark(mark: string, rid: string | undefined): string {

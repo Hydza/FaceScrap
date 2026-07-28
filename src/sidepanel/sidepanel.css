@@ -21,11 +21,11 @@
   --tx: #eef1f5;              /* primary text */
   --md: #9aa4b2;              /* secondary text, interactive chrome */
   /* Faint STATIC labels. The design's value, verbatim.
-     MEASURED: 4.36:1 on graphite's card and 4.44:1 on sand's — both under AA's 4.5:1.
-     It clears the bar on the canvas (5.04:1 at worst) and on slate, navy, plum and moss;
-     the two lighter tints are where it slips. Kept because the handoff states this hex
-     and the ratio is a design decision, not an oversight — see the contrast test, which
-     records the same numbers rather than hiding them. */
+     MEASURED: 4.36:1 on graphite's card is the ONE pairing under AA's 4.5:1. Every other
+     tint clears it on both surfaces — 4.84:1 at worst on a canvas, 4.52:1 at worst on a
+     card (sand). Kept because the handoff states this hex and the ratio is a design
+     decision, not an oversight; the shortfall is recorded per pair in the contrast test's
+     RECORDED_SHORTFALLS, which is the single source for it. */
   --ft: #7c828a;
   --fld: #10141a;             /* field interiors */
   --off: #3a3f46;             /* toggle off track */
@@ -343,9 +343,11 @@ p { margin: 0; }
    the ~10px of layout Chromium reserves for a classic scrollbar, so the grid's
    right-hand column no longer narrows just because the list became scrollable. */
 .grid,
+.now,
 .settings-body,
 .picker-list { scrollbar-width: none; }
 .grid::-webkit-scrollbar,
+.now::-webkit-scrollbar,
 .settings-body::-webkit-scrollbar,
 .picker-list::-webkit-scrollbar { width: 0; height: 0; }
 
@@ -377,16 +379,30 @@ p { margin: 0; }
 /* The brand mark lives in ONE file: icons/logo.svg, which the icon generator also
    reads to build the toolbar PNGs. The radius clips the img to the same corner the
    SVG's own rx renders to at 26px, so the glow hugs the tile and not a square. */
+/* The mark follows the chosen accent WITHOUT losing its glyph.
+ *
+ * A mask was the obvious way and it is wrong: every pixel of the tile is opaque in
+ * logo.svg, so masking leaves the silhouette and throws the camera and its sun away.
+ * Blending keeps them. The accent gradient is painted underneath, and the <img> on
+ * top contributes only its LUMINOSITY — so the tile's mid grey takes the accent's
+ * hue, the white strokes stay white, and the sun stays the lightest thing in the
+ * mark. `isolation: isolate` keeps the blend inside this box instead of reaching
+ * the header behind it.
+ *
+ * logo.svg is still the ONE source: the icon generator rasterises it, the contract
+ * test pins this <img> to it, and nothing here duplicates the glyph. */
 .brand-logo {
   flex: none;
   width: 26px;
   height: 26px;
   display: block;
   overflow: hidden;
+  isolation: isolate;
   border-radius: var(--r2);
   box-shadow: var(--logo-glow);
+  background: var(--acg);
 }
-.brand-logo img { width: 26px; height: 26px; display: block; }
+.brand-logo img { width: 26px; height: 26px; display: block; mix-blend-mode: luminosity; }
 .brand-name {
   flex: 1;
   min-width: 0;
@@ -420,10 +436,15 @@ p { margin: 0; }
 }
 /* Idle: nothing is being captured, so the pill drops to panel chrome and the dot stops.
    The design's own values — a 5%-white wash, the hairline, and --ft. */
+/* Idle: nothing is being captured, so the pill drops to panel chrome and the dot stops.
+   --md, not the design's --ft: composited over the 5%-white wash, --ft lands at 3.82:1
+   (graphite) to 4.10:1 (plum) on the six dark tints, under AA for an 11px label. --md is
+   what the handoff's own rule points at for anything that is not a static label, and it
+   measures 5.87:1 to 6.31:1 on the same six. */
 .status-pill.is-idle {
   background: rgba(255, 255, 255, 0.05);
   border-color: var(--ln);
-  color: var(--ft);
+  color: var(--md);
 }
 .status-pill.is-idle .status-dot { background: var(--ft); animation: none; }
 /* A queue is running: the accent, because it is the panel's own work. */
@@ -522,7 +543,10 @@ p { margin: 0; }
   flex-direction: column;
   gap: 12px;
   padding: 14px 16px;
-  overflow: hidden;
+  /* Below ~430px of viewport height the primary button falls past the fold and no
+     ancestor scrolls — WCAG 1.4.10 asks for a way to reach it. Same invisible bar the
+     grid and the settings body already get. */
+  overflow: hidden auto;
 }
 .head-line { flex: none; min-width: 0; display: flex; align-items: baseline; gap: 9px; }
 .head-line h2 { font-size: 19px; line-height: 1.2; font-weight: 700; letter-spacing: -0.025em; }
@@ -905,9 +929,12 @@ p { margin: 0; }
   -webkit-mask: url("icons/download.svg") center / contain no-repeat;
   mask: url("icons/download.svg") center / contain no-repeat;
 }
-.btn-primary:hover:not(:disabled) { filter: brightness(1.08); }
-.btn-primary:active:not(:disabled) { transform: translateY(1px); }
-.btn-primary:disabled { opacity: 0.55; cursor: default; }
+/* aria-disabled rather than :disabled — the button keeps the focus its own click would
+   otherwise throw away, so the dimming has to hang off the attribute too. */
+.btn-primary:hover:not(:disabled):not([aria-disabled="true"]) { filter: brightness(1.08); }
+.btn-primary:active:not(:disabled):not([aria-disabled="true"]) { transform: translateY(1px); }
+.btn-primary:disabled,
+.btn-primary[aria-disabled="true"] { opacity: 0.55; cursor: default; }
 .now-dest {
   flex: none;
   display: flex;
@@ -1059,24 +1086,41 @@ p { margin: 0; }
 /* ── Segmented control ────────────────────────────────────────────────────────
    Every either/or choice, in one shape: the view filter, the settings tabs and each
    settings row's options. Three sizes, one set of states. */
+/* Never narrower than the options it holds. Each button is `white-space: nowrap`,
+   so a shrunk button keeps its text at full width while its BACKGROUND shrinks with
+   the box — the selected pill stops covering its own label and the text bleeds into
+   the neighbours. The row's copy column has `min-width: 0` and wraps, so it is the
+   one that should absorb a narrow panel. Long translations are where this shows:
+   "Highest/Lowest/Ask" fits where "Mayor/Menor/Preguntar" does not. */
 .seg {
-  flex: 0 1 auto;
+  flex: 0 0 auto;
   min-width: 0;
-  padding: 2px;
+  padding: 3px;
   display: flex;
-  gap: 2px;
+  gap: 4px;
   background: var(--fld);
   border: 1px solid var(--ring);
   border-radius: var(--r2);
   box-shadow: var(--ei);
 }
 .seg > button {
-  min-width: 0;
+  /* Sized by its label, never below it — see .seg above. The stretched variants
+     (.seg-fill, .seg-strip, .seg-tabs) put `flex: 1` back further down, and there
+     every option shares the row's width, so none of them can undercut its text. */
+  /* Sized by its label, never below it — see .seg above. `flex: none` covers the
+     plain groups; `min-content` is what protects the STRETCHED variants
+     (.seg-fill, .seg-strip, .seg-tabs), which put `flex: 1` back further down and
+     would otherwise shrink an option under its own word all the same. The panel
+     measured "Cualquiera" at 60px inside a 56px box before this floor existed. */
+  flex: none;
+  min-width: min-content;
   height: 24px;
   padding: 0 9px;
   color: var(--md);
   background: transparent;
-  border: 0;
+  /* Always reserved, never 0: an option that gained a border only when it lost
+     selection would shift every sibling by 2px on each press. */
+  border: 1px solid transparent;
   border-radius: var(--r1);
   font-family: var(--font);
   font-size: 11px;
@@ -1087,7 +1131,11 @@ p { margin: 0; }
   transition: background 0.14s ease-out, color 0.14s ease-out;
 }
 .seg > button[aria-pressed="true"] { color: var(--onac); background: var(--ac); font-weight: 700; }
-.seg > button:not([aria-pressed="true"]):hover { color: var(--tx); }
+/* Each unpicked option outlined as its own chip. Without it the group reads as one
+   strip of words with a single blob lit somewhere inside it, and where an option
+   ends is a guess — worst on the four-option rows, where the words touch. */
+.seg > button:not([aria-pressed="true"]) { border-color: var(--ring); }
+.seg > button:not([aria-pressed="true"]):hover { color: var(--tx); border-color: var(--md); }
 /* Numeric options read as numbers. */
 .seg-mono > button { font-family: var(--mono); }
 /* Stretched: the options share the row's whole width. */
@@ -1368,7 +1416,16 @@ p { margin: 0; }
   box-shadow: var(--e2);
 }
 .tray-text { flex: 1; min-width: 0; }
-.tray-count { font-size: 12.5px; line-height: 1.3; font-weight: 700; white-space: nowrap; }
+/* Same clipping as its sibling .tray-meta: nowrap without an overflow rule is what lets
+   the Spanish count line collide with the two flex:none buttons at 320px. */
+.tray-count {
+  overflow: hidden;
+  font-size: 12.5px;
+  line-height: 1.3;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .tray-meta {
   margin-top: 2px;
   overflow: hidden;
@@ -1495,11 +1552,17 @@ p { margin: 0; }
   font-size: 11px;
   font-weight: 500;
 }
+/* Wraps rather than squeezing. The control keeps its intrinsic width (see .seg), so
+   without this the copy column absorbed every missing pixel and collapsed — at 300px
+   the theme row left 34px for its title and stacked the hint six lines deep. The
+   copy's flex-basis is what decides the break: the row splits when the two would
+   leave the copy under about nine characters' worth, and shares one line otherwise. */
 .set-row {
   min-width: 0;
   min-height: 44px;
   padding: 11px 0;
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
   gap: 10px;
@@ -1509,7 +1572,11 @@ p { margin: 0; }
 .keys-grid + .set-row { border-top: 1px solid var(--ln); }
 /* A row whose control needs the full width sits under its own copy. */
 .set-row.col { min-height: 0; flex-direction: column; align-items: stretch; gap: 9px; }
-.set-copy { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+/* The copy's 9rem basis below is a WIDTH — it decides where a horizontal row breaks.
+   These rows already stack, so in their column direction that same basis becomes a
+   144px floor on the copy's HEIGHT and opens a gap the size of the control under it. */
+.set-row.col > .set-copy { flex: 0 0 auto; }
+.set-copy { flex: 1 1 9rem; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
 .set-title { min-width: 0; font-size: 13px; line-height: 1.35; font-weight: 600; }
 .set-hint { color: var(--ft); font-size: 11px; line-height: 1.4; font-weight: 400; }
 .set-error { color: var(--dg); }

@@ -81,7 +81,7 @@ test('hides the scrollbar on every container that scrolls, with one rule', () =>
   const scrollers = [...css.matchAll(/^(\.[\w-]+)[^{]*\{[^}]*overflow:[^;]*auto[^;]*;/gms)].map((m) => m[1]!);
   assert.deepEqual(
     new Set(scrollers),
-    new Set(['.grid', '.settings-body', '.picker-list']),
+    new Set(['.grid', '.now', '.settings-body', '.picker-list']),
     'scrolling containers changed',
   );
 

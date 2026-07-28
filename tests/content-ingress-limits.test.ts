@@ -2,7 +2,6 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
-  createCounterCoalescer,
   createMediaIngressBudget,
   createNavIngressBudget,
   createTokenBudget,
@@ -41,18 +40,4 @@ test('token budget requires both item and byte tokens and rejects impossible cha
   assert.equal(budget.tryTake(11, 1, 0), false);
   assert.equal(budget.tryTake(Number.POSITIVE_INFINITY, 1, 0), false);
   assert.equal(budget.tryTake(10, 100, 0), true);
-});
-
-test('counter coalescer combines reports, saturates, and drains once', () => {
-  type Reason = 'graphql' | 'dom';
-  const coalescer = createCounterCoalescer<Reason>();
-
-  coalescer.add({ graphql: Number.MAX_SAFE_INTEGER - 2, dom: 1 });
-  coalescer.add({ graphql: 10, dom: 2 });
-
-  assert.deepEqual(coalescer.drain(), {
-    graphql: Number.MAX_SAFE_INTEGER,
-    dom: 3,
-  });
-  assert.deepEqual(coalescer.drain(), {});
 });

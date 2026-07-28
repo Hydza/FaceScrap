@@ -10,6 +10,7 @@ import { createAckedLatest, type AckedLatestOutcome } from '../shared/acked-late
 import { diagBump } from '../shared/diag';
 import type { NoteFn } from './content-diag';
 import {
+  fbcdnBackgroundUrl,
   isFbcdn,
   isNumericMediaId,
   isStaticFbAsset,
@@ -17,13 +18,18 @@ import {
   NUMERIC_MEDIA_ID_SOURCE,
   type MediaItem,
 } from '../shared/media';
-import {
-  nextPlayingDetectedAt,
-  type NowPlayingAck,
-  type NowPlayingMsg,
-  type ShortcutResultMsg,
+import type {
+  NowPlayingAck,
+  NowPlayingMsg,
+  ShortcutResultMsg,
 } from '../shared/messages';
-import { isStoryDomId, isStoryPath, storyCardMark as formatStoryCardMark } from '../shared/story-mark';
+import { nextPlayingDetectedAt } from '../shared/playing-clock';
+import {
+  isDurableStoryMark,
+  isStoryDomId,
+  isStoryPath,
+  storyCardMark as formatStoryCardMark,
+} from '../shared/story-mark';
 import {
   coverSharesVideoCard,
   discardPlaceholderCoverEvidence,
@@ -65,13 +71,7 @@ function fbcdnCoverUrl(el: Element): string | undefined {
     const s = el.currentSrc || el.src;
     return s && isFbcdn(s) && !isStaticFbAsset(s) ? s : undefined;
   }
-  if (el instanceof HTMLElement) {
-    const bg = getComputedStyle(el).backgroundImage;
-    if (bg && bg !== 'none') {
-      const m = bg.match(/url\(["']?(https?:[^"')]+)["']?\)/);
-      if (m && isFbcdn(m[1]) && !isStaticFbAsset(m[1])) return m[1];
-    }
-  }
+  if (el instanceof HTMLElement) return fbcdnBackgroundUrl(getComputedStyle(el).backgroundImage);
   return undefined;
 }
 
@@ -219,6 +219,11 @@ export function setupPlayingDetection(
     return combineVideoMark(markVideoLoad(key, src), reelVideoId(v));
   };
 
+  // The button's own anchor search (pickAnchorElement, download-overlay.ts) answers a
+  // similar question with different rules — largest covering box, playback state
+  // ignored — so on a stack of slides the two can disagree. That is cosmetic: it only
+  // decides where the button is drawn, while what a click downloads is resolved by the
+  // worker from its capture state, never from the anchor.
   function centreMedia(): CentreMedia {
     const ids = new Set<string>();
     const covers: string[] = [];
@@ -329,6 +334,12 @@ export function setupPlayingDetection(
 
   function detect(): void {
     if (runtime.isDisposed()) return;
+    // A hidden tab has nothing to detect and nobody to show it to: the centre of a
+    // background viewport still holds whatever was there when the tab left, and every
+    // emission is a service-worker wake-up for a video nobody is watching. The
+    // visibilitychange listener below reasserts on return, which is what re-syncs the
+    // panel — so this costs only the sleep it buys.
+    if (document.hidden) return;
     const { ids, hasVideo, covers, mark: videoMk, videoEl, coverEl, centreEl } = centreMedia();
     const now = Date.now();
     // `hasVideo` also covers any playing video elsewhere in the viewport, for
@@ -350,6 +361,10 @@ export function setupPlayingDetection(
       visible == null ? '' : `${visible.kind}|${visible.url}|${visible.width ?? ''}x${visible.height ?? ''}`;
     if (visibleKey !== lastVisibleCaptureKey) {
       lastVisibleCaptureKey = visibleKey;
+      // What is centred changed, so the button may have to move or appear even when the
+      // slide identity below does not — scrolling from photo to photo in the feed keeps
+      // the same empty mark and the same absent vid.
+      resetOverlayCadence();
       if (visible != null) deps.relay([visible]);
     }
     const detectedAt = nextPlayingDetectedAt(lastDetectedAt, now);
@@ -393,13 +408,20 @@ export function setupPlayingDetection(
     // line per real slide change, not per poll tick. It is the answer to the most
     // common report of all — "Now Playing is showing the wrong video": the id this
     // detector believed, and whether it came from the DOM or the URL.
-    deps.note('playing', { vid: vid ?? '', ids: ids.length, hasVideo, covers: covers.length });
+    // `mark` is recorded by PROVENANCE, never by value — the value carries the story
+    // card id. Provenance is what a trace needs: on the story viewer the detector
+    // reports a video with no cover and no id, so whether the card yielded a DOM-proven
+    // `u:` mark is the difference between "Now Playing has one anchor left" and "it has
+    // none", and nothing else in the trace distinguishes those two.
+    const markKind = mark === '' ? 'none' : isDurableStoryMark(mark) ? 'durable' : 'provisional';
+    deps.note('playing', { vid: vid ?? '', ids: ids.length, hasVideo, covers: covers.length, mark: markKind });
     // The slide identity WITHOUT the id set: ids keep growing as more representations of
     // the same video are captured, and closing an open resolution menu on that would
     // fight the user mid-pick. mark and vid move only on a real slide.
     const slideKey = `${hasVideo ? 'v' : '-'}|${vid ?? ''}|${mark}`;
     const mediaChanged = slideKey !== lastOverlaySlideKey;
     lastOverlaySlideKey = slideKey;
+    if (mediaChanged) resetOverlayCadence();
     // Refresh the button only AFTER the new state lands: it asks the worker what is
     // playing, and until this delivery commits the worker still holds the previous
     // slide. Refreshing first would offer the resolutions of the video that just left —
@@ -419,6 +441,7 @@ export function setupPlayingDetection(
   const reassert = (): void => {
     if (runtime.isDisposed()) return;
     delivery.invalidateCommitted();
+    resetOverlayCadence();
     detect();
   };
 
@@ -478,11 +501,41 @@ export function setupPlayingDetection(
   // in-page-button setting stops it outright: off means no message and no worker wake-up. The final
   // refresh takes the button down, since with the setting off the worker answers "nothing".
   let overlayTimer: number | undefined;
+  // Stride, not a rearmed timer: the interval keeps its 750ms tick and simply SKIPS ticks
+  // once the screen has been settled for a while, so a tab parked on a finished reel stops
+  // waking the worker twice a second. Anything that moves — a new slide, a different
+  // centred photo, coming back to the tab — puts the stride back to every tick via
+  // resetOverlayCadence(), so the catch-up right after a slide change is still under a
+  // second. A hidden tab skips outright: no button to place, nobody to see it, and it is
+  // the case that kept the worker awake once per open Facebook tab.
+  const OVERLAY_STEADY_TICKS = 4;
+  const OVERLAY_MAX_STRIDE = 7; // 7 * 750ms ~ 5s between refreshes on a settled screen
+  let overlayStride = 1;
+  let overlayTicks = 0;
+  let overlaySteady = 0;
+  // A declaration, not a const: detect() and reassert() above call this, and both run only
+  // from a timer or an event, long after this line has been reached.
+  function resetOverlayCadence(): void {
+    overlayStride = 1;
+    overlayTicks = 0;
+    overlaySteady = 0;
+  }
+  function overlayTick(): void {
+    if (document.hidden) return;
+    if (++overlayTicks < overlayStride) return;
+    overlayTicks = 0;
+    if (++overlaySteady >= OVERLAY_STEADY_TICKS && overlayStride < OVERLAY_MAX_STRIDE) {
+      overlayStride++;
+      overlaySteady = 0;
+    }
+    void overlay.refresh();
+  }
   const setOverlayPolling = (on: boolean): void => {
     if (runtime.isDisposed() || on === (overlayTimer !== undefined)) return;
     if (on) {
+      resetOverlayCadence();
       void overlay.refresh();
-      overlayTimer = window.setInterval(() => void overlay.refresh(), OVERLAY_REFRESH_MS);
+      overlayTimer = window.setInterval(overlayTick, OVERLAY_REFRESH_MS);
       return;
     }
     clearInterval(overlayTimer);
