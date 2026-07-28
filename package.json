@@ -3,6 +3,15 @@
   "version": "1.0.0",
   "description": "FaceScrap — download Facebook reels, stories and highlights (Chrome MV3, TypeScript).",
   "author": "Hydza",
+  "license": "MIT",
+  "homepage": "https://github.com/Hydza/FaceScrap",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Hydza/FaceScrap.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Hydza/FaceScrap/issues"
+  },
   "private": true,
   "engines": {
     "node": ">=18"

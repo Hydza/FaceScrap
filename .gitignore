@@ -18,11 +18,6 @@ artifacts/
 .DS_Store
 Thumbs.db
 
-# Tooling — machine-local agent/index state
-.claude/settings.local.json
-.serena/
+# Editor / tool state, machine-local
 .codegraph
-.omx/
-.codex/*
-!.codex/agents/
-!.codex/agents/**
+*.tmp
