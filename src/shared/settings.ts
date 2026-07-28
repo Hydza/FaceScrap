@@ -6,8 +6,8 @@
 import type { SettingsUpdateAck, SettingsUpdateMsg } from './messages';
 import type { ThemePreference } from './theme';
 
-export type QualityPref = 'highest' | 'lowest' | 'ask';
-export type ListOrder = 'newest' | 'oldest';
+type QualityPref = 'highest' | 'lowest' | 'ask';
+type ListOrder = 'newest' | 'oldest';
 
 export interface Settings {
   /** Filename pattern; tokens {source} {date} {id} are substituted, the rest kept. */
@@ -114,7 +114,7 @@ export interface SettingsStorageArea {
   set(values: Record<string, unknown>): Promise<void>;
 }
 
-export type SettingsPatchWriter = (patch: Partial<Settings>) => Promise<Settings>;
+type SettingsPatchWriter = (patch: Partial<Settings>) => Promise<Settings>;
 
 /** Create one serialized read-modify-write lane. The service worker owns the
  * shared instance used by extension pages; direct writers are only a fallback
@@ -166,7 +166,7 @@ function sanitizeSettingsPatch(raw: unknown): Partial<Settings> | undefined {
   return patch;
 }
 
-export interface SettingsRuntimeIdentity {
+interface SettingsRuntimeIdentity {
   readonly id?: string;
   getURL(path: string): string;
 }
@@ -300,7 +300,7 @@ export async function saveSettings(patch: Partial<Settings>): Promise<void> {
   await settingsPatchWriter(pendingPatch);
 }
 
-export interface OptimisticSettingWrite {
+interface OptimisticSettingWrite {
   /** Persist the patch durably; a rejection triggers rollback. */
   save(patch: Partial<Settings>): Promise<void>;
   /** Reflect the optimistic value before the durable write resolves. */

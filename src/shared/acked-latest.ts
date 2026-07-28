@@ -54,7 +54,7 @@ interface Pending<T> {
   inFlight: boolean;
 }
 
-export interface AckedLatest<T> {
+interface AckedLatest<T> {
   /** Offer the currently observed logical state. Returns false only when that
    *  exact key is already committed. A repeated pending key keeps its original
    *  payload (notably its detection timestamp). */

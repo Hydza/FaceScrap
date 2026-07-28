@@ -1,4 +1,4 @@
-export interface PlayCenterInput {
+interface PlayCenterInput {
   frameWidth: number;
   frameHeight: number;
   mediaWidth?: number;
@@ -9,7 +9,7 @@ export interface PlayCenterInput {
   clearance: number;
 }
 
-export interface PlayPositionBatcher<T> {
+interface PlayPositionBatcher<T> {
   /** Omit target for a global layout pass; otherwise only queued targets flush. */
   schedule(target?: T): void;
 }

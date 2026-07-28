@@ -2,7 +2,7 @@
 // - Observes fbcdn media requests (video/audio streams) via non-blocking
 //   webRequest and records candidates per tab.
 // - Receives media found by the content script / MAIN-world page hook.
-// - Orchestrates DASH remux via an offscreen ffmpeg.wasm document.
+// - Orchestrates DASH remux via an offscreen document (see mp4-remux.ts).
 // - Keeps the toolbar badge in sync and cleans up per-tab state.
 //
 // Service workers are ephemeral: do minimal synchronous work in listeners and
@@ -16,7 +16,10 @@ import {
   addMedia,
   clearTab,
   ensureCaptureHeadroom,
+  getBind,
   getDiagCounters,
+  getMedia,
+  getPlaying,
   setFacebookTheme,
   purgeTab,
   resetDiagCounters,
@@ -35,15 +38,25 @@ import {
   MAX_MEDIA_BATCH_BYTES,
   MEDIA_KINDS,
   MEDIA_SOURCES,
-  mediaSourceFromPath,
+  mediaSourceFromLocation,
+  resolutionOf,
   sanitizeIncomingItems,
   type MediaSource,
 } from '../shared/media';
+import {
+  isDownloadable,
+  optionForLabel,
+  playingItems,
+  videoGroupOf,
+  videoOptions,
+} from '../shared/video-options';
+import { downloadFilename, itemCardId, savedEntryForItem, videoCardId } from '../shared/download-naming';
 import {
   MUX_HARD_CAP_MS,
   MUX_PORT,
   SETTLE_CAP_MS,
   type DashJobStartedMsg,
+  type RequestPlayingDownloadMsg,
   type DownloadDirectMsg,
   type DownloadDirectResponse,
   type MuxMsg,
@@ -181,14 +194,17 @@ chrome.runtime.onInstalled.addListener((details) => {
   });
 });
 
-// Path classification itself is shared with the page hook and content script
-// (mediaSourceFromPath, same precedence in all three so they can never
+// Classification itself is shared with the page hook and content script
+// (mediaSourceFromLocation, same precedence in all three so they can never
 // drift apart); this wrapper only adds the host check and URL parse a bare
-// pathname classifier can't do for itself.
+// location classifier can't do for itself. The query goes along with the path:
+// a profile highlight is a /stories/ permalink whose only highlight marker is
+// ?source=profile_highlight.
 function surfaceOf(url: string | undefined): MediaSource {
   if (url == null || !FB_URL.test(url)) return 'video';
   try {
-    return mediaSourceFromPath(new URL(url).pathname);
+    const parsed = new URL(url);
+    return mediaSourceFromLocation(parsed.pathname, parsed.search);
   } catch {
     return 'video'; // unparseable — keep the default
   }
@@ -668,6 +684,133 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     return true;
   }
 
+  // The in-page download button's two messages. These are the MIRROR IMAGE of
+  // the two above: those carry a URL and are refused when sender.tab is set,
+  // because a page sharing a process with a content script must never aim the
+  // downloader at a URL of its choosing. These carry no URL at all — the tab
+  // comes from `sender`, which the page cannot forge, and every URL is resolved
+  // from capture state this worker already owns for that tab. So the most a
+  // hostile facebook.com page can do is re-download what the user is watching.
+  if (m?.type === 'FACESCRAP_PLAYING_DOWNLOAD_OPTIONS' || m?.type === 'FACESCRAP_REQUEST_PLAYING_DOWNLOAD') {
+    const senderTab = sender.tab;
+    // Must come FROM a tab (the inverse of the checks above), and only from a
+    // Facebook one: fbcdn is host-permitted too but is not a viewing surface.
+    if (
+      senderTab?.id == null ||
+      !Number.isInteger(senderTab.id) ||
+      !FB_URL.test(senderTab.url ?? '') ||
+      tabLifecycle.isDead(senderTab.id)
+    ) {
+      sendResponse({ ok: false, error: 'Unauthorized request.' });
+      return true;
+    }
+    const tid = senderTab.id;
+    const wantsDownload = m.type === 'FACESCRAP_REQUEST_PLAYING_DOWNLOAD';
+    const requestedLabel = wantsDownload ? (msg as Partial<RequestPlayingDownloadMsg>).label : undefined;
+
+    void (async () => {
+      try {
+        const [items, settings, ref, bind] = await Promise.all([
+          getMedia(tid),
+          loadSettings(),
+          getPlaying(tid),
+          // The panel's learned cover↔group bindings. Read, never written: they are
+          // what lets the button identify an MSE video whose only id in the ref is
+          // its cover — see playingItems.
+          getBind(tid),
+        ]);
+        // A PURE read — see playingItems. This handler polls, so it must not be a
+        // second writer on the detector's learned state or its pin.
+        const playing = playingItems(ref, items, bind);
+        // stripAudio mirrors the panel's own rule: no offscreen API, or the user
+        // asked for direct downloads, means a DASH pair cannot be remuxed.
+        const context = { stripAudio: !hasOffscreen() || settings.directDownload };
+
+        const video = playing.find((i) => i.kind === 'video');
+        // videosOnly hides images from every view; this button is one of them.
+        const image =
+          video || settings.videosOnly
+            ? undefined
+            : playing.find((i) => i.kind === 'image' && isDownloadable(i));
+
+        if (video) {
+          const group = videoGroupOf(video, items);
+          const { options, gkey, thumbUrl, durationSec } = videoOptions(group, context);
+          // minResolution hides the whole card in the Library and in Now Playing.
+          // Offering it here anyway would make the button contradict both.
+          const maxHeight = Math.max(0, ...group.map((i) => i.height ?? 0));
+          const decluttered =
+            settings.minResolution > 0 && maxHeight > 0 && maxHeight < settings.minResolution;
+          if (options.length === 0 || decluttered) {
+            // For the options query "nothing to offer" is a normal answer and the
+            // button hides. A download request must FAIL — answering ok would put
+            // "Saved" on a button that saved nothing.
+            if (wantsDownload) sendResponse({ ok: false, error: 'Nothing downloadable is playing.' });
+            else sendResponse({ ok: true, media: undefined });
+            return;
+          }
+          if (!wantsDownload) {
+            sendResponse({
+              ok: true,
+              media: { kind: 'video', labels: options.map((i) => resolutionOf(i).label) },
+            });
+            return;
+          }
+          const target = optionForLabel(options, requestedLabel, settings.defaultQuality);
+          if (!target) {
+            sendResponse({ ok: false, error: 'Nothing downloadable is playing.' });
+            return;
+          }
+          const cardId = videoCardId(gkey);
+          const receipt = savedEntryForItem(cardId, target, { thumbUrl, durationSec });
+          const filename = downloadFilename(target, settings);
+          const saveAs = settings.defaultQuality === 'ask';
+          if (target.audioUrl != null) {
+            if (!hasOffscreen()) {
+              sendResponse({ ok: false, error: 'This browser can\'t merge audio and video.' });
+              return;
+            }
+            await downloadDash({
+              tabId: tid,
+              receiptId: receipt.id,
+              videoUrl: target.url,
+              audioUrl: target.audioUrl,
+              filename,
+              saveAs,
+            });
+          } else {
+            await downloadDirect(target.url, filename, saveAs);
+          }
+          await persistCompletedDownload(tid, receipt);
+          sendResponse({ ok: true });
+          return;
+        }
+
+        if (image) {
+          if (!wantsDownload) {
+            // No resolutions to choose from — the overlay downloads on one click.
+            sendResponse({ ok: true, media: { kind: 'image', labels: [] } });
+            return;
+          }
+          const cardId = itemCardId(image.id);
+          const receipt = savedEntryForItem(cardId, image);
+          await downloadDirect(image.url, downloadFilename(image, settings), settings.defaultQuality === 'ask');
+          await persistCompletedDownload(tid, receipt);
+          sendResponse({ ok: true });
+          return;
+        }
+
+        // Nothing downloadable on screen. For the options query that is a normal
+        // answer (the button hides); for a download request it is a real failure.
+        if (wantsDownload) sendResponse({ ok: false, error: 'Nothing downloadable is playing.' });
+        else sendResponse({ ok: true, media: undefined });
+      } catch (error) {
+        sendResponse({ ok: false, error: String((error as Error)?.message ?? error) });
+      }
+    })();
+    return true; // async response
+  }
+
   return undefined;
 });
 
@@ -729,7 +872,7 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
     .catch(() => {});
 });
 
-// --- DASH remux via the offscreen ffmpeg.wasm document ---
+// --- DASH remux via the offscreen document ---
 
 let creatingOffscreen: Promise<void> | null = null;
 
@@ -770,7 +913,8 @@ async function ensureOffscreen(): Promise<void> {
   await creatingOffscreen;
 }
 
-// ffmpeg.wasm remux can take a while; a service worker that goes idle mid-job is
+// A DASH job can take a while — the two track fetches dominate it now that the
+// merge itself is table surgery — and a service worker that goes idle mid-job is
 // killed, orphaning the offscreen reply and hanging the panel's button forever.
 // Pinging a cheap API on an interval resets the idle timer while a job runs.
 // (chrome.downloads is unavailable in offscreen docs, so the SW must stay alive
@@ -789,8 +933,9 @@ function startKeepalive(): () => void {
 // job's other two timing constants; they live there — not here — so
 // DASH_UI_HARD_CAP_MS (the panel's own ceiling) can be derived from them
 // instead of merely asserted to sit above them. See their comments there.
-// Grace before closing the idle offscreen document after a download settles —
-// long enough that back-to-back quality downloads reuse the loaded ffmpeg.
+// Grace before closing the idle offscreen document after a download settles. It no
+// longer has a loaded wasm core to amortize, but recreating the document per
+// download would still serialize a page load in front of every merge.
 const OFFSCREEN_IDLE_MS = 60_000;
 
 // track-fetch.ts's own retry ladder (STALL_MS, ATTEMPTS, RETRY_DELAY_MS at
@@ -974,9 +1119,10 @@ async function runDownloadDash(
     keepaliveStopped = true;
     stopKeepalive();
   };
-  // Release ffmpeg.wasm's memory (~100MB high-water mark) once idle: hold the
-  // keepalive one grace period longer, then close the offscreen document if
-  // no other mux is running. The next download simply recreates it.
+  // Let the document go once idle: it holds the fetched tracks and the published
+  // blob, which is the only memory left in this path now that there is no wasm
+  // heap. Hold the keepalive one grace period longer, then close it if no other
+  // mux is running. The next download simply recreates it.
   let idleCloseScheduled = false;
   const scheduleIdleClose = (): void => {
     if (idleCloseScheduled) return;
@@ -1065,8 +1211,8 @@ async function runDownloadDash(
     scheduleIdleClose();
   } catch (e) {
     // Same idle-close path as success: a failed mux (an expired fbcdn URL is the
-    // common failure) must not leave the offscreen document — and ffmpeg's heap —
-    // alive indefinitely.
+    // common failure) must not leave the offscreen document — and the tracks it
+    // fetched — alive indefinitely.
     scheduleIdleClose();
     throw e;
   }

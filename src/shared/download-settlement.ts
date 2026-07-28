@@ -1,4 +1,4 @@
-export interface DownloadEvents {
+interface DownloadEvents {
   addListener(listener: (delta: chrome.downloads.DownloadDelta) => void): void;
   removeListener(listener: (delta: chrome.downloads.DownloadDelta) => void): void;
 }
@@ -9,7 +9,7 @@ export interface DownloadSettlementApi {
   cancel(downloadId: number): Promise<void>;
 }
 
-export interface DownloadSettlementOptions {
+interface DownloadSettlementOptions {
   /** Omit for ordinary network downloads, whose healthy duration is unbounded. */
   timeoutMs?: number;
   /** Cancel an in-progress download before exposing Retry after timeout. */

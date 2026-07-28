@@ -1,6 +1,6 @@
 import { widenDashUrl } from '../shared/media';
 
-export interface RecentObserver {
+interface RecentObserver {
   /** Returns the scheduled write, or undefined when the same canonical track
    *  is still the latest observation for this tab. */
   bump(tabId: number, url: string, documentId?: string): Promise<boolean> | undefined;

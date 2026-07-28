@@ -8,7 +8,6 @@
   font-display: swap;
   src: url("fonts/manrope-latin.woff2") format("woff2");
 }
-
 :root {
   color-scheme: dark;
   --canvas: #0d0e11;
@@ -19,7 +18,6 @@
   --accent: #1f6bff;
   --accent-soft: #5b9bff;
   --accent-grad: linear-gradient(180deg, #3a8bff, #2069f0);
-  --accent-wash: rgba(47, 125, 255, 0.14);
   --live: #35d07f;
   --live-text: #5fe0a0;
   --live-wash: rgba(53, 208, 127, 0.12);
@@ -44,14 +42,12 @@
   --select-hover: rgba(47, 125, 255, 0.16);
   --select-chevron: url("icons/chevron.svg");
   --picker-shadow: 0 16px 40px rgba(0, 0, 0, 0.5);
-  --media-overlay: rgba(10, 11, 12, 0.96);
   --media-overlay-soft: rgba(10, 11, 12, 0.94);
   --media-control: rgba(0, 0, 0, 0.55);
   --media-control-soft: rgba(0, 0, 0, 0.3);
   --media-surface: #15171b;
   --media-text: #ffffff;
   --media-muted: #c3c8ce;
-  --media-line: rgba(255, 255, 255, 0.25);
   --media-accent: #1f6bff;
   --media-on-accent: #ffffff;
   --media-select-hover: rgba(47, 125, 255, 0.16);
@@ -67,7 +63,6 @@
   --font-mono: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
   --media-wash: linear-gradient(160deg, #2a2f37, #14171c 60%);
 }
-
 :root[data-theme="light"] {
   color-scheme: light;
   --canvas: #eef0f3;
@@ -81,7 +76,6 @@
      and leaves --accent itself alone, so the primary button keeps its fill. */
   --accent-soft: #1a5fe6;
   --accent-grad: linear-gradient(180deg, #3a8bff, #2069f0);
-  --accent-wash: rgba(47, 125, 255, 0.12);
   --live: #177a49;
   /* 5.03:1 over --live-wash on --canvas; #177a49 was 4.12:1. */
   --live-text: #146b40;
@@ -118,7 +112,6 @@
     --accent: #1f6bff;
     --accent-soft: #1a5fe6;
     --accent-grad: linear-gradient(180deg, #3a8bff, #2069f0);
-    --accent-wash: rgba(47, 125, 255, 0.12);
     --live: #177a49;
     --live-text: #146b40;
     --live-wash: rgba(23, 122, 73, 0.1);
@@ -141,7 +134,6 @@
     --picker-shadow: 0 12px 28px rgba(20, 28, 38, 0.18);
   }
 }
-
 * { box-sizing: border-box; }
 [hidden] { display: none !important; }
 
@@ -154,9 +146,7 @@
 :root[data-boot="pending"] body { background: transparent; }
 :root[data-boot="pending"] body { visibility: hidden; }
 :root[data-boot="error"] #app > :not(#fatal) { display: none !important; }
-
 html { color-scheme: light dark; }
-
 html,
 body {
   width: 100%;
@@ -165,23 +155,19 @@ body {
   margin: 0;
   overflow: hidden;
 }
-
 body {
   color: var(--text);
   background: var(--canvas);
   font-family: var(--font);
   -webkit-font-smoothing: antialiased;
 }
-
 button,
 input,
 select { font: inherit; }
-
 button,
 select,
 summary,
 label { -webkit-tap-highlight-color: transparent; }
-
 .app {
   width: 100%;
   height: 100vh;
@@ -192,46 +178,35 @@ label { -webkit-tap-highlight-color: transparent; }
   overflow: hidden;
   background: var(--canvas);
 }
-
 .brand {
   flex: none;
-  min-height: 56px;
-  padding: 12px 16px 8px;
   display: flex;
   align-items: center;
   gap: 9px;
 }
-
 .brand-logo {
   flex: none;
-  width: 32px;
-  height: 32px;
   display: block;
   line-height: 0;
 }
-
-.brand-logo img { width: 32px; height: 32px; display: block; }
+.brand-logo img {
+  display: block; }
 .brand-text { min-width: 0; flex: 1; }
-.brand-text h1 { margin: 0; font-size: 15px; line-height: 19px; font-weight: 700; }
+.brand-text h1 { margin: 0; font-size: 15px; line-height: 19px;
+  }
 .brand-tagline { display: none; }
-
 .brand-live {
   flex: none;
   min-height: 22px;
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  padding: 4px 10px;
-  color: var(--text);
-  background: var(--surface);
   border-radius: var(--r-pill);
   font-size: 10px;
   line-height: 14px;
   font-weight: 700;
-  letter-spacing: 0.06em;
   text-transform: uppercase;
 }
-
 .live-dot {
   width: 6px;
   height: 6px;
@@ -244,7 +219,6 @@ label { -webkit-tap-highlight-color: transparent; }
   60% { box-shadow: 0 0 0 4px rgba(49, 162, 76, 0); }
   100% { box-shadow: 0 0 0 0 rgba(49, 162, 76, 0); }
 }
-
 .banner {
   flex: none;
   margin: 0 12px 8px;
@@ -256,9 +230,7 @@ label { -webkit-tap-highlight-color: transparent; }
   font-size: 11px;
   line-height: 15px;
 }
-
 .banner-error { background: var(--danger-wash-strong); font-weight: 600; }
-
 .view {
   flex: 1;
   min-height: 0;
@@ -266,7 +238,6 @@ label { -webkit-tap-highlight-color: transparent; }
   flex-direction: column;
   overflow: hidden;
 }
-
 .empty {
   flex: 1;
   min-height: 0;
@@ -281,7 +252,6 @@ label { -webkit-tap-highlight-color: transparent; }
   border-radius: var(--r-lg);
   background: var(--surface);
 }
-
 .empty-mark {
   width: 42px;
   height: 42px;
@@ -291,28 +261,25 @@ label { -webkit-tap-highlight-color: transparent; }
   mask: url("icons/nav-now.svg") center / 30px 30px no-repeat;
   opacity: 0.7;
 }
-
-.empty h2 { margin: 0; font-size: 17px; line-height: 22px; font-weight: 700; }
+.empty h2 { margin: 0; font-size: 17px; line-height: 22px;
+  }
 .empty p { max-width: 260px; margin: 0; color: var(--muted); font-size: 12px; line-height: 17px; }
 
+/* Padding lives in the layout block further down, with the other .now geometry —
+   this used to declare 0 12px here as well, permanently overridden and 4px off. */
 .now {
   flex: 1;
   min-height: 0;
-  padding: 0 12px;
   display: flex;
 }
-
 .preview {
   position: relative;
-  flex: 1;
   min-width: 0;
-  min-height: 0;
   overflow: hidden;
   border-radius: var(--r-lg);
   background: var(--media-wash);
   isolation: isolate;
 }
-
 .preview > img:not(.thumb-bg),
 .card-thumb > img:not(.thumb-bg) {
   position: absolute;
@@ -324,10 +291,8 @@ label { -webkit-tap-highlight-color: transparent; }
   object-fit: contain;
   object-position: center;
 }
-
 .preview > img.media-fit-cover:not(.thumb-bg),
 .card-thumb > img.media-fit-cover:not(.thumb-bg) { object-fit: cover; }
-
 .preview > img.thumb-bg,
 .card-thumb > img.thumb-bg {
   position: absolute;
@@ -342,7 +307,6 @@ label { -webkit-tap-highlight-color: transparent; }
   filter: blur(14px) saturate(0.85) brightness(0.62);
   opacity: 0.82;
 }
-
 .preview-chips {
   position: absolute;
   z-index: 4;
@@ -365,7 +329,6 @@ label { -webkit-tap-highlight-color: transparent; }
   line-height: 14px;
   white-space: nowrap;
 }
-
 .media-badge {
   color: var(--media-on-accent);
   background: var(--media-accent);
@@ -373,7 +336,6 @@ label { -webkit-tap-highlight-color: transparent; }
   letter-spacing: 0.04em;
   text-transform: uppercase;
 }
-
 .preview-dur {
   color: var(--media-text);
   background: var(--media-control);
@@ -381,7 +343,6 @@ label { -webkit-tap-highlight-color: transparent; }
   font-weight: 700;
 }
 .preview-dur:empty { display: none; }
-
 .preview-play {
   position: absolute;
   z-index: 3;
@@ -400,7 +361,6 @@ label { -webkit-tap-highlight-color: transparent; }
   -webkit-backdrop-filter: blur(10px) saturate(0.8);
   backdrop-filter: blur(10px) saturate(0.8);
 }
-
 .preview.is-video .preview-play { display: flex; }
 .preview.play-obstructed .preview-play { visibility: hidden; }
 /* No nudge margin: play.svg already carries its own optical centring (the
@@ -426,15 +386,19 @@ label { -webkit-tap-highlight-color: transparent; }
   gap: 12px;
   color: var(--text);
 }
-
 .now-identity { display: flex; flex-direction: column; gap: 2px; }
-.now-title { margin: 0; font-size: 17px; line-height: 22px; font-weight: 800; letter-spacing: -0.01em; }
+.now-title { margin: 0; font-size: 17px; line-height: 22px; font-weight: 800;
+  }
 .now-sub { margin: 0; color: var(--muted); font-size: 12.5px; line-height: 16px; }
-
-.metrics { display: flex; align-items: center; gap: 14px; }
-.metric { min-width: 0; display: flex; align-items: baseline; gap: 4px; }
-.metric-label { color: var(--faint); font-size: 10.5px; line-height: 15px; white-space: nowrap; }
-.metric-value { overflow: hidden; font-size: 11.5px; line-height: 15px; font-weight: 700; text-overflow: ellipsis; white-space: nowrap; }
+.metrics {
+  align-items: center;
+  }
+.metric { min-width: 0; display: flex;
+  }
+.metric-label { color: var(--faint);
+  line-height: 15px; white-space: nowrap; }
+.metric-value { overflow: hidden;
+  line-height: 15px; font-weight: 700; text-overflow: ellipsis; white-space: nowrap; }
 
 /* Full-width resolution field, matching the download button below it, with the
    "RESOLUTION" label on its own row above (not overlaying the value). */
@@ -469,7 +433,6 @@ label { -webkit-tap-highlight-color: transparent; }
   white-space: nowrap;
 }
 .select-wrap { min-width: 0; }
-
 .select,
 .set-input {
   min-width: 0;
@@ -479,17 +442,13 @@ label { -webkit-tap-highlight-color: transparent; }
   border: 1px solid var(--control-line);
   border-radius: 8px;
 }
-
 .select {
-  padding: 0 30px 0 10px;
   appearance: none;
   background-image: var(--select-chevron);
   background-repeat: no-repeat;
   background-position: right 9px center;
   background-size: 12px;
-  font-size: 11px;
   line-height: 1;
-  font-weight: 600;
 }
 
 /* Chromium on Windows may paint the native popup with the OS light surface
@@ -509,7 +468,6 @@ label { -webkit-tap-highlight-color: transparent; }
   .select::picker(select) {
     appearance: base-select;
   }
-
   .select {
     display: flex;
     align-items: center;
@@ -528,19 +486,15 @@ label { -webkit-tap-highlight-color: transparent; }
     box-shadow: var(--picker-shadow);
     overflow: hidden;
   }
-
   .select::picker-icon,
   .select option::checkmark { display: none; }
-
   .select option {
     min-height: 34px;
     padding: 9px 11px;
     border-radius: 10px;
   }
-
   .select option:hover,
   .select option:focus-visible { background: var(--select-hover); }
-
   .select option:checked {
     color: var(--on-accent);
     background: var(--accent);
@@ -597,12 +551,6 @@ label { -webkit-tap-highlight-color: transparent; }
     background: var(--media-accent);
   }
 }
-
-.now-overlay .btn-primary {
-  color: var(--media-on-accent);
-  background: var(--media-accent);
-}
-
 .btn-primary {
   min-width: 0;
   height: 48px;
@@ -611,16 +559,12 @@ label { -webkit-tap-highlight-color: transparent; }
   align-items: center;
   justify-content: center;
   gap: 9px;
-  color: var(--on-accent);
-  background: var(--accent);
   border: 0;
-  border-radius: var(--r-sm);
   font-size: 15px;
   line-height: 1;
   font-weight: 700;
   cursor: pointer;
 }
-
 .btn-primary::before {
   content: "";
   flex: none;
@@ -630,10 +574,13 @@ label { -webkit-tap-highlight-color: transparent; }
   -webkit-mask: url("icons/download.svg") center / contain no-repeat;
   mask: url("icons/download.svg") center / contain no-repeat;
 }
-
 .btn-primary:disabled { opacity: 0.55; cursor: default; }
 
-.view-grid { padding-top: 12px; }
+/* Both content views open the same distance below the app header. Now Playing had
+   no top padding at all, which read as glued to the header next to Library and
+   Saved; one rule so the two cannot drift apart again. */
+.view-grid,
+.view-now { padding-top: 12px; }
 .grid-head {
   flex: none;
   min-width: 0;
@@ -642,13 +589,11 @@ label { -webkit-tap-highlight-color: transparent; }
   align-items: flex-start;
   gap: 8px;
 }
-
 .grid-title { min-width: 0; flex: 1; }
 .grid-title-line { display: flex; align-items: baseline; gap: 8px; }
 .grid-title h2 { margin: 0; font-size: 20px; line-height: 25px; font-weight: 800; }
 .grid-title p { height: 0; margin: 0; overflow: hidden; }
 .grid-count { min-width: 0; overflow: hidden; color: var(--accent-soft); font-size: 12.5px; line-height: 16px; font-weight: 700; text-overflow: ellipsis; white-space: nowrap; }
-
 .picks-head {
   flex: none;
   display: flex;
@@ -670,7 +615,6 @@ label { -webkit-tap-highlight-color: transparent; }
   cursor: pointer;
   white-space: nowrap;
 }
-
 .filters { flex: none; padding: 0 16px 14px; display: flex; gap: 8px; }
 .chip {
   min-height: 26px;
@@ -685,7 +629,6 @@ label { -webkit-tap-highlight-color: transparent; }
   cursor: pointer;
 }
 .chip[aria-pressed="true"] { color: var(--on-accent); background: var(--accent); border-color: transparent; font-weight: 700; }
-
 .grid {
   flex: 1;
   min-height: 0;
@@ -720,7 +663,6 @@ label { -webkit-tap-highlight-color: transparent; }
 }
 .grid:empty { display: none; }
 .spacer { display: none; }
-
 .card {
   position: relative;
   min-width: 0;
@@ -742,7 +684,6 @@ label { -webkit-tap-highlight-color: transparent; }
   background: linear-gradient(transparent, var(--media-overlay-soft));
   pointer-events: none;
 }
-
 .card-thumb {
   position: absolute;
   inset: 0;
@@ -753,7 +694,6 @@ label { -webkit-tap-highlight-color: transparent; }
   background: var(--media-wash);
   isolation: isolate;
 }
-
 .kind-fallback {
   width: 32px;
   height: 32px;
@@ -761,7 +701,6 @@ label { -webkit-tap-highlight-color: transparent; }
   -webkit-mask: var(--kind-icon) center / contain no-repeat;
   mask: var(--kind-icon) center / contain no-repeat;
 }
-
 .card-thumb.is-video::after {
   content: "";
   position: absolute;
@@ -782,7 +721,6 @@ label { -webkit-tap-highlight-color: transparent; }
   pointer-events: none;
 }
 .card-thumb.play-obstructed.is-video::after { visibility: hidden; }
-
 .pick,
 .card-dl {
   position: absolute;
@@ -812,7 +750,6 @@ label { -webkit-tap-highlight-color: transparent; }
   border-color: var(--media-accent);
 }
 .pick:disabled { opacity: 0.35; cursor: default; }
-
 .card-dl {
   right: 8px;
   border: 0;
@@ -840,7 +777,6 @@ label { -webkit-tap-highlight-color: transparent; }
   animation: spin 0.7s linear infinite;
 }
 @keyframes spin { to { transform: rotate(360deg); } }
-
 .card-title,
 .card-meta {
   position: absolute;
@@ -877,7 +813,6 @@ label { -webkit-tap-highlight-color: transparent; }
 .tray-meta { display: none; }
 .tray-btn { width: auto; height: 38px; padding: 0 18px; border-radius: 10px; font-size: 13px; white-space: nowrap; }
 .tray-btn::before { width: 15px; height: 15px; }
-
 .settings-sheet {
   flex: 1;
   min-height: 0;
@@ -885,7 +820,6 @@ label { -webkit-tap-highlight-color: transparent; }
   flex-direction: column;
   overflow: hidden;
 }
-
 .settings-head {
   flex: none;
   min-height: 47px;
@@ -898,7 +832,6 @@ label { -webkit-tap-highlight-color: transparent; }
 .settings-title h2 { margin: 0; font-size: 20px; line-height: 25px; font-weight: 800; }
 .settings-autosave { margin: 0; color: var(--faint); font-size: 11.5px; line-height: 15px; font-weight: 600; }
 .settings-close { display: none; }
-
 .settings-body {
   flex: 1;
   min-height: 0;
@@ -911,13 +844,7 @@ label { -webkit-tap-highlight-color: transparent; }
 .set-section { flex: none; }
 .set-card { padding: 4px 14px; background: var(--surface); border-radius: var(--r-md); }
 .set-label {
-  margin: 0;
-  padding: 9px 0 4px;
-  color: var(--accent);
-  font-size: 11px;
   line-height: 14px;
-  font-weight: 700;
-  letter-spacing: 0.06em;
   text-transform: uppercase;
 }
 .set-row {
@@ -953,7 +880,6 @@ label { -webkit-tap-highlight-color: transparent; }
   text-align: right;
 }
 .set-row .select { width: auto; max-width: 168px; height: 32px; flex: 0 1 auto; }
-
 .btn-ghost {
   min-height: 32px;
   padding: 8px 16px;
@@ -976,21 +902,29 @@ label { -webkit-tap-highlight-color: transparent; }
 .track::before { content: ""; position: absolute; top: 3px; left: 3px; width: 20px; height: 20px; border-radius: 50%; background: var(--knob); box-shadow: 0 1px 3px rgba(0, 0, 0, 0.45); transition: transform 0.14s ease; }
 .switch input:checked + .track { background: var(--accent); }
 .switch input:checked + .track::before { transform: translateX(18px); }
-
 .lang-toggle { flex: none; padding: 3px; display: flex; gap: 2px; background: var(--input-deep); border: 1px solid var(--control-line); border-radius: 9px; }
 .lang-toggle button { min-width: 40px; height: 26px; padding: 0 14px; color: var(--muted); background: transparent; border: 0; border-radius: 7px; font-size: 12.5px; font-weight: 700; cursor: pointer; }
 .lang-toggle button.is-active { color: var(--on-accent); background: var(--accent); }
 .lang-toggle.is-disabled { opacity: 0.45; pointer-events: none; }
 .lang-toggle button:disabled { cursor: default; }
-
 .diagnostics details { cursor: pointer; }
 .diagnostics pre { height: auto; min-height: 44px; margin: 0; padding: 8px; white-space: pre-wrap; }
+/* The counters panel is the one .set-row.col whose children are NOT flex siblings:
+   Chromium wraps everything after <summary> in a UA ::details-content box, so the
+   column `gap` lands between the summary and that box and never between the
+   counters and the Reset button — measured 8px then 0px, which is the two of them
+   touching. Space them with margins instead: identical with or without that box,
+   so it holds on the Chrome 116 floor (where they ARE flex siblings) and on
+   current Chromium alike. align-self pins the button's width in the flex-sibling
+   case too, where align-items: stretch would otherwise blow it to full width. */
+.diagnostics details.set-row.col { gap: 0; }
+.diagnostics #diag-counters { margin-top: 8px; }
+.diagnostics #diag-reset { margin-top: 8px; align-self: flex-start; }
 /* Centred rights notice with the version on its own line, as the design draws it. */
 .settings-footer { margin-top: 4px; padding: 2px 2px 12px; display: flex; flex-direction: column; align-items: center; gap: 3px; text-align: center; color: var(--faint); }
 .settings-rights,
 .settings-version { margin: 0; font-size: 11.5px; line-height: 17px; }
 .settings-version { flex: none; font-family: var(--font); font-weight: 700; }
-
 .views {
   flex: none;
   min-height: 66px;
@@ -1008,15 +942,11 @@ label { -webkit-tap-highlight-color: transparent; }
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 3px;
   color: var(--muted);
   background: transparent;
   border: 0;
   border-radius: var(--r-sm);
-  font-size: 9px;
   line-height: 11px;
-  font-weight: 600;
-  letter-spacing: 0.04em;
   text-transform: uppercase;
   cursor: pointer;
   white-space: nowrap;
@@ -1033,9 +963,7 @@ label { -webkit-tap-highlight-color: transparent; }
 /* The brand bar is persistent chrome in every view — only the view bodies swap. */
 .app.is-settings .view,
 .app.is-settings > .banner { display: none; }
-
 .app:not(.is-settings) .settings-sheet { display: none; }
-
 :where(button, input, select, summary):focus-visible {
   outline: 2px solid var(--text);
   outline-offset: 2px;
@@ -1046,7 +974,10 @@ label { -webkit-tap-highlight-color: transparent; }
 
 @media (max-width: 335px) {
   .brand { padding-right: 12px; padding-left: 12px; }
-  .now-overlay { padding-right: 12px; padding-left: 12px; }
+  /* Tighten the whole view, like .brand and .grid below. This used to indent
+     .now-overlay instead, which ADDED to .now's own padding and left the title,
+     metrics and button 12px further in than the media card above them. */
+  .now { padding-right: 12px; padding-left: 12px; }
   .metrics { gap: 7px; }
   .metric { gap: 2px; }
   .metric-label { font-size: 9px; }
@@ -1164,7 +1095,9 @@ label { -webkit-tap-highlight-color: transparent; }
 .now {
   flex-direction: column;
   gap: 12px;
-  padding: 0 12px 14px;
+  /* 16px matches .grid and .settings-body, so the heading and the media card line
+     up with the grid cards and the settings rows instead of sitting 2px inside. */
+  padding: 0 16px 14px;
   overflow: hidden auto;
 }
 
@@ -1178,22 +1111,31 @@ label { -webkit-tap-highlight-color: transparent; }
 .preview { flex: 1 1 auto; min-height: 170px; aspect-ratio: 10 / 16; }
 
 /* Section heading for the view, matching the grid's title row. */
+/* Same shape as .grid-title-line: the count sits right after the heading, sharing
+   its baseline. It used to be pushed to the far right by space-between, which left
+   it hanging away from the title it belongs to — the one visible difference from
+   Library and Saved that no amount of spacing would fix. The inset comes from
+   .now's own padding, as the grid's does, so there is no extra 2px here. */
 .now-head {
   flex: none;
   min-width: 0;
   display: flex;
   align-items: baseline;
-  justify-content: space-between;
   gap: 8px;
-  padding: 0 2px;
 }
 .now-head h2 { margin: 0; font-size: 20px; line-height: 25px; font-weight: 800; letter-spacing: -0.02em; }
+/* Matches .grid-count exactly: same colour, size and weight, so "1 piece" and
+   "20 found" read as the same kind of label. The copy is deliberately as short as
+   the grid's: sharing a line with a 20px heading, "1 pieza en la publicación" made
+   the Spanish title wrap and then ellipsized itself anyway. */
 .now-pieces {
-  flex: none;
-  color: var(--faint);
-  font-size: 12px;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--accent-soft);
+  font-size: 12.5px;
   line-height: 16px;
-  font-weight: 600;
+  font-weight: 700;
+  text-overflow: ellipsis;
   white-space: nowrap;
 }
 

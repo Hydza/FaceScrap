@@ -14,27 +14,42 @@ reads responses to requests Facebook itself made. It must never re-issue a
 every 2–4 weeks (so it breaks) and an extension originating queries is the
 signal that gets accounts actioned. Patch, observe, extract — never call.
 
-**Remux only, never re-encode.** `src/offscreen/offscreen.ts` merges the video
-and audio tracks with `-c copy -shortest`. A re-encode would be slow, lossy, and
-would blow up RAM on long videos. `-shortest` is deliberate — it trims the merge
-so the file can't end on frozen video or silence.
+**Remux only, never re-encode.** `src/shared/mp4-remux.ts` merges the video and
+audio tracks by copying their sample bytes and writing a new sample table around
+them — what ffmpeg's `-c copy -shortest` used to do here, in ~30 KB instead of a
+30.7 MB wasm core. A re-encode would be slow, lossy, and would blow up RAM on long
+videos. The shortest-track trim is deliberate — it stops the file ending on frozen
+video or on silence.
+
+Three properties of that file are load-bearing:
+
+- **No sample byte passes through JS.** The output is a `Blob` of slices of the two
+  input Blobs, so the media stays where the browser put it. An `arrayBuffer()` over
+  a track would reintroduce the heap cost that a 500 MB reel used to pay.
+- **`stsd` is copied verbatim, never parsed.** That box is the only place a codec is
+  described, which is what makes AVC, HEVC, VP9, AV1, AAC, Opus and AC-3 all work
+  without a line of codec-specific code.
+- **Both MP4 shapes must keep working.** A DASH representation may be progressive
+  (one `stbl`) or fragmented (`moof`/`trun` per fragment); the reader handles both
+  and converges on one flat sample list. Facebook serves either.
 
 **DRM is out of scope.** `<ContentProtection>` entries in the DASH manifest are
 detected and discarded on purpose. Widevine cannot be decrypted by any
 extension; do not add code that tries.
 
-**The ffmpeg assets in `scripts/build.mjs` are copied verbatim, not bundled.**
-The worker chunk's hashed filename (e.g. `814.ffmpeg.js`) must be preserved —
-`ffmpeg.js` auto-loads that exact sibling as a *classic* worker. Renaming it,
-bundling it, or passing `classWorkerURL` spawns a module worker and breaks
-`importScripts()`. The comment above `copyFfmpegAssets()` says this too; believe it.
+**Nothing ships but our own bundles.** The unpacked extension is ~600 KB, and every
+byte of it is built from `src/`. It was 32.7 MB while it carried an ffmpeg core to
+run one merge; do not reintroduce a vendored binary without a reason that survives
+that comparison. `manifest.json` no longer grants `wasm-unsafe-eval` either — there
+is no wasm to compile.
 
 ## Working here
 
 - **Edit `src/`, never `dist/`.** `dist/` is gitignored and `rm -rf`'d at the
   start of every build.
-- **No new dependencies** unless there's no alternative. `@ffmpeg/core` alone is
-  ~31 MB of the unpacked extension; that's the budget spent.
+- **No dependencies at all.** `package.json` has an empty `dependencies`, and its
+  devDependencies are esbuild, TypeScript and two `@types` packages — build tooling
+  that never reaches `dist/`. A test enforces this.
 - Facebook internals shift. Expect selector/GraphQL-shape breakage roughly
   monthly — that's maintenance, not a regression you introduced.
 

@@ -8,9 +8,10 @@
 // The fix: service-worker.ts's downloadDash() now broadcasts
 // FACESCRAP_DASH_JOB_STARTED — addressed by dashDownloadKey — the instant a
 // request LEAVES dashChain, so the panel can rebase its hard cap off the job
-// actually starting (sidepanel.ts's half is covered by source-text assertions
-// in fix-sidepanel.test.ts; this module cannot run under node:test — see that
-// file's own header comment).
+// actually starting. The panel's half of this used to be pinned by source-text
+// assertions; those were dropped as refactor-detectors, so what follows is the
+// whole automated guard — the panel side shows up in a real tab as a merge that
+// times out early.
 //
 // This test proves the WORKER-side half: a second, differently-keyed request
 // queued behind a first must not see its own start signal until the first's

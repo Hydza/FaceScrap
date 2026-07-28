@@ -109,7 +109,7 @@ FaceScrap:
    de Facebook (`all_video_dash_prefetch_representations` / `dash_manifest_xml`).
 2. Vuelve a descargar ambas pistas completas desde `fbcdn` (en el documento
    offscreen, que evita CORS gracias a `host_permissions`).
-3. **Las combina en un solo MP4** con `ffmpeg.wasm` usando `-c copy -shortest`
+3. **Las combina en un solo MP4** con el remuxer del repo (`src/shared/mp4-remux.ts`)
    — **sin recodificar, sin captura de pantalla**; `-shortest` recorta la unión a
    la pista más corta (por lo general milisegundos) para que el archivo nunca
    termine en video congelado o silencio. El mismo enfoque que usa yt-dlp.
@@ -134,7 +134,7 @@ npm run qa:sidepanel -- --browser=edge --lang=es --theme=light
 `es`; y `--theme` acepta `light` (predeterminado), `dark` o `auto`. El flujo
 recorre claro → oscuro → automático mediante una página sintética de Facebook
 sin red, valida los anchos 300, 340 y 500 px, y restaura el tema solicitado y
-el ancho de 340 px antes de escribir las capturas y `dist/qa/evidence.json`.
+el ancho de 340 px antes de escribir las capturas y `artifacts/qa/evidence.json`.
 La comparación opcional contra un diseño local sigue disponible con
 `--reference ruta\al\archivo.html`.
 
@@ -162,7 +162,7 @@ Luego cárgala en Chrome:
 ## Estructura
 
 <p align="center">
-  <img src="docs/flow.es.svg" width="760" alt="Flujo de datos de FaceScrap en seis pasos: la página reproduce el contenido, el hook del mundo MAIN lee GraphQL, el content script retransmite, el service worker guarda por pestaña, el panel lateral se muestra en vivo, y las descargas van directo al disco o pasan por el remux de ffmpeg.wasm">
+  <img src="docs/flow.es.svg" width="760" alt="Flujo de datos de FaceScrap en seis pasos: la página reproduce el contenido, el hook del mundo MAIN lee GraphQL, el content script retransmite, el service worker guarda por pestaña, el panel lateral se muestra en vivo, y las descargas van directo al disco o pasan por el remux de MP4">
 </p>
 
 Cada contexto de arriba se apoya en `src/shared/` — el modelo de contenido y los
@@ -171,15 +171,15 @@ reproducción, la configuración, i18n y los contratos de mensajes tipados.
 `rules/referer-rules.json` es una regla de declarativeNetRequest que fija el
 Referer en las solicitudes a fbcdn.
 
-> **Tamaño:** el núcleo de `ffmpeg.wasm` (~31 MB) se copia en
-> `dist/assets/ffmpeg/`, así que la extensión sin empaquetar pesa ~31 MB. Normal
+> **Tamaño:** ~600 KB sin empaquetar, todo compilado desde `src/` — sin binarios
+> de terceros. La mezcla DASH es `src/shared/mp4-remux.ts`. Normal
 > para uso personal.
 
 ## Hoja de ruta
 
 - Detección de origen más precisa (reel/historia/destacada) a partir del
   `fb_api_req_friendly_name` de cada respuesta GraphQL.
-- Barra de progreso del remux (mensajes `progress` de ffmpeg.wasm).
+- Barra de progreso del remux (la mezcla es cirugía de tablas, informa un cambio de fase).
 - Botón «Descargar todo».
 
 ## Compatibilidad con navegadores Chromium

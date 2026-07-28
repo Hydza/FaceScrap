@@ -93,12 +93,6 @@ test('names the quality and settings controls and exposes language selection sta
   assert.deepEqual(langButtons.map((tag) => attributes(tag).get('aria-pressed')), ['true', 'false']);
 });
 
-test('delegates navigation by semantic data attributes instead of visual classes', () => {
-  assert.match(controller, /closest<HTMLButtonElement>\('\[data-view\]'\)/);
-  assert.match(controller, /closest<HTMLButtonElement>\('\[data-filter\]'\)/);
-  assert.match(controller, /closest<HTMLButtonElement>\('\[data-lang\]'\)/);
-});
-
 test('keeps filter and settings values compatible with the runtime contracts', () => {
   const filterMatch = html.match(/<nav\b[^>]*id="filters"[^>]*>([\s\S]*?)<\/nav>/);
   assert.ok(filterMatch, 'missing #filters navigation');
@@ -153,24 +147,10 @@ test('localizes theme labels and the automatic-theme hint in English and Spanish
   assert.match(i18n, /themeDark:\s*'Oscuro'/);
 });
 
-test('keeps preference and effective theme state separate and reactive', () => {
-  assert.match(controller, /resolveEffectiveTheme/);
-  assert.match(controller, /document\.documentElement\.dataset\.theme\s*=/);
-  assert.match(controller, /getFacebookTheme\(trackedTab\)/);
-  assert.match(controller, /matchMedia\('\(prefers-color-scheme: dark\)'\)/);
-  assert.match(controller, /systemThemeQuery\.addEventListener\('change'/);
-  assert.match(controller, /systemThemeQuery\.addListener\(handleSystemThemeChange\)/);
-  assert.match(controller, /chrome\.storage\.local\.onChanged\.addListener/);
-  assert.match(controller, /chrome\.storage\.session\.onChanged\.addListener/);
-  assert.match(controller, /chrome\.tabs\.onActivated\.addListener/);
-  assert.match(controller, /chrome\.tabs\.getCurrent\(\)/);
-  assert.match(controller, /if \(info\.tabId === ownPanelTabId\) return/);
-  assert.match(controller, /chrome\.runtime\.getURL\('sidepanel\/sidepanel\.html'\)/);
-  assert.match(controller, /activatedTab\?\.url === ownPanelUrl \|\| activatedTab\?\.pendingUrl === ownPanelUrl/);
-  assert.match(controller, /document\.documentElement\.dataset\.trackedTab/);
-  assert.match(controller, /const revision = \+\+themeUpdateRevision/);
-  assert.match(controller, /revision !== themeUpdateRevision \|\| trackedTab !== tabId/);
-});
+// Dropped: a sixteen-regex mirror of sidepanel.ts's theme wiring, down to
+// `const revision = ++themeUpdateRevision`. resolveEffectiveTheme's precedence is
+// tested for real in theme.test.ts, and the stored side in
+// facebook-theme-storage.test.ts.
 
 test('exposes max saved items as a bounded-length digits-only text input', () => {
   const tag = html.match(/<input\b[^>]*id="set-maxitems"[^>]*>/)?.[0];

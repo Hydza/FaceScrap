@@ -29,7 +29,7 @@ The first command is the complete automated gate. The second command is
 optional: it captures the supplied reference beside the implementation and
 records each comparison as `capturedForManualReview`.
 
-The generated browser evidence is written under `dist/qa/`. It is temporary,
+The generated browser evidence is written under `artifacts/qa/`. It is temporary,
 machine-specific output and is excluded from version control. The harness
 captures the four implementation surfaces and records runtime, protocol,
 interceptor, console, layout, navigation, focus, and control-state checks.
@@ -58,7 +58,7 @@ Manual review is still required to establish that:
 
 ## Evidence handling
 
-- Do not commit `dist/qa/` or `artifacts/`; evidence may contain absolute local
+- Do not commit `artifacts/`; evidence may contain absolute local
   paths, temporary browser profile data, and extension IDs.
 - Regenerate evidence from the same commit being evaluated so it cannot become
   stale relative to the implementation.

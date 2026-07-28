@@ -2,7 +2,7 @@
 // into dist/. Run `node scripts/build.mjs` or add `--watch` for dev mode.
 
 import * as esbuild from 'esbuild';
-import { cp, mkdir, readdir, rm } from 'node:fs/promises';
+import { cp, mkdir, rm } from 'node:fs/promises';
 import { existsSync, watch as fsWatch } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -42,30 +42,6 @@ async function copyStatic() {
   if (existsSync(join(ROOT, 'icons'))) {
     await cp(join(ROOT, 'icons'), join(OUT, 'icons'), { recursive: true });
   }
-  await copyFfmpegAssets();
-}
-
-// Ship the prebuilt @ffmpeg UMD build + worker chunk verbatim: esbuild can't emit the
-// worker, and ffmpeg.js auto-loads the exact sibling chunk as a CLASSIC worker — passing
-// classWorkerURL would spawn a MODULE worker, breaking the chunk's importScripts().
-async function copyFfmpegAssets() {
-  const dst = join(OUT, 'assets/ffmpeg');
-  await mkdir(dst, { recursive: true });
-
-  const ffUmd = join(ROOT, 'node_modules/@ffmpeg/ffmpeg/dist/umd');
-  const coreUmd = join(ROOT, 'node_modules/@ffmpeg/core/dist/umd');
-
-  await cp(join(ffUmd, 'ffmpeg.js'), join(dst, 'ffmpeg.js'));
-  // Worker chunk has a hashed name (e.g. 814.ffmpeg.js) that varies by version;
-  // ship it under that SAME name so ffmpeg.js's classic-worker auto-load finds it.
-  const workerFile = (await readdir(ffUmd)).find((f) => /\.ffmpeg\.js$/.test(f) && f !== 'ffmpeg.js');
-  if (!workerFile) throw new Error(`ffmpeg worker chunk not found in ${ffUmd}`);
-  await cp(join(ffUmd, workerFile), join(dst, workerFile));
-
-  await cp(join(coreUmd, 'ffmpeg-core.js'), join(dst, 'ffmpeg-core.js'));
-  await cp(join(coreUmd, 'ffmpeg-core.wasm'), join(dst, 'ffmpeg-core.wasm'));
-
-  console.log(`copied ffmpeg assets (worker: ${workerFile})`);
 }
 
 await ctx.rebuild();

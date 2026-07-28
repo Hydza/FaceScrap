@@ -1,81 +1,21 @@
 // FaceScrap offscreen document.
-// The service worker cannot run ffmpeg.wasm (no DOM, no URL.createObjectURL,
-// killed mid-job). This offscreen page fetches the separate DASH video + audio
-// tracks from fbcdn (host_permissions bypass CORS) and remuxes them into one
-// MP4 with `-c copy` (lossless — no re-encode). All assets are bundled locally
-// (no CDN); CSP needs only `wasm-unsafe-eval` (no SharedArrayBuffer / COI).
+//
+// The service worker cannot do this job: it has no URL.createObjectURL, which is
+// the only way to hand chrome.downloads a file this extension built itself. This
+// page fetches the separate DASH video + audio tracks from fbcdn
+// (host_permissions bypass CORS) and merges them into one MP4.
+//
+// The merge used to be ffmpeg.wasm running `-c copy -shortest`. It is now
+// src/shared/mp4-remux.ts, which does the same thing — copy the sample bytes,
+// write a new sample table around them, trim to the shorter track — in about 30 KB
+// of JavaScript instead of 9.8 MB of compressed wasm. The output is assembled from
+// Blob slices, so unlike the wasm path the media never passes through this
+// document's memory at all.
 
 import { createJobChain } from '../shared/async';
 import { MUX_PORT, MUX_PROGRESS_MS, type MuxProgress, type MuxResponse, type RuntimeMessage } from '../shared/messages';
+import { remux } from '../shared/mp4-remux';
 import { fetchDashTracks, MAX_DASH_OUTPUT_BYTES } from '../shared/track-fetch';
-
-// Provided by the UMD ffmpeg.js loaded via <script> in offscreen.html.
-declare const FFmpegWASM: { FFmpeg: new () => FFmpegInstance };
-
-interface FFmpegInstance {
-  load(opts: { coreURL: string; wasmURL: string }): Promise<boolean>;
-  writeFile(name: string, data: Uint8Array): Promise<boolean>;
-  // Binary reads (the only mode this file uses) resolve to a Uint8Array whose
-  // buffer the worker TRANSFERS (not clones) via postMessage — see mux() below.
-  readFile(name: string): Promise<Uint8Array<ArrayBuffer> | string>;
-  deleteFile(name: string): Promise<boolean>;
-  exec(args: string[]): Promise<number>;
-  /** Emits while exec runs. Its only job here is to prove the remux is alive:
-   *  a multi-hundred-MB `-c copy` pass sends no network traffic, so without
-   *  this the worker would see the whole exec as one silent gap. */
-  on(event: 'progress', cb: (e: { progress: number }) => void): void;
-  createDir(path: string): Promise<boolean>;
-  /** Mounts a Blob-backed read-only FS. WORKERFS reads through to the Blob by
-   *  range instead of copying it into the wasm heap — see mux() for why that
-   *  matters here. */
-  mount(fsType: string, options: { blobs?: { name: string; data: Blob }[] }, mountPoint: string): Promise<boolean>;
-  unmount(mountPoint: string): Promise<boolean>;
-}
-
-// Read-only mount point for the two fetched tracks. Output still goes to MEMFS
-// at the root: WORKERFS cannot be written to.
-const IN_DIR = '/in';
-
-const BASE = chrome.runtime.getURL('assets/ffmpeg');
-let ff: FFmpegInstance | null = null;
-let loading: Promise<FFmpegInstance> | null = null;
-
-// Where ffmpeg's own progress events go while an exec runs. A module variable
-// rather than a parameter because the callback is registered ONCE per loaded
-// instance, while the reporter belongs to the current job — and jobs are
-// serialized on muxQueue, so only one is ever active.
-let activeReport: ((p: MuxProgress) => void) | null = null;
-
-function ensureLoaded(): Promise<FFmpegInstance> {
-  if (ff) return Promise.resolve(ff);
-  if (!loading) {
-    const instance = new FFmpegWASM.FFmpeg();
-    loading = instance
-      // No classWorkerURL on purpose: it forces a MODULE worker, but the bundled
-      // worker chunk uses importScripts() (classic-only); omitting it takes the
-      // classic-worker path, which loads the UMD core cleanly.
-      .load({
-        coreURL: `${BASE}/ffmpeg-core.js`,
-        wasmURL: `${BASE}/ffmpeg-core.wasm`,
-      })
-      .then(() => {
-        // Registered once, for the lifetime of the instance: a long `-c copy`
-        // pass makes no network requests, so these events are the only proof
-        // the remux is progressing rather than wedged.
-        instance.on('progress', (e) => activeReport?.({ phase: 'remux', bytes: Math.round(e.progress * 100) }));
-        ff = instance;
-        return instance;
-      })
-      .catch((e: unknown) => {
-        // Never cache a rejected load: a transient core-load failure would
-        // otherwise poison every future mux until the extension reloads.
-        loading = null;
-        throw e;
-      });
-  }
-  return loading;
-}
-
 /** Opens a progress port to the worker for ONE job. Jobs are serialized on both
  *  sides (muxQueue here, dashChain there), so at most one is ever open. */
 function progressPort(): { report: (p: MuxProgress) => void; close: () => void } {
@@ -108,31 +48,8 @@ function progressPort(): { report: (p: MuxProgress) => void; close: () => void }
   };
 }
 
-// WORKERFS is the whole point of handing ffmpeg Blobs (see below), but it is one
-// mount call away from being unavailable in some future core build. Fall back to
-// writeFile permanently once it fails, so a bad mount degrades to the old memory
-// profile instead of breaking every DASH download.
-let canMount = true;
-
-/** Hand the two tracks to ffmpeg WITHOUT copying them into the wasm heap.
- *  writeFile duplicates each track inside the heap, on top of the copy this
- *  document already holds — for a 500MB video that alone is over a gigabyte,
- *  and the heap does not give it back between jobs. WORKERFS reads through to
- *  the Blob by range instead. Returns true if the tracks live under IN_DIR. */
-async function mountTracks(f: FFmpegInstance, v: Blob, a: Blob): Promise<boolean> {
-  if (!canMount) return false;
-  try {
-    await f.createDir(IN_DIR).catch(() => {}); // survives between jobs; already-exists is fine
-    await f.mount('WORKERFS', { blobs: [{ name: 'v.mp4', data: v }, { name: 'a.mp4', data: a }] }, IN_DIR);
-    return true;
-  } catch {
-    canMount = false;
-    return false;
-  }
-}
 
 async function mux(videoUrl: string, audioUrl: string, report: (p: MuxProgress) => void): Promise<string> {
-  const f = await ensureLoaded();
   // Each track reports its own CUMULATIVE total, which can go down when a
   // resume restarts from scratch — so track them separately and sum, rather
   // than accumulating deltas that a rewind would leave overstated forever.
@@ -151,53 +68,19 @@ async function mux(videoUrl: string, audioUrl: string, report: (p: MuxProgress) 
     },
   );
 
-  const mounted = await mountTracks(f, v, a);
-  if (!mounted) {
-    await f.writeFile('v.mp4', new Uint8Array(await v.arrayBuffer()));
-    await f.writeFile('a.mp4', new Uint8Array(await a.arrayBuffer()));
-  }
-  const vPath = mounted ? `${IN_DIR}/v.mp4` : 'v.mp4';
-  const aPath = mounted ? `${IN_DIR}/a.mp4` : 'a.mp4';
+  // The remux reads only the sample TABLES — a few hundred KB even for a long
+  // video — so it finishes in one step rather than streaming progress. Report the
+  // phase change so a worker watching the port sees the fetch end, not a gap.
+  report({ phase: 'remux', bytes: 0 });
+  const merged = await remux(v, a);
+  report({ phase: 'remux', bytes: 100 });
 
-  let out: Uint8Array<ArrayBuffer> | string;
-  activeReport = report; // ffmpeg's progress events prove the exec is alive
-  try {
-    // No aac_adtstoasc: fbcdn audio is already ASC-framed inside MP4.
-    // exec resolves to the process exit code (it does not reject on non-zero); a
-    // failed remux writes no out.mp4, so surface the code instead of failing later
-    // on a confusing "file not found" from readFile.
-    const code = await f.exec(['-y', '-i', vPath, '-i', aPath, '-map', '0:v:0', '-map', '1:a:0', '-c', 'copy', '-shortest', 'out.mp4']);
-    if (code !== 0) {
-      throw new Error(`Remux failed (ffmpeg exit ${code}). A track may be mismatched or an expired fbcdn URL returned an incomplete stream — reload the Facebook page.`);
-    }
-    out = await f.readFile('out.mp4');
-  } finally {
-    activeReport = null;
-    // Also on failure: the wasm FS lives as long as this document, so leftover
-    // tracks would hold their megabytes until the next job overwrites them.
-    if (mounted) await f.unmount(IN_DIR).catch(() => {});
-    else {
-      await f.deleteFile('v.mp4').catch(() => {});
-      await f.deleteFile('a.mp4').catch(() => {});
-    }
-    await f.deleteFile('out.mp4').catch(() => {});
-  }
-  if (typeof out === 'string' && out.length > MAX_DASH_OUTPUT_BYTES) {
+  // A merge cannot legitimately exceed its combined inputs. Checked before a blob
+  // URL is published, as with the wasm path.
+  if (merged.blob.size > MAX_DASH_OUTPUT_BYTES) {
     throw new Error(`Remux output exceeds the ${MAX_DASH_OUTPUT_BYTES}-byte safety limit.`);
   }
-  const bytes = typeof out === 'string' ? new TextEncoder().encode(out) : out;
-  // Check before publishing a Blob URL. A remux cannot legitimately exceed its
-  // combined DASH inputs.
-  if (bytes.byteLength > MAX_DASH_OUTPUT_BYTES) {
-    throw new Error(`Remux output exceeds the ${MAX_DASH_OUTPUT_BYTES}-byte safety limit.`);
-  }
-  // Hand `bytes` to Blob as-is: readFile's worker message already transferred
-  // (not cloned) out.mp4's buffer out of the wasm heap, so it's already a
-  // standalone ArrayBuffer-backed view and a valid BlobPart on its own. Copying
-  // it into a second same-size buffer here would double the live JS heap at
-  // MAX_DASH_OUTPUT_BYTES (640MB) — the OOM this WORKERFS/Blob design exists to
-  // avoid for large reels.
-  return publishBlob(bytes);
+  return publishBlob(merged.blob);
 }
 
 // The SW revokes each blob via FACESCRAP_REVOKE once its download settles; if the SW
@@ -206,8 +89,10 @@ async function mux(videoUrl: string, audioUrl: string, report: (p: MuxProgress) 
 const BLOB_TTL_MS = 10 * 60_000;
 const pendingRevokes = new Map<string, ReturnType<typeof setTimeout>>();
 
-function publishBlob(buf: Uint8Array<ArrayBuffer>): string {
-  const url = URL.createObjectURL(new Blob([buf], { type: 'video/mp4' }));
+/** The merged file is already a Blob of slices of the fetched tracks — publishing
+ *  it costs a URL, not a copy. */
+function publishBlob(blob: Blob): string {
+  const url = URL.createObjectURL(blob);
   pendingRevokes.set(url, setTimeout(() => revokeBlob(url), BLOB_TTL_MS));
   return url;
 }
@@ -221,8 +106,10 @@ function revokeBlob(url: string): void {
   URL.revokeObjectURL(url);
 }
 
-// ffmpeg.wasm is a single instance with fixed FS filenames, so concurrent remuxes
-// would clobber each other's files and silently corrupt output; serialize all jobs.
+// The remuxer is stateless, so this is no longer a correctness requirement the way
+// it was with ffmpeg's single instance and fixed FS filenames. It stays because it
+// bounds memory: two concurrent jobs mean two pairs of fully-fetched tracks held at
+// once, and the worker's own dashChain already expects one job at a time.
 const muxQueue = createJobChain<string>();
 function enqueueMux(videoUrl: string, audioUrl: string): Promise<string> {
   // The port opens when the job STARTS, not when it is queued: the worker times

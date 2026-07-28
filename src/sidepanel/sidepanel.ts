@@ -12,7 +12,6 @@ import {
   fileExtensionFor,
   imageDimensionsLabel,
   imagePixelArea,
-  isFbcdn,
   legacyMediaId,
   mediaId,
   resolutionOf,
@@ -21,7 +20,9 @@ import {
   type MediaKind,
   type MediaSource,
 } from '../shared/media';
-import { fmt, getLang, setLang, t, type Lang, type MsgKey } from '../shared/i18n';
+import { downloadFilename, itemCardId, savedEntryForItem, videoCardId } from '../shared/download-naming';
+import { defaultTarget, isDownloadable, videoOptions, willHaveAudio } from '../shared/video-options';
+import { fmt, getLang, LANG_KEY, resolveLang, saveLang, setLang, t, type Lang, type MsgKey } from '../shared/i18n';
 import {
   getCaps,
   getDiagCounters,
@@ -218,17 +219,6 @@ async function resolveActiveTab(): Promise<void> {
   setTrackedTab(tab?.id);
 }
 
-const LANG_KEY = 'lang';
-
-async function loadLang(): Promise<Lang> {
-  const stored = (await chrome.storage.local.get(LANG_KEY))[LANG_KEY];
-  return stored === 'es' ? 'es' : 'en';
-}
-
-async function saveLang(lang: Lang): Promise<void> {
-  await chrome.storage.local.set({ [LANG_KEY]: lang });
-}
-
 function getSystemTheme(): EffectiveTheme {
   // Keep the established dark appearance on stripped/older Chromium forks
   // where matchMedia is unavailable. Manual light/dark still resolves above it.
@@ -294,15 +284,6 @@ function setupFacebookThemeStorageListener(): void {
       void applyEffectiveTheme();
     }
   });
-}
-
-/** The language to use: the browser's when "follow browser language" is on,
- *  otherwise the manually-saved choice. */
-async function resolveLang(): Promise<Lang> {
-  if (settings.followBrowserLang) {
-    return (navigator.language || 'en').toLowerCase().startsWith('es') ? 'es' : 'en';
-  }
-  return loadLang();
 }
 
 /** Localize every static [data-i18n]/[data-i18n-title]/[data-i18n-aria] node and
@@ -383,7 +364,7 @@ async function applySetting(patch: Partial<Settings>): Promise<void> {
     onError: (error) => console.error('[FaceScrap] setting write failed', error),
     onCommitted: async () => {
       if ('followBrowserLang' in patch) {
-        setLang(await resolveLang());
+        setLang(await resolveLang(settings.followBrowserLang));
         localize();
       }
       reflectSettings();
@@ -507,11 +488,6 @@ async function renderDiag(): Promise<void> {
     .join('\n');
 }
 
-function isDownloadable(item: MediaItem): boolean {
-  // Only fbcdn media is downloadable — never a URL that slipped in from the page.
-  return isFbcdn(item.url);
-}
-
 /** Seconds → "M:SS" (or "H:MM:SS" past an hour). */
 function formatDuration(sec: number): string {
   const s = Math.round(sec);
@@ -521,26 +497,18 @@ function formatDuration(sec: number): string {
   return h > 0 ? `${h}:${pad(m)}:${pad(s % 60)}` : `${m}:${pad(s % 60)}`;
 }
 
-/** Bitrate (bytes/s) parsed from a fbcdn URL's `bitrate=` param, 0 if absent. */
-function bitrate(url: string): number {
-  const m = url.match(/[?&]bitrate=(\d+)/);
-  return m ? Number(m[1]) : 0;
+function filenameFor(item: MediaItem): string {
+  return downloadFilename(item, settings);
 }
 
-function filenameFor(item: MediaItem): string {
-  const stamp = new Date(item.addedAt).toISOString().replace(/[:.]/g, '-').slice(0, 19);
-  const id = item.id.replace(/[^a-z0-9]/gi, '').slice(-8) || 'file';
-  const base = (settings.filenameTemplate || DEFAULT_SETTINGS.filenameTemplate)
-    .replace(/\{source\}/g, item.source)
-    .replace(/\{date\}/g, stamp)
-    .replace(/\{id\}/g, id)
-    // Collapse anything not filename-safe: blocks path traversal (../), CRLF, and
-    // reserved characters, so a template can't escape the download directory.
-    .replace(/[^a-z0-9._-]+/gi, '-')
-    .replace(/^[-.]+|[-.]+$/g, '')
-    .slice(0, 120) || 'facescrap';
-  const name = `${base}.${fileExtensionFor(item)}`;
-  return settings.subfolder ? `FaceScrap/${name}` : name;
+/** The two panel-only inputs shared/video-options.ts takes as parameters: the
+ *  audio-stripping setting, and the on-screen cover cache, which only exists in
+ *  this process. */
+function videoOptionsContext(tid: number | undefined): { stripAudio: boolean; groupCover: (gkey: string) => string | undefined } {
+  return {
+    stripAudio: stripAudio(),
+    groupCover: (gkey) => (tid !== undefined ? getGroupCover(tid, gkey) : undefined),
+  };
 }
 
 /** Whether downloads should open the browser's Save-As dialog (quality = 'ask'). */
@@ -674,15 +642,7 @@ async function startDirectDownload(tid: number, item: MediaItem, receipt: SavedE
  *  actually saved. */
 function savedEntryFor(cardId: string, item: MediaItem): SavedEntry {
   const card = cardsById.get(cardId);
-  return {
-    id: cardId,
-    kind: item.kind,
-    source: item.source,
-    savedAt: Date.now(),
-    thumbUrl: card?.thumbUrl ?? (item.kind === 'image' ? item.url : item.thumbUrl),
-    resLabel: item.kind === 'video' ? resolutionOf(item).label : undefined,
-    durationSec: card?.durationSec ?? item.durationSec,
-  };
+  return savedEntryForItem(cardId, item, { thumbUrl: card?.thumbUrl, durationSec: card?.durationSec });
 }
 
 /** The one download core shared by single-card and bulk paths. Both routes go
@@ -794,74 +754,10 @@ interface Card {
 /** Card-id scheme — a persisted format: saved_ receipts store these ids, so it
  *  changes only with a migration (see SavedEntry in storage.ts). Prefixed
  *  because group keys and item ids are namespaces that must never collide. */
-const videoCardId = (gkey: string): string => `v:${gkey}`;
-const itemCardId = (itemId: string): string => `i:${itemId}`;
-
-/** Will the download have sound? audioUrl → gets remuxed; non-`dash` → muxed
- *  progressive; a `dash` track without audioUrl is video-only (muted). */
-function willHaveAudio(i: MediaItem): boolean {
-  return i.audioUrl != null || !i.dash;
-}
-
-interface VideoOptions {
-  options: MediaItem[]; // downloadable representations, highest-resolution first
-  gkey: string;
-  thumbUrl?: string;
-  durationSec?: number;
-}
-
-/** Collapse a video group's representations into a deduped, ranked option list —
- *  shared by the grid card (which takes one) and Now Playing (which keeps them all
- *  for the quality selector). */
-function videoOptions(group: MediaItem[], tid: number | undefined): VideoOptions {
-  const src = stripAudio()
-    ? group.map((i) => (i.audioUrl != null ? { ...i, audioUrl: undefined } : i))
-    : group;
-  // Downloadable options: any fbcdn representation — including the network
-  // capture, the always-present baseline. Deduplicated by resolution: for each
-  // height prefer the one that will produce sound (muxed progressive or DASH pair
-  // with audioUrl) over a muted DASH track of the same size.
-  const downloadable = src.filter(isDownloadable);
-  const score = (i: MediaItem): number => (willHaveAudio(i) ? 2 : 0) + (i.audioUrl == null ? 1 : 0);
-  const byRes = new Map<string, MediaItem>();
-  for (const i of downloadable) {
-    const { label } = resolutionOf(i);
-    if (label === 'Video') {
-      byRes.set(`Video:${i.id}`, i); // unknown: don't collapse
-      continue;
-    }
-    const prev = byRes.get(label);
-    if (!prev) {
-      byRes.set(label, i);
-      continue;
-    }
-    const ds = score(i) - score(prev);
-    if (ds > 0 || (ds === 0 && bitrate(i.url) > bitrate(prev.url))) byRes.set(label, i);
-  }
-  const options = [...byRes.values()].sort(
-    (a, b) => resolutionOf(b).rank - resolutionOf(a).rank || bitrate(b.url) - bitrate(a.url),
-  );
-  const gkey = videoGroupKey(src[0]);
-  return {
-    options,
-    gkey,
-    // Captured poster first; else the on-screen cover learned while it played.
-    thumbUrl:
-      src.find((i) => i.thumbUrl != null)?.thumbUrl ??
-      (tid !== undefined ? getGroupCover(tid, gkey) : undefined),
-    durationSec: src.find((i) => i.durationSec != null)?.durationSec,
-  };
-}
-
-/** The setting's preselected representation from an option list: 'highest' takes
- *  the top, 'lowest' the bottom, 'ask' the top (it only opens the Save-As dialog). */
-function defaultTarget(options: MediaItem[]): MediaItem | undefined {
-  return settings.defaultQuality === 'lowest' ? options[options.length - 1] : options[0];
-}
 
 function buildVideoCard(group: MediaItem[], tid: number | undefined, playing: Set<string>): Card {
-  const { options, gkey, thumbUrl, durationSec } = videoOptions(group, tid);
-  const target = defaultTarget(options);
+  const { options, gkey, thumbUrl, durationSec } = videoOptions(group, videoOptionsContext(tid));
+  const target = defaultTarget(options, settings.defaultQuality);
   return {
     id: videoCardId(gkey),
     at: Math.max(...group.map((i) => i.addedAt)),
@@ -1191,7 +1087,7 @@ function buildNowState(
       const maxH = Math.max(0, ...group.map((i) => i.height ?? 0));
       if (maxH > 0 && maxH < settings.minResolution) return null;
     }
-    const { options, gkey, thumbUrl, durationSec } = videoOptions(group, tid);
+    const { options, gkey, thumbUrl, durationSec } = videoOptions(group, videoOptionsContext(tid));
     if (options.length === 0) return null;
     return {
       id: videoCardId(gkey),
@@ -1252,7 +1148,7 @@ function paintNow(now: NowState | null): void {
   const isImage = now.kind === 'image';
   // Chosen representation: the user's pick for this video in this tab, else the setting.
   let target =
-    now.options.find((o) => o.id === qualityChoice.get(tabKey(tabId, now.gkey))) ?? defaultTarget(now.options)!;
+    now.options.find((o) => o.id === qualityChoice.get(tabKey(tabId, now.gkey))) ?? defaultTarget(now.options, settings.defaultQuality)!;
   let imageResolutionLabel = imageDimensionsLabel(target);
   const paintImageResolution = (image: HTMLImageElement): void => {
     if (now.kind !== 'image' || !image.isConnected || image.naturalWidth <= 0 || image.naturalHeight <= 0) return;
@@ -1933,7 +1829,7 @@ async function init(): Promise<void> {
     settings = await loadSettings();
     setupSystemTheme();
     await applyEffectiveTheme();
-    setLang(await resolveLang());
+    setLang(await resolveLang(settings.followBrowserLang));
     localize();
     const caps = await getCaps();
     offscreenAvailable = caps?.offscreen ?? true;

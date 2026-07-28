@@ -92,7 +92,8 @@ async function showVideo(item: MediaItem, mark: string): Promise<MediaItem[]> {
   return selected;
 }
 
-// Let a flushed setBind() write land in the fake storage before reading it back.
+// Let a flushed binding write land in the fake storage before reading it back.
+// (It used to name a setBind helper that no longer exists anywhere in the tree.)
 async function flushWrites(): Promise<void> {
   await new Promise<void>((resolve) => setImmediate(resolve));
 }

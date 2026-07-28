@@ -1,11 +1,18 @@
+// Geometry of the Now Playing resolution field. The CSS is the artifact here —
+// these are numeric bounds on it, which nothing else can check without a browser.
+//
+// Four tests that mirrored sidepanel.ts's source lines (which ternary sets the
+// count, which classList.toggle runs, how the render hold is computed) were
+// dropped: they broke on refactors of correct code and could not observe a wrong
+// count. The states they described are captured for real by `npm run qa:sidepanel`,
+// which drives the built panel over CDP in both languages.
+
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import test from 'node:test';
 
-const ROOT = process.cwd();
-const controller = readFileSync(join(ROOT, 'src', 'sidepanel', 'sidepanel.ts'), 'utf8');
-const css = readFileSync(join(ROOT, 'src', 'sidepanel', 'sidepanel.css'), 'utf8');
+const css = readFileSync(join(process.cwd(), 'src', 'sidepanel', 'sidepanel.css'), 'utf8');
 
 const qualityRule = css.match(/\.quality\s*\{([^}]*)\}/)?.[1];
 const singleQualityRule = css.match(/\.quality\.is-single-option\s*\{([^}]*)\}/)?.[1];
@@ -15,32 +22,8 @@ const compactHeightCss = css.slice(
   css.indexOf('@media (prefers-reduced-motion: reduce)'),
 );
 
-test('hides the quality count when Now Playing has exactly one video option', () => {
-  assert.match(
-    controller,
-    /byId\('now-qcount'\)\.textContent = now\.options\.length > 1\s*\?\s*tn\('qualityOptionsOne', 'qualityOptions', now\.options\.length\)\s*:\s*'';/,
-  );
-  assert.match(controller, /byId\('now-qcount'\)\.hidden = now\.options\.length <= 1;/);
-});
-
-test('keeps a numeric quality count and enables selection when Now Playing has multiple video options', () => {
-  assert.match(
-    controller,
-    /now\.options\.length > 1\s*\?\s*tn\('qualityOptionsOne', 'qualityOptions', now\.options\.length\)\s*:\s*''/,
-  );
-  assert.match(controller, /select\.disabled = now\.options\.length <= 1;/);
-});
-
-test('shows only the resolution label for a single disabled video option', () => {
-  assert.match(
-    controller,
-    /select\.classList\.toggle\('is-single-option', now\.options\.length <= 1\);/,
-  );
-  assert.match(controller, /o\.textContent = resolutionOf\(opt\)\.label;/);
-  assert.match(
-    css,
-    /#now-qselect\.is-single-option\s*\{[^}]*background-image:\s*none;[^}]*\}/s,
-  );
+test('drops the picker chevron when there is only one option to pick', () => {
+  assert.match(css, /#now-qselect\.is-single-option\s*\{[^}]*background-image:\s*none;[^}]*\}/s);
 });
 
 test('keeps the Now Playing resolution field a comfortable tap target without ballooning', () => {
@@ -89,28 +72,5 @@ test('keeps the numeric multi-option count visible in short panels', () => {
     compactHeightCss,
     /\.quality-head\s*\{[^}]*display:\s*none;/s,
     'short panels must not hide the multi-option count',
-  );
-});
-
-test('holds rerenders only while the picker is open and bounds the legacy fallback', () => {
-  assert.match(
-    controller,
-    /const RENDER_FALLBACK_HOLD_MAX_MS = 1_500;/,
-  );
-  assert.match(
-    controller,
-    /function qualityPickerRenderHoldMs\(\): number \{[\s\S]*?select\.matches\(':open'\)[\s\S]*?RENDER_FALLBACK_HOLD_MAX_MS[\s\S]*?\}/,
-  );
-  assert.match(
-    controller,
-    /const renderHoldMaxMs = qualityPickerRenderHoldMs\(\);[\s\S]*?if \(renderHoldMaxMs > 0\) \{/,
-  );
-  assert.match(
-    controller,
-    /select\.addEventListener\('blur', finishQualityPickerInteraction\);/,
-  );
-  assert.match(
-    controller,
-    /function toggleQualityPickerFallback\(\): void \{[\s\S]*?finishQualityPickerInteraction\(\);/,
   );
 });

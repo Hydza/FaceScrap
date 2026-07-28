@@ -27,7 +27,7 @@ const MAX_DASH_INPUT_BYTES = 640 * 1024 * 1024;
 // inputs together. Kept distinct so the publish boundary is explicit/auditable.
 export const MAX_DASH_OUTPUT_BYTES = MAX_DASH_INPUT_BYTES;
 
-export interface FetchTrackOptions {
+interface FetchTrackOptions {
   /** Injected for tests; defaults to the global. */
   fetch?: typeof globalThis.fetch;
   attempts?: number;
@@ -212,7 +212,7 @@ async function fetchTrackWithBudget(
   }
 }
 
-export interface FetchDashTracksOptions extends FetchTrackOptions {
+interface FetchDashTracksOptions extends FetchTrackOptions {
   /** Primarily useful for focused tests; production callers use the hard cap. */
   maxTotalBytes?: number;
 }

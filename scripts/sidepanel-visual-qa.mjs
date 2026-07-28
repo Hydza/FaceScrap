@@ -5,7 +5,11 @@
 // This intentionally uses only Node built-ins. It launches Edge or Brave with a fresh
 // profile, discovers the unpacked MV3 extension through /json/list, drives the
 // side-panel document over CDP, and writes screenshots plus machine-readable
-// evidence to dist/qa/. Run `npm run build` before invoking this script.
+// evidence to artifacts/qa/. Run `npm run build` before invoking this script.
+//
+// The evidence lives OUTSIDE dist/ on purpose: dist/ is the unpacked extension,
+// and Chrome counts every byte in that folder as extension size. 1.3 MB of QA
+// screenshots was riding along in it.
 
 import { createHash, randomBytes } from 'node:crypto';
 import { EventEmitter } from 'node:events';
@@ -19,7 +23,7 @@ import { fileURLToPath } from 'node:url';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const DIST = join(ROOT, 'dist');
-const QA_DIR = join(DIST, 'qa');
+const QA_DIR = join(ROOT, 'artifacts', 'qa');
 const MANIFEST = join(DIST, 'manifest.json');
 const BROWSER_EXECUTABLES = Object.freeze({
   edge: 'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe',
@@ -5162,7 +5166,7 @@ async function main() {
   if (runError) throw runError;
   if (!cleanupSucceeded(evidence.cleanup, Boolean(profileDir), Boolean(referenceServer))) {
     throw new Error(
-      'Visual QA completed, but browser/profile/reference-server cleanup did not finish; inspect dist/qa/evidence.json',
+      'Visual QA completed, but browser/profile/reference-server cleanup did not finish; inspect artifacts/qa/evidence.json',
     );
   }
   process.stdout.write(`FaceScrap visual QA passed: ${join(QA_DIR, 'evidence.json')}\n`);

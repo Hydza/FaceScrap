@@ -45,19 +45,6 @@ const manifest = JSON.parse(readFileSync(join(ROOT, 'manifest.json'), 'utf8')) a
   web_accessible_resources?: ManifestWebAccessibleResource[];
 };
 
-const content = readFileSync(join(ROOT, 'src', 'content', 'content.ts'), 'utf8');
-
-/** Slice `source` between two literal (non-regex) markers, failing loudly if either is missing.
- *  Same helper as tests/fix-content.test.ts — duplicated here rather than imported so this
- *  file has no dependency on another lane's test file. */
-function section(source: string, startMarker: string, endMarker: string, fromIndex = 0): string {
-  const start = source.indexOf(startMarker, fromIndex);
-  assert.ok(start >= 0, `missing marker: ${startMarker}`);
-  const end = source.indexOf(endMarker, start + startMarker.length);
-  assert.ok(end > start, `missing end marker after "${startMarker}": ${endMarker}`);
-  return source.slice(start, end);
-}
-
 test('manifest.json registers page-hook.js as a declarative MAIN-world, document_start content script', () => {
   assert.ok(Array.isArray(manifest.content_scripts), 'manifest.json must declare content_scripts');
 
@@ -112,60 +99,10 @@ test('page-hook.js stays web-accessible for the runtime fallback content.ts stil
   assert.ok(resource?.matches?.includes('*://*.facebook.com/*'));
 });
 
-test('ensurePageHook() defers to the declarative entry while the document is still loading', () => {
-  const ensurePageHook = section(content, 'function ensurePageHook(): void {', '\nensurePageHook();');
-  const shouldInjectIndex = ensurePageHook.indexOf(
-    'shouldInjectPageHook(skipPageHookInjection, contentBootstrap.__facescrapHookInjected === true || pageHookAliveInDom())',
-  );
-  const readyStateIndex = ensurePageHook.indexOf("document.readyState === 'loading'");
-  const createElementIndex = ensurePageHook.indexOf("document.createElement('script')");
-
-  assert.ok(
-    shouldInjectIndex >= 0,
-    'the pre-existing skip/already-injected gate must still be present, and must now ALSO trust the DOM marker ' +
-      '(pageHookAliveInDom()) rather than __facescrapHookInjected alone — see tests/repair-b1-hook-liveness.test.ts',
-  );
-  assert.ok(
-    readyStateIndex > shouldInjectIndex,
-    'the readyState gate must be checked after the existing skip/already-injected check',
-  );
-  assert.ok(
-    readyStateIndex >= 0 && createElementIndex > readyStateIndex,
-    'the readyState gate must run before the runtime <script> is ever created — otherwise a fresh, still-loading ' +
-      'document (already covered by the declarative MAIN-world entry in manifest.json) gets a redundant second ' +
-      'hook that double-patches fetch/XHR',
-  );
-  assert.ok(
-    ensurePageHook.includes("if (document.readyState === 'loading') return;"),
-    'must actually early-return while the document is still loading, not merely reference readyState',
-  );
-});
-
-test('the query-message handler latches __facescrapHookInjected too, not only ensurePageHook()\'s onload', () => {
-  // page-hook.js posts { __facescrapCtl: true, query: true } unconditionally, before doing
-  // anything else, regardless of whether it was installed by the declarative MAIN-world entry
-  // or by ensurePageHook()'s runtime fallback — so receiving it is itself proof a hook is alive
-  // in this document. Bounded below by the sibling __facescrap block so a stray later match
-  // elsewhere in the file cannot make this pass for the wrong reason.
-  const queryBlockStart = content.indexOf(
-    'if (data && data.__facescrapCtl === true && data.query === true) {',
-  );
-  assert.ok(queryBlockStart >= 0, 'missing the query-message handler this test targets');
-  const nextBlockStart = content.indexOf('if (data && data.__facescrap === true) {', queryBlockStart);
-  assert.ok(nextBlockStart > queryBlockStart, 'missing the sibling __facescrap block used as a search bound');
-
-  const flagSetIndex = content.indexOf('contentBootstrap.__facescrapHookInjected = true;', queryBlockStart);
-  const announceIndex = content.indexOf('announceDiagFlag();', queryBlockStart);
-
-  assert.ok(
-    flagSetIndex > queryBlockStart && flagSetIndex < nextBlockStart,
-    "receiving page-hook.js's own startup query must latch the hook-alive flag inside this handler — otherwise a " +
-      "hook installed declaratively (not through ensurePageHook()'s onload) is never recorded anywhere, and a " +
-      'later update-recovery pass (content-recovery.ts) wrongly concludes no hook survives and injects a second ' +
-      'one alongside the live declarative hook, double-patching fetch/XHR',
-  );
-  assert.ok(
-    announceIndex > queryBlockStart && announceIndex < nextBlockStart,
-    'the existing diag-flag reply must still happen for this same message',
-  );
-});
+// Two tests are gone from here: they asserted the STATEMENT ORDER inside
+// content.ts's ensurePageHook() and inside its query-message handler (this index
+// must be greater than that one). What they were guarding — no second hook
+// double-patching fetch/XHR — is real, but the check was source ordering, which
+// breaks on any reshuffle of correct code. The live guards are the DOM marker the
+// hook stamps and the injection flag; a double patch shows up immediately in a
+// real tab as duplicated captures.

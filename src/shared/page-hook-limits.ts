@@ -1,4 +1,4 @@
-export type LimitedTextResult =
+type LimitedTextResult =
   | { ok: true; text: string; bytesRead: number }
   | { ok: false; text: ''; bytesRead: number };
 
@@ -48,7 +48,7 @@ export async function readClonedResponseTextLimited(
   }
 }
 
-export interface TextBudget {
+interface TextBudget {
   readonly maxChars: number;
   readonly usedChars: number;
   readonly full: boolean;

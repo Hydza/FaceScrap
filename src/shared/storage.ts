@@ -325,15 +325,6 @@ async function partitionMediaForRetention(
   return { ordinary, reserved: protectedItems.map(({ item }) => item) };
 }
 
-async function prioritizeMediaForRetention(
-  tabId: number,
-  items: MediaItem[],
-  overrides: RetentionOverrides = {},
-): Promise<MediaItem[]> {
-  const { ordinary, reserved } = await partitionMediaForRetention(tabId, items, overrides);
-  return [...ordinary, ...reserved];
-}
-
 // One task queue per key family: read-modify-write cycles on a key must run one
 // at a time, but unrelated keys must never wait on each other's writes.
 function serialQueue(): (task: () => Promise<void>, onError: (err: unknown) => void) => Promise<void> {
@@ -773,7 +764,7 @@ export async function getMedia(tabId: number): Promise<MediaItem[]> {
 
 // --- "Now playing" pointer: which video is currently playing in the tab ---
 
-export interface PlayingRef {
+interface PlayingRef {
   /** Asset ids of the media centered in the viewport (what you're watching). */
   ids: string[];
   /** True when a <video> is centered — enables the network-recency fallback. */
@@ -879,7 +870,7 @@ export async function getPlaying(tabId: number): Promise<PlayingRef | null> {
 
 // --- Recently requested fbcdn media tracks (the video being fetched now) ---
 
-export interface RecentTrack {
+interface RecentTrack {
   /** Widened URL of a fetched track; the side panel derives match keys
    *  (fbAssetKeys/mediaId/trackKey) from it, since a single id can't survive
    *  fbcdn's base64 filenames and rotating origin prefixes. */
@@ -887,7 +878,7 @@ export interface RecentTrack {
   at: number;
 }
 
-export interface RecentRef {
+interface RecentRef {
   /** Fetched tracks, oldest→newest. Normally a 24-entry tail; a bounded 4s
    *  transition burst and two boundary-near groups may temporarily widen it. */
   tracks: RecentTrack[];
@@ -1337,7 +1328,7 @@ export function purgeTab(tabId: number): Promise<void> {
 
 // --- Runtime capability flags (published by the SW, read by the panel/popup) ---
 
-export interface Caps {
+interface Caps {
   sidePanel: boolean;
   offscreen: boolean;
 }

@@ -1,4 +1,4 @@
-export interface SuccessDeduper {
+interface SuccessDeduper {
   readonly inFlightCount: number;
   run(key: string, task: () => Promise<void>): Promise<void>;
 }

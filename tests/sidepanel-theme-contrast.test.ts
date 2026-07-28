@@ -71,7 +71,11 @@ test('light form controls have a visible non-text boundary', () => {
 
 test('keeps media overlay tokens dark independently of the panel theme', () => {
   const root = block(':root');
-  for (const name of ['media-overlay', 'media-surface', 'media-text', 'media-muted', 'media-line']) {
+  // --media-overlay and --media-line used to be listed here too. No rule ever read
+  // either — they were pinned tokens for a layer that no longer exists — so they
+  // were deleted rather than kept alive by this list. The ones below are the media
+  // tokens actually in play.
+  for (const name of ['media-overlay-soft', 'media-surface', 'media-text', 'media-muted', 'media-control']) {
     assert.match(root, new RegExp(`--${name}:`), `missing --${name}`);
   }
   assert.ok(contrast(token(':root', 'media-text'), token(':root', 'media-surface')) >= 4.5);

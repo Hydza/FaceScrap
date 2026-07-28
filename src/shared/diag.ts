@@ -45,7 +45,10 @@ export type DiagReason =
   // --- successes, so the discards above can be read as a ratio ---
   | 'captureGraphql'
   | 'captureDom'
-  | 'captureNetwork';
+  | 'captureNetwork'
+  /** The in-page download button could not reach the worker to ask what the
+   *  playing media could be saved as. Counts the query, not the download. */
+  | 'overlayQueryFailed';
 
 export const DIAG_REASONS: readonly DiagReason[] = [
   'graphqlBodyTooLarge',

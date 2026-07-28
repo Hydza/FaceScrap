@@ -27,6 +27,27 @@ function contrast(foreground: string, background: string): number {
   return (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05);
 }
 
+/** The stylesheet with every `@media` block removed, so a responsive override is
+ *  not mistaken for a base value. Brace-counted rather than regexed: media blocks
+ *  nest rules, which a non-greedy match would cut in the middle of. */
+function withoutMediaQueries(source: string): string {
+  let out = '';
+  let at = 0;
+  for (;;) {
+    const start = source.indexOf('@media', at);
+    if (start < 0) return out + source.slice(at);
+    out += source.slice(at, start);
+    let depth = 0;
+    let cursor = source.indexOf('{', start);
+    if (cursor < 0) return out;
+    for (; cursor < source.length; cursor++) {
+      if (source[cursor] === '{') depth++;
+      else if (source[cursor] === '}' && --depth === 0) break;
+    }
+    at = cursor + 1;
+  }
+}
+
 function block(selector: string): string {
   const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   const value = css.match(new RegExp(`${escaped}\\s*\\{([^}]*)\\}`, 'i'))?.[1];
@@ -192,9 +213,132 @@ test('localises every download failure reason and the startup failure', () => {
 test('carries no unused message keys', () => {
   const declared = [...i18n.matchAll(/^\s+\| '(\w+)'/gm)].map((m) => m[1]!);
   assert.ok(declared.length > 100, 'MsgKey parse looks wrong');
-  const sources = panel + html + readFileSync(join(process.cwd(), 'src', 'shared', 'settings.ts'), 'utf8');
+  // Every context that renders user-visible copy, not just the panel: the
+  // in-page download overlay reads its own keys straight from i18n.ts.
+  const sources = [panel, html]
+    .concat(
+      ['src/shared/settings.ts', 'src/content/download-overlay.ts'].map((rel) =>
+        readFileSync(join(process.cwd(), ...rel.split('/')), 'utf8'),
+      ),
+    )
+    .join('\n');
   const unused = declared.filter((key) => !sources.includes(`'${key}'`) && !sources.includes(`"${key}"`));
   assert.deepEqual(unused, [], `unused message keys: ${unused.join(', ')}`);
+});
+
+// The stylesheet was written in two layers — a base section and a redesign section
+// that overrode it — leaving 45 declarations permanently dead. They rendered
+// correctly (identical selector, so the later one wins) and read wrong: .now
+// declared its padding twice, 4px apart, and reading the first block is how a stale
+// 12px went unnoticed through a whole design audit. Flattened, and now pinned.
+//
+// Grouped blocks (`a, b { }`) are excluded on purpose: a declaration there can be
+// dead for one selector and load-bearing for the other.
+test('declares each property once per selector, outside media queries', () => {
+  const base = withoutMediaQueries(css);
+  const blocks = new Map<string, Array<Map<string, string>>>();
+  for (const match of base.matchAll(/(^|\})\s*([^{}@]+?)\s*\{([^{}]*)\}/g)) {
+    const selector = match[2]!.replace(/\/\*[\s\S]*?\*\//g, '').trim();
+    if (!selector || selector.includes(',')) continue;
+    const declarations = new Map<string, string>();
+    for (const line of match[3]!.split(';')) {
+      const colon = line.indexOf(':');
+      if (colon < 0) continue;
+      const property = line.slice(0, colon).replace(/\/\*[\s\S]*?\*\//g, '').trim();
+      if (property && !property.startsWith('/')) declarations.set(property, line.slice(colon + 1).trim());
+    }
+    blocks.set(selector, [...(blocks.get(selector) ?? []), declarations]);
+  }
+
+  const collisions: string[] = [];
+  for (const [selector, list] of blocks) {
+    if (list.length < 2) continue;
+    const seen = new Map<string, string>();
+    for (const declarations of list) {
+      for (const [property, value] of declarations) {
+        const previous = seen.get(property);
+        if (previous != null && previous !== value) {
+          collisions.push(`${selector} { ${property} } declared ${previous} then ${value}`);
+        }
+        seen.set(property, value);
+      }
+    }
+  }
+  assert.deepEqual(collisions, [], `dead declarations:\n${collisions.join('\n')}`);
+});
+
+// The audit that removed --scroll-thumb named that token by hand and left three
+// more behind (--accent-wash, --media-overlay, --media-line; the last survived
+// because --media-overlay-soft IS used and the two read alike). Check the property
+// mechanically instead, so the next one cannot hide.
+test('defines no custom property that nothing reads', () => {
+  const defined = new Set([...css.matchAll(/^\s*(--[\w-]+):/gm)].map((m) => m[1]!));
+  const read = new Set([...css.matchAll(/var\((--[\w-]+)/g)].map((m) => m[1]!));
+  const unused = [...defined].filter((name) => !read.has(name)).sort();
+  assert.deepEqual(unused, [], `unused custom properties: ${unused.join(', ')}`);
+});
+
+// Now Playing sat tight against the app header and its count hung off the right
+// edge, so it read as a different screen from Library and Saved. Four measured
+// differences, all of them between VIEWS — nothing but a cross-view comparison can
+// see them, which is why they are pinned here rather than left to a screenshot.
+test('opens Now Playing on the same grid as the other views', () => {
+  // 1. Same distance below the header. Now Playing had no top padding at all.
+  const topPad = css.match(/\.view-grid,\n\.view-now \{ padding-top: (\d+)px; \}/);
+  assert.ok(topPad, 'the two content views must share one padding-top rule');
+  assert.equal(topPad[1], '12');
+
+  // 2. Same horizontal inset as .grid and .settings-body, so the heading and the
+  //    media card line up with grid cards and settings rows. Read the CASCADE
+  //    winner, not the first block: .now is declared twice, and reading the wrong
+  //    one is how a stale 12px sat there unnoticed. Responsive overrides are
+  //    stripped first — they retune every view together and are not the baseline.
+  const base = withoutMediaQueries(css);
+  const inset = (selector: string): string => {
+    const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const declared = [...base.matchAll(new RegExp(`${escaped}\\s*\\{([^}]*)\\}`, 'g'))]
+      .map((m) => m[1]!.match(/padding:\s*0(?:px)?\s+(\d+)px/)?.[1])
+      .filter((value): value is string => value != null);
+    assert.ok(declared.length > 0, `${selector} must declare a horizontal padding`);
+    return declared[declared.length - 1]!;
+  };
+  assert.equal(inset('.now'), '16');
+  assert.equal(inset('.grid'), '16');
+  assert.equal(inset('.settings-body'), '16');
+  // The head must not add its own inset on top of that.
+  assert.doesNotMatch(block('.now-head'), /padding/, '.now-head must inherit .now’s inset');
+
+  // 3. The count sits beside the heading, as in .grid-title-line, not shoved to the
+  //    far edge by space-between.
+  assert.doesNotMatch(block('.now-head'), /justify-content/);
+  assert.match(block('.now-head'), /align-items:\s*baseline/);
+  assert.match(block('.grid-title-line'), /align-items:\s*baseline/);
+
+  // 4. And it is styled as the same kind of label as the grid's count.
+  const pieces = block('.now-pieces');
+  const count = block('.grid-count');
+  for (const property of ['color', 'font-size', 'line-height', 'font-weight']) {
+    const from = (rule: string): string | undefined =>
+      rule.match(new RegExp(`${property}:\\s*([^;]+)`))?.[1]?.trim();
+    assert.equal(from(pieces), from(count), `${property} must match .grid-count`);
+  }
+});
+
+// The Reset button sat flush against the counters box — measured 0px between them
+// in Chromium 148, where the UA wraps everything after <summary> in a
+// ::details-content box, so .set-row.col's column `gap` lands between the summary
+// and that box and never between its children.
+test('spaces the diagnostics counters from Reset without relying on the details gap', () => {
+  assert.match(css, /\.diagnostics details\.set-row\.col \{[^}]*gap:\s*0/);
+  assert.match(block('.diagnostics #diag-counters'), /margin-top:\s*8px/);
+  const reset = block('.diagnostics #diag-reset');
+  // Equal margins are the point, not one of them: with the UA box the gap is
+  // skipped, and on the Chrome 116 floor the children ARE flex siblings. Margins
+  // give 8px in both worlds; keeping the gap as well would give 16px in one.
+  assert.match(reset, /margin-top:\s*8px/);
+  // In the flex-sibling case align-items: stretch would blow the button to full
+  // width, so the two versions would not even agree on its shape.
+  assert.match(reset, /align-self:\s*flex-start/);
 });
 
 // The Spanish autosave note read as a lowercase fragment next to a full English

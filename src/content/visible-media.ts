@@ -8,7 +8,7 @@ import {
   type MediaSource,
 } from '../shared/media';
 
-export interface VisibleMediaSignal {
+interface VisibleMediaSignal {
   hasVideo: boolean;
   videoUrl?: string;
   videoHeight?: number;

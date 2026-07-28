@@ -19,8 +19,6 @@
 // a regression back to the unsafe top-level-splice shape would show up here
 // as every valid id being rejected — not merely as a lint nit.
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
 import test, { beforeEach } from 'node:test';
 
 import { persistNowPlayingMessage } from '../src/background/playing-handler';
@@ -29,36 +27,14 @@ import { isStoryDomId, storyDomIdFromGraphqlNode } from '../src/shared/story-mar
 import { getPlaying } from '../src/shared/storage';
 import { resetChromeStorage } from './chrome-fake';
 
-const ROOT = process.cwd();
-const content = readFileSync(join(ROOT, 'src', 'content', 'content.ts'), 'utf8');
-const storyMark = readFileSync(join(ROOT, 'src', 'shared', 'story-mark.ts'), 'utf8');
-const playingHandler = readFileSync(join(ROOT, 'src', 'background', 'playing-handler.ts'), 'utf8');
-
 beforeEach(resetChromeStorage);
 
-// A pure boundary test (below) can't distinguish this fix from the ORIGINAL
-// hand-spelled regexes it replaced — both enforce the identical 5-20 bound,
-// so behaviourally they're indistinguishable. What actually regresses on a
-// revert is the DEDUPLICATION itself: the shared forms stop being imported
-// and the literals come back. Check that directly, on the source text, so
-// reverting either file makes this fail for a reason a behavioural check
-// alone cannot catch.
-test('R5: story-mark.ts imports isNumericMediaId from the shared model, and the old literals are gone', () => {
-  assert.match(storyMark, /import\s*\{\s*isNumericMediaId\s*\}\s*from\s*['"]\.\/media['"]/);
-  assert.equal(storyMark.includes('/^\\d{5,20}$/'), false, 'the old anchored hand-spelled literal must be gone');
-  assert.equal(
-    storyMark.includes('/^(?:S:_ISC:|S3:)\\d{5,20}$/'),
-    false,
-    'the old embedded hand-spelled literal must be gone',
-  );
-});
-
-test('R5: playing-handler.ts imports isNumericMediaId from the shared model, and the old literal is gone', () => {
-  assert.match(playingHandler, /import\s*\{[^}]*\bisNumericMediaId\b[^}]*\}\s*from\s*['"]\.\.\/shared\/media['"]/s);
-  assert.ok(playingHandler.includes('vid: isNumericMediaId(message.vid) ? message.vid : undefined,'));
-  assert.equal(playingHandler.includes('/^\\d{5,20}$/'), false, 'the old hand-spelled literal must be gone');
-});
-
+// Six tests are gone from this file. They asserted that each call site imports the
+// shared numeric-id forms and that the old hand-spelled /^\d{5,20}$/ literals no
+// longer appear. The file''s own header admitted the point: behaviour cannot tell
+// the two shapes apart, because both enforce the same 5-20 bound. So they guarded
+// deduplication, not correctness, and failed on any rename. The bound itself is
+// exercised below, at the boundary, through the real bundle.
 /** Base64url-encode a decoded Story DOM id body (e.g. "S3:12345") the same
  *  way isStoryDomId's own decodeStoryDomId reverses it — real production ids
  *  use this alphabet, and STORY_DOM_ID's outer shape gate only accepts it. */
@@ -130,46 +106,3 @@ test('R5: isNumericMediaId itself defines the 5-20 bound the tests above assume'
 // tests/fix-content.test.ts's header) so its three call sites are checked on
 // the source text instead: the shared forms must be imported and used, and
 // the old re-spelled \d{5,20} literals must be gone.
-test('R5: content.ts imports the shared numeric-id forms from media.ts', () => {
-  assert.match(
-    content,
-    /import\s*\{[^}]*\bisNumericMediaId\b[^}]*\}\s*from\s*['"]\.\.\/shared\/media['"]/s,
-  );
-  assert.match(
-    content,
-    /import\s*\{[^}]*\bNUMERIC_MEDIA_ID_SOURCE\b[^}]*\}\s*from\s*['"]\.\.\/shared\/media['"]/s,
-  );
-});
-
-test('R5: reelVideoId uses isNumericMediaId instead of a re-spelled anchored regex', () => {
-  assert.ok(
-    content.includes("return closestAttrValue(video, 'data-video-id', isNumericMediaId);"),
-    'reelVideoId must delegate straight to the shared predicate',
-  );
-});
-
-test('R5: urlVideoId builds its path regex from NUMERIC_MEDIA_ID_SOURCE and validates ?v= with isNumericMediaId', () => {
-  // Checked as separate unambiguous substrings, not one long literal: the real
-  // line is built from a template literal whose escaped slashes (\\/) are two
-  // characters in the FILE'S raw text but decode to one at runtime, and a
-  // single hand-matched literal here is exactly the kind of mismatch that trap
-  // invites. ${NUMERIC_MEDIA_ID_SOURCE} below is plain text inside a
-  // single-quoted string (no interpolation triggers outside a template
-  // literal), so it matches the source's own interpolation syntax literally.
-  assert.ok(content.includes('const URL_VIDEO_ID_RE = new RegExp(`'));
-  assert.ok(content.includes('(?:reel|videos?)'));
-  assert.ok(
-    content.includes('${NUMERIC_MEDIA_ID_SOURCE}'),
-    'the embedded path pattern must splice in the shared source, not \\d{5,20} directly',
-  );
-  assert.ok(content.includes('(?=[/?#]|$)`);'));
-  assert.ok(
-    content.includes('if (isNumericMediaId(v)) return v;'),
-    'the ?v= query param must be checked with the shared predicate',
-  );
-});
-
-test('R5: no re-spelled \\d{5,20} literal remains anywhere in content.ts', () => {
-  assert.equal(content.includes('/^\\d{5,20}$/'), false, 'anchored hand-spelled literal must be gone');
-  assert.equal(content.includes('(\\d{5,20})'), false, 'embedded hand-spelled literal must be gone');
-});

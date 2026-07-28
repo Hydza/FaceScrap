@@ -101,7 +101,7 @@ But the **DASH segments** the player downloads do cross the network. FaceScrap:
    GraphQL (`all_video_dash_prefetch_representations` / `dash_manifest_xml`).
 2. Re-downloads both complete tracks from `fbcdn` (in the offscreen document,
    which avoids CORS thanks to `host_permissions`).
-3. **Merges them into one MP4** with `ffmpeg.wasm` using `-c copy -shortest`
+3. **Merges them into one MP4** with the in-repo remuxer (`src/shared/mp4-remux.ts`)
    — **no re-encode, no screen capture**; `-shortest` trims the merge to the
    shorter track (typically milliseconds) so the file never ends on frozen
    video or silence. The same approach yt-dlp uses.
@@ -128,7 +128,7 @@ harness uses the standard Windows Edge/Brave installation paths, exercises
 light → dark → auto theme precedence through a network-free synthetic Facebook
 page, checks responsive widths at 300, 340, and 500 px, then restores the
 requested theme and 340 px viewport before writing screenshots and
-`dist/qa/evidence.json`. An optional local design comparison remains available
+`artifacts/qa/evidence.json`. An optional local design comparison remains available
 with `--reference path\to\reference.html`.
 
 ## Install
@@ -152,7 +152,7 @@ Then load it in Chrome:
 ## Structure
 
 <p align="center">
-  <img src="docs/flow.svg" width="760" alt="FaceScrap data flow in six steps: the page plays media, the MAIN-world hook reads GraphQL, the content script relays, the service worker stores per tab, the side panel renders live, and downloads go straight to disk or through the ffmpeg.wasm remux">
+  <img src="docs/flow.svg" width="760" alt="FaceScrap data flow in six steps: the page plays media, the MAIN-world hook reads GraphQL, the content script relays, the service worker stores per tab, the side panel renders live, and downloads go straight to disk or through the MP4 remux">
 </p>
 
 Every context above is backed by `src/shared/` — the media model and sanitizers,
@@ -160,14 +160,14 @@ DASH parsing, storage accessors, now-playing inference, settings, i18n and the
 typed message contracts. `rules/referer-rules.json` is a declarativeNetRequest
 rule that sets the Referer on fbcdn requests.
 
-> **Size:** the `ffmpeg.wasm` core (~31 MB) is copied into `dist/assets/ffmpeg/`,
-> so the unpacked extension weighs ~31 MB. Normal for personal use.
+> **Size:** ~600 KB unpacked, all of it built from `src/` — no vendored binaries.
+> The DASH merge is `src/shared/mp4-remux.ts`, not a bundled ffmpeg build.
 
 ## Roadmap
 
 - More precise source detection (reel/story/highlight) from each GraphQL
   response's `fb_api_req_friendly_name`.
-- Remux progress bar (`progress` messages from ffmpeg.wasm).
+- Remux progress bar (the merge is table surgery, so it reports one phase change).
 - "Download all" button.
 
 ## Chromium browser compatibility

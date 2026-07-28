@@ -1,4 +1,4 @@
-export interface TokenBudgetOptions {
+interface TokenBudgetOptions {
   capacityItems: number;
   capacityBytes: number;
   refillItemsPerMs: number;
@@ -6,7 +6,7 @@ export interface TokenBudgetOptions {
   now?: number;
 }
 
-export interface TokenBudget {
+interface TokenBudget {
   tryTake(items: number, bytes: number, now: number): boolean;
   readonly remainingItems: number;
   readonly remainingBytes: number;
@@ -96,7 +96,7 @@ export function createTokenBudget(options: TokenBudgetOptions): TokenBudget {
   };
 }
 
-export interface CounterCoalescer<K extends string> {
+interface CounterCoalescer<K extends string> {
   add(counters: Readonly<Partial<Record<K, number>>>): void;
   drain(): Partial<Record<K, number>>;
 }

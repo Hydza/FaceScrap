@@ -9,7 +9,7 @@ import {
   isFbcdn,
   makeItem,
   MAX_ITEMS_PER_MESSAGE,
-  mediaSourceFromPath,
+  mediaSourceFromLocation,
   trackKey,
   type MediaItem,
   type MediaSource,
@@ -203,7 +203,7 @@ function harvestDash(
 // precedence (and its real-path-segment anchoring, not a bare substring
 // match) can never drift between the three call sites.
 function pageSource(): MediaSource {
-  return mediaSourceFromPath(location.pathname);
+  return mediaSourceFromLocation(location.pathname, location.search);
 }
 
 const VIDEO_KEY_SET: ReadonlySet<string> = new Set(VIDEO_KEYS);

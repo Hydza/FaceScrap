@@ -1,6 +1,4 @@
 import assert from 'node:assert/strict';
-import fs from 'node:fs';
-import path from 'node:path';
 import test from 'node:test';
 
 import { visibleMediaCandidate } from '../src/content/visible-media';
@@ -86,13 +84,6 @@ test('rejects an over-length URL before parsing it', () => {
   );
 });
 
-test('the DOM integration classifies only the centred video as video evidence', () => {
-  const content = fs.readFileSync(path.join(process.cwd(), 'src', 'content', 'content.ts'), 'utf8');
-
-  assert.match(content, /visibleMediaCandidate\(\s*\{\s*hasVideo: videoEl != null,/);
-  assert.doesNotMatch(
-    content,
-    /visibleMediaCandidate\(\s*\{\s*hasVideo,\s*videoUrl:/,
-    'an unrelated playing video elsewhere in the viewport must not suppress the centred photo',
-  );
-});
+// Dropped: a check that content.ts passes `hasVideo: videoEl != null` at the call
+// site. The rule it protects — an unrelated playing video must not suppress the
+// centred photo — is what the five tests above exercise on the real function.

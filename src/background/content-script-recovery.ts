@@ -1,16 +1,16 @@
-export interface RecoverableFacebookTab {
+interface RecoverableFacebookTab {
   id?: number;
   url?: string;
 }
 
-export interface ContentScriptRecoveryDependencies {
+interface ContentScriptRecoveryDependencies {
   queryFacebookTabs(): Promise<RecoverableFacebookTab[]>;
   ping(tabId: number): Promise<boolean>;
   inject(tabId: number, file: string): Promise<void>;
   onError?(tabId: number, error: unknown): void;
 }
 
-export interface ContentScriptRecoveryResult {
+interface ContentScriptRecoveryResult {
   checked: number;
   injected: number;
 }

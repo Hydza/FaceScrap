@@ -5,7 +5,7 @@ import { isStoryDomId } from './story-mark';
 
 export type MediaKind = 'video' | 'image' | 'audio';
 export type MediaSource = 'reel' | 'story' | 'highlight' | 'video' | 'page';
-export type MediaOrigin = 'network' | 'graphql' | 'dom';
+type MediaOrigin = 'network' | 'graphql' | 'dom';
 
 export interface MediaItem {
   /** Stable dedupe key derived from the fbcdn asset id. */
@@ -124,9 +124,10 @@ export function isNumericMediaId(value: unknown): value is string {
 
 /** DASH byte-range segment query param names. widenDashUrl strips them below
  *  to recover the full-track URL; classifyNetworkRequest's isDash check tests
- *  for them too. service-worker.ts's own recency-tracking check re-spells the
- *  same pair as an inline regex and must stay in lockstep — exported so that
- *  copy can reference this source instead of a second hand-maintained literal. */
+ *  for them too. The comment here used to say service-worker.ts re-spelled the
+ *  pair as an inline regex and that the export existed for that copy to reference
+ *  — it imports DASH_BYTE_RANGE_RE now, so there is no second literal to keep in
+ *  lockstep. */
 export const DASH_BYTE_RANGE_PARAMS = ['bytestart', 'byteend'] as const;
 export const DASH_BYTE_RANGE_RE = new RegExp(`[?&](?:${DASH_BYTE_RANGE_PARAMS.join('|')})=`);
 
@@ -151,17 +152,35 @@ export function widenDashUrl(url: string): string {
 // filenames. Slash- or string-boundary on both sides (plural allowed).
 const HIGHLIGHT_SEGMENT_RE = /(?:^|\/)highlights?(?:\/|$)/i;
 
+// Opening a profile's highlights does NOT produce a highlight path: Facebook
+// reuses the plain story permalink and marks the surface only in the query —
+// /stories/976731645401448/?source=profile_highlight. The path test above sees
+// just "/stories/", so on its own it labelled every profile highlight an
+// ordinary story, which then showed the wrong badge and title in Now Playing
+// and wrote "story" into the {source} token of the download filename.
+// Anchored on "_" or a string boundary so a longer unrelated value can't match.
+const HIGHLIGHT_SOURCE_PARAM_RE = /(?:^|_)highlights?(?:_|$)/i;
+
+function isHighlightQuery(search: string): boolean {
+  const source = new URLSearchParams(search).get('source');
+  return source != null && HIGHLIGHT_SOURCE_PARAM_RE.test(source);
+}
+
 /**
- * Classify a Facebook pathname into the capture surface FaceScrap labels
- * media with. One copy shared by the service worker (tab surface, from a
- * navigated URL's pathname), the page hook (GraphQL capture source, from
- * location.pathname) and the content script (DOM-scan fallback, from
- * location.pathname), so their precedence — highlight, then stories, then
- * reel, then a plain watch/video page — can never drift apart between the
- * three call sites.
+ * Classify a Facebook location into the capture surface FaceScrap labels media
+ * with. One copy shared by the service worker (tab surface, from a navigated
+ * URL), the page hook (GraphQL capture source, from `location`) and the content
+ * script (DOM-scan fallback, from `location`), so their precedence — highlight,
+ * then stories, then reel, then a plain watch/video page — can never drift
+ * apart between the three call sites.
+ *
+ * `search` is required on purpose. It used to be a pathname-only classifier,
+ * and all three callers duly passed only the pathname — which is exactly how
+ * the profile-highlight query signal went unread. Making it required means the
+ * compiler, not a reviewer, catches a caller that forgets it.
  */
-export function mediaSourceFromPath(pathname: string): MediaSource {
-  if (HIGHLIGHT_SEGMENT_RE.test(pathname)) return 'highlight';
+export function mediaSourceFromLocation(pathname: string, search: string): MediaSource {
+  if (HIGHLIGHT_SEGMENT_RE.test(pathname) || isHighlightQuery(search)) return 'highlight';
   if (/\/stories\//.test(pathname)) return 'story';
   if (/\/reel\//.test(pathname)) return 'reel';
   return 'video';

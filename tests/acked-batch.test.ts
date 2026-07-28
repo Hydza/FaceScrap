@@ -428,7 +428,7 @@ test('rotating a repeatedly rejected item does not duplicate a key merged in beh
   delivery.enqueue({ id: 'a', version: 1 });
 
   for (let retry = 0; retry < 2; retry++) {
-    assert.equal(await delivery.pump(async (batch) => {
+    assert.equal(await delivery.pump(async (_batch) => {
       // A newer update for the SAME key arrives while the stale version is
       // in flight — per the in-flight-prefix contract, it merges in BEHIND
       // it rather than being dropped or clobbering the in-flight copy.

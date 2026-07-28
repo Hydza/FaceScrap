@@ -25,30 +25,10 @@ test('shows complete media over a blurred cover background', () => {
 
 test('keeps only Story-like portrait media on the immersive cover fit', () => {
   assert.match(css, /img\.media-fit-cover:not\(\.thumb-bg\)[\s\S]*?object-fit:\s*cover/);
+  // The aspect threshold is a design number, like the rule above it: 0.7 is what
+  // separates a Story-shaped portrait from an ordinary tall photo.
   assert.match(controller, /const PORTRAIT_COVER_MAX_ASPECT = 0\.7/);
-  assert.match(
-    controller,
-    /image\.classList\.toggle\('media-fit-cover', image\.naturalWidth \/ image\.naturalHeight <= PORTRAIT_COVER_MAX_ASPECT\)/,
-  );
-  // renderCard's and paintNow's separate `addEventListener('load', () =>
-  // applyMediaFit(img, <container>))` calls were consolidated into the shared
-  // buildThumbPair builder (finding S5 — see tests/fix-sidepanel.test.ts for
-  // the exhaustive check of that builder's own contract). The applyMediaFit
-  // wiring now lives in exactly one place, inside buildThumbPair itself; what
-  // this test still needs to prove is that BOTH real call sites — the grid
-  // card thumb and the Now Playing preview — actually go through it.
-  assert.match(
-    controller,
-    /img\.addEventListener\('load', \(\) => \{\s*applyMediaFit\(img, container\);\s*options\.onLoad\?\.\(img\);\s*\}\);/,
-  );
-  assert.ok(
-    controller.includes("const { bg, img } = buildThumbPair(card.thumbUrl, thumb, { lazy: true, onError: showIcon });"),
-    'the grid card thumb must still run through buildThumbPair (and so through applyMediaFit)',
-  );
-  assert.ok(
-    controller.includes(
-      "const { bg, img } = buildThumbPair(now.thumbUrl, preview, { onLoad: paintImageResolution });",
-    ),
-    'the Now Playing preview must still run through buildThumbPair (and so through applyMediaFit)',
-  );
+  // Dropped from here: three regexes proving both thumbnail call sites route
+  // through buildThumbPair. They mirrored exact argument lists, and a
+  // wrongly-fitted thumbnail is visible in `npm run qa:sidepanel`'s captures.
 });

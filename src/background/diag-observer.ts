@@ -10,7 +10,7 @@ const DEFAULT_MAX_COUNT = 1_000_000;
 
 type TimerHandle = unknown;
 
-export interface DiagObserverOptions {
+interface DiagObserverOptions {
   write: (delta: DiagCounters) => Promise<void>;
   drainWorker?: () => DiagCounters;
   intervalMs?: number;
@@ -21,7 +21,7 @@ export interface DiagObserverOptions {
   onError?: (error: unknown) => void;
 }
 
-export interface DiagObserver {
+interface DiagObserver {
   setEnabled(enabled: boolean): void;
   report(tabId: number, counters: unknown): boolean;
   removeTab(tabId: number): void;

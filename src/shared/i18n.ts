@@ -137,7 +137,14 @@ export type MsgKey =
   // Startup failure. Shown when the panel cannot boot at all, which is exactly
   // when the user most needs to read it in their own language.
   | 'fatalStartup'
-  | 'fatalStartupVersion';
+  | 'fatalStartupVersion'
+  // In-page download button (the overlay injected over the reel/story you are
+  // watching, so a download needs no side panel).
+  | 'overlayDownload'
+  | 'overlayPickQuality'
+  | 'overlayWorking'
+  | 'overlayDone'
+  | 'overlayFailed';
 
 const MESSAGES: Record<Lang, Record<MsgKey, string>> = {
   en: {
@@ -154,8 +161,8 @@ const MESSAGES: Record<Lang, Record<MsgKey, string>> = {
     videoQuality: 'Resolution',
     qualityOptions: '{n}',
     qualityOptionsOne: '1',
-    piecesInPost: '{n} pieces in post',
-    piecesInPostOne: '1 piece in post',
+    piecesInPost: '{n} pieces',
+    piecesInPostOne: '1 piece',
     nowDownloadable: 'downloadable',
     metaFormat: 'Format',
     metaDuration: 'Duration',
@@ -259,6 +266,11 @@ const MESSAGES: Record<Lang, Record<MsgKey, string>> = {
     fatalStartup:
       "FaceScrap couldn't start on this browser ({message}). It needs a Chromium browser with the storage, tabs and side-panel APIs — try Chrome or Edge.",
     fatalStartupVersion: ' [v{version}]',
+    overlayDownload: 'Download',
+    overlayPickQuality: 'Choose a resolution',
+    overlayWorking: 'Saving…',
+    overlayDone: 'Saved',
+    overlayFailed: 'Failed',
   },
   es: {
     brandTagline: 'recuerdos de facebook, bien guardados',
@@ -274,8 +286,8 @@ const MESSAGES: Record<Lang, Record<MsgKey, string>> = {
     videoQuality: 'Resolución',
     qualityOptions: '{n}',
     qualityOptionsOne: '1',
-    piecesInPost: '{n} piezas en la publicación',
-    piecesInPostOne: '1 pieza en la publicación',
+    piecesInPost: '{n} piezas',
+    piecesInPostOne: '1 pieza',
     nowDownloadable: 'descargable',
     metaFormat: 'Formato',
     metaDuration: 'Duración',
@@ -379,6 +391,11 @@ const MESSAGES: Record<Lang, Record<MsgKey, string>> = {
     fatalStartup:
       'FaceScrap no pudo arrancar en este navegador ({message}). Necesita un navegador Chromium con las APIs de storage, tabs y panel lateral — prueba Chrome o Edge.',
     fatalStartupVersion: ' [v{version}]',
+    overlayDownload: 'Descargar',
+    overlayPickQuality: 'Elige una resolución',
+    overlayWorking: 'Guardando…',
+    overlayDone: 'Guardado',
+    overlayFailed: 'Falló',
   },
 };
 
@@ -407,4 +424,27 @@ export function fmt(key: MsgKey, vars: Record<string, string | number>): string 
   let s = t(key);
   for (const [k, v] of Object.entries(vars)) s = s.replace(`{${k}}`, () => String(v));
   return s;
+}
+
+/** Where the manual language choice is stored. */
+export const LANG_KEY = 'lang';
+
+export async function loadLang(): Promise<Lang> {
+  const stored = (await chrome.storage.local.get(LANG_KEY))[LANG_KEY];
+  return stored === 'es' ? 'es' : 'en';
+}
+
+export async function saveLang(lang: Lang): Promise<void> {
+  await chrome.storage.local.set({ [LANG_KEY]: lang });
+}
+
+/** The language to use: the browser's when "follow browser language" is on,
+ *  otherwise the manually-saved choice. Shared so the in-page download overlay
+ *  localises exactly like the panel — it used to live inside sidepanel.ts, where
+ *  a content script could not reach it. */
+export async function resolveLang(followBrowserLang: boolean): Promise<Lang> {
+  if (followBrowserLang) {
+    return (navigator.language || 'en').toLowerCase().startsWith('es') ? 'es' : 'en';
+  }
+  return loadLang();
 }

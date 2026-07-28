@@ -3,7 +3,7 @@
 // See acked-latest.ts's header comment for the map of all five capture/ack
 // channels' retry cadences, including this module's one user (media).
 
-export interface AckedBatchOptions<T, K = never> {
+interface AckedBatchOptions<T, K = never> {
   /** Maximum number of items passed to one send call. */
   maxBatch: number;
   /** Hard bound for queued items, including the batch currently in flight. */
@@ -27,14 +27,14 @@ export interface AckedBatchOptions<T, K = never> {
   rotateAfterFailures?: number;
 }
 
-export interface EnqueueResult {
+interface EnqueueResult {
   added: number;
   merged: number;
   /** Unique items or updates discarded after the queue reached a bound. */
   dropped: number;
 }
 
-export interface AckedBatch<T> {
+interface AckedBatch<T> {
   enqueue(item: T): EnqueueResult;
   enqueueMany(items: Iterable<T>): EnqueueResult;
   /**

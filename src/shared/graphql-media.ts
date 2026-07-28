@@ -41,7 +41,7 @@ function graphqlDimension(value: unknown): number | undefined {
     : undefined;
 }
 
-export interface GraphqlImageCandidate {
+interface GraphqlImageCandidate {
   url: string;
   width?: number;
   height?: number;

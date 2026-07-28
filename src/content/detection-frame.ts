@@ -1,4 +1,4 @@
-export interface FrameCoalescer {
+interface FrameCoalescer {
   request(): void;
   cancel(): void;
 }

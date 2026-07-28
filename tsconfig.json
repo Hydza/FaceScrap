@@ -6,6 +6,10 @@
     "lib": ["ES2022", "DOM", "DOM.Iterable"],
     "types": ["chrome"],
     "strict": true,
+    // Never enabled before, so nothing had ever checked for dead locals: it found
+    // an unreachable retention helper and three unused imports on the first run.
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
     "noEmit": true,
     "skipLibCheck": true,
     "esModuleInterop": true,

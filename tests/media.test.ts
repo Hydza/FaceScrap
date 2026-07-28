@@ -15,7 +15,7 @@ import {
   matchesActiveMediaId,
   mediaId,
   mediaItemWeight,
-  mediaSourceFromPath,
+  mediaSourceFromLocation,
   mergeMedia,
   sanitizeIncomingItems,
   widenDashUrl,
@@ -202,21 +202,54 @@ test('mergeMedia enriches near-limit rows transactionally without dropping store
   assert.ok((result.trackIds?.length ?? 0) < incomingTracks.length, 'the overweight track tail is dropped');
 });
 
-test('mediaSourceFromPath anchors the highlight check to a real path segment', () => {
-  assert.equal(mediaSourceFromPath('/stories/highlights/123'), 'highlight');
-  assert.equal(mediaSourceFromPath('/someuser/highlights'), 'highlight');
-  assert.equal(mediaSourceFromPath('/watch/HIGHLIGHT/123'), 'highlight', 'case-insensitive');
+test('mediaSourceFromLocation anchors the highlight check to a real path segment', () => {
+  assert.equal(mediaSourceFromLocation('/stories/highlights/123', ''), 'highlight');
+  assert.equal(mediaSourceFromLocation('/someuser/highlights', ''), 'highlight');
+  assert.equal(mediaSourceFromLocation('/watch/HIGHLIGHT/123', ''), 'highlight', 'case-insensitive');
   // "highlight(s)" appears only as a substring of a larger, dot-joined path
   // segment here — a real vanity page slug — and must not match.
-  assert.equal(mediaSourceFromPath('/football.highlights.daily/videos/123'), 'video');
-  assert.equal(mediaSourceFromPath('/mypagehighlights/videos/123'), 'video');
+  assert.equal(mediaSourceFromLocation('/football.highlights.daily/videos/123', ''), 'video');
+  assert.equal(mediaSourceFromLocation('/mypagehighlights/videos/123', ''), 'video');
 });
 
-test('mediaSourceFromPath keeps the highlight > stories > reel > video precedence', () => {
-  assert.equal(mediaSourceFromPath('/stories/highlights/123'), 'highlight', 'highlight beats stories');
-  assert.equal(mediaSourceFromPath('/stories/123'), 'story');
-  assert.equal(mediaSourceFromPath('/reel/123'), 'reel');
-  assert.equal(mediaSourceFromPath('/watch/'), 'video');
+test('mediaSourceFromLocation keeps the highlight > stories > reel > video precedence', () => {
+  assert.equal(mediaSourceFromLocation('/stories/highlights/123', ''), 'highlight', 'highlight beats stories');
+  assert.equal(mediaSourceFromLocation('/stories/123', ''), 'story');
+  assert.equal(mediaSourceFromLocation('/reel/123', ''), 'reel');
+  assert.equal(mediaSourceFromLocation('/watch/', ''), 'video');
+});
+
+// Viewing a profile's highlights does not produce a highlight PATH: Facebook
+// reuses the plain story permalink and puts the only marker in the query.
+// Classifying on the pathname alone labelled these ordinary stories, so Now
+// Playing showed the wrong badge/title and downloads were named "story".
+test('mediaSourceFromLocation reads the profile-highlight marker out of the query', () => {
+  // The real link this was reported from:
+  // https://www.facebook.com/stories/976731645401448/?source=profile_highlight
+  // (split by hand rather than via `new URL` — this file shadows the global URL
+  // with a fixture string constant.)
+  assert.equal(mediaSourceFromLocation('/stories/976731645401448/', '?source=profile_highlight'), 'highlight');
+
+  // With and without the leading "?", and however the param is ordered.
+  assert.equal(mediaSourceFromLocation('/stories/123/', '?source=profile_highlight'), 'highlight');
+  assert.equal(mediaSourceFromLocation('/stories/123/', 'source=profile_highlight'), 'highlight');
+  assert.equal(mediaSourceFromLocation('/stories/123/', '?foo=1&source=profile_highlight&bar=2'), 'highlight');
+  assert.equal(mediaSourceFromLocation('/stories/123/', '?source=highlights'), 'highlight');
+});
+
+test('mediaSourceFromLocation leaves other story entry points alone', () => {
+  // Every other ?source= value must keep the story label — only the highlight
+  // marker may override the path.
+  for (const search of ['', '?source=story_tray', '?source=permalink', '?source=notification', '?source=feed_story']) {
+    assert.equal(mediaSourceFromLocation('/stories/123/', search), 'story', `search=${search || '(none)'}`);
+  }
+  // A value that merely contains the letters must not match: the marker is
+  // anchored on "_" or a string boundary.
+  assert.equal(mediaSourceFromLocation('/stories/123/', '?source=spotlighted'), 'story');
+  assert.equal(mediaSourceFromLocation('/stories/123/', '?source=nothighlighted'), 'story');
+  // A highlight query must not promote a page that is not media-bearing either
+  // way — the path still decides everything except the highlight/story split.
+  assert.equal(mediaSourceFromLocation('/reel/123', '?source=story_tray'), 'reel');
 });
 
 test('fileExtensionFor derives the extension from the URL pathname when it matches the item kind', () => {

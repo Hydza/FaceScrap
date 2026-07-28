@@ -6,7 +6,7 @@ export interface FacebookThemeRef {
   at: number;
 }
 
-export interface ParsedCssColor {
+interface ParsedCssColor {
   red: number;
   green: number;
   blue: number;

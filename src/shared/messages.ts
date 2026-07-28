@@ -7,13 +7,13 @@
 // a process with the page, so the worker never believes these types blindly.
 
 import type { DiagCounters } from './diag';
-import type { MediaItem } from './media';
+import type { MediaItem, MediaKind } from './media';
 import type { Settings } from './settings';
 import type { BindRecord, BindState, SavedEntry } from './storage';
 import type { EffectiveTheme } from './theme';
 
 /** content script → service worker: sanitized captures relayed from the page. */
-export interface MediaFoundMsg {
+interface MediaFoundMsg {
   type: 'MEDIA_FOUND';
   items: MediaItem[];
   /** Per-content-context nonce; worker uses sender.documentId when available
@@ -22,10 +22,10 @@ export interface MediaFoundMsg {
 }
 
 /** Shared ack shape: success, or failure with a retry hint and optional message. */
-export type RetryableAck = { ok: true } | { ok: false; retryable: boolean; error?: string };
+type RetryableAck = { ok: true } | { ok: false; retryable: boolean; error?: string };
 
 /** Shared ack shape: success, or failure with a required message. */
-export type SimpleAck = { ok: true } | { ok: false; error: string };
+type SimpleAck = { ok: true } | { ok: false; error: string };
 
 /** The worker acknowledges MEDIA_FOUND only after addMedia has durably stored
  *  the sanitized batch. Content keeps an unacknowledged batch queued. */
@@ -284,6 +284,50 @@ export interface DownloadDirectMsg {
 }
 export type DownloadDirectResponse = DownloadDashResponse;
 
+/**
+ * content script → service worker: what could the media playing in MY tab be
+ * downloaded as?
+ *
+ * Answers with LABELS ONLY. No fbcdn URL ever crosses into the page's process,
+ * so the in-page button cannot leak one and cannot be tricked into asking for
+ * one. `tabId` is deliberately absent: the worker reads it from `sender.tab`,
+ * which the page cannot forge.
+ */
+interface PlayingDownloadOptionsMsg {
+  type: 'FACESCRAP_PLAYING_DOWNLOAD_OPTIONS';
+}
+export type PlayingDownloadOptionsResponse =
+  | {
+      ok: true;
+      /** Absent when nothing downloadable is playing — the button hides itself. */
+      media?: {
+        kind: MediaKind;
+        /** Resolution labels, highest first. Empty for an image: nothing to pick. */
+        labels: string[];
+      };
+    }
+  | { ok: false; error: string };
+
+/**
+ * content script → service worker: download what is playing in MY tab, at this
+ * resolution label.
+ *
+ * An intent, not a command with a payload. FACESCRAP_DOWNLOAD_DASH and
+ * _DIRECT carry a URL and are therefore refused outright when `sender.tab` is
+ * set (a compromised page must not be able to aim the extension's downloader at
+ * an arbitrary URL). This message carries no URL: the worker resolves one from
+ * the capture state it already holds for the sending tab. The worst a hostile
+ * page can do with it is re-download the media the user is already watching.
+ */
+export interface RequestPlayingDownloadMsg {
+  type: 'FACESCRAP_REQUEST_PLAYING_DOWNLOAD';
+  /** One of the labels from PlayingDownloadOptionsResponse. An unknown or absent
+   *  label falls back to the Settings default quality, so a menu left open while
+   *  the representations changed still downloads something sensible. */
+  label?: string;
+}
+export type RequestPlayingDownloadResponse = SimpleAck;
+
 /** service worker → offscreen: fetch and remux one (video, audio) track pair. */
 export interface MuxMsg {
   type: 'FACESCRAP_MUX';
@@ -357,7 +401,7 @@ export interface PinPlayingMediaMsg {
 /** content script → service worker: discard counts drained from the page hook
  *  and the DOM scan. Only the worker can persist them — neither the MAIN world
  *  nor a content script may write the extension's storage directly. */
-export interface DiagReportMsg {
+interface DiagReportMsg {
   type: 'DIAG_REPORT';
   counters: DiagCounters;
   documentToken?: string;
@@ -378,4 +422,6 @@ export type RuntimeMessage =
   | ClearTabMsg
   | PersistBindingsMsg
   | PinPlayingMediaMsg
+  | PlayingDownloadOptionsMsg
+  | RequestPlayingDownloadMsg
   | DiagReportMsg;

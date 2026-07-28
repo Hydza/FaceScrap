@@ -24,7 +24,7 @@ import {
   MIN_MEDIA_DIMENSION_PX,
   mediaItemWeight,
   mediaId,
-  mediaSourceFromPath,
+  mediaSourceFromLocation,
   mergeMedia,
   NUMERIC_MEDIA_ID_SOURCE,
   sanitizeIncomingItems,
@@ -66,6 +66,7 @@ import {
   type ContentScriptInstance,
 } from './content-instance';
 import { createFrameCoalescer } from './detection-frame';
+import { createDownloadOverlay, type DownloadOverlay } from './download-overlay';
 import { visibleMediaCandidate } from './visible-media';
 
 const contentBootstrap = globalThis as typeof globalThis & {
@@ -184,6 +185,15 @@ contentBootstrap.__facescrapContentInstance = contentInstance;
 // every chrome.* call and tear our timers/observers down once the context dies.
 let disposed = false;
 let poller: number | undefined;
+let overlayTimer: number | undefined;
+let downloadOverlay: DownloadOverlay | undefined;
+let lastOverlaySlideKey = '';
+// Slide changes drive their own refresh (see detectPlaying), so this poll only
+// has to catch what this process cannot see: the worker learning the video's
+// representations a beat AFTER the slide started. That lands right at the start
+// of a slide, which is also when the button is expected to already be there — so
+// the poll stays under a second rather than idling at the old 1.5s.
+const OVERLAY_REFRESH_MS = 750;
 let observer: MutationObserver | undefined;
 let mediaRetryTimer: number | undefined;
 let diagReportTimer: number | undefined;
@@ -261,6 +271,9 @@ function teardown(): void {
     /* extension context already invalidated */
   }
   if (poller !== undefined) clearInterval(poller);
+  if (overlayTimer !== undefined) clearInterval(overlayTimer);
+  downloadOverlay?.dispose();
+  downloadOverlay = undefined;
   if (mediaRetryTimer !== undefined) clearTimeout(mediaRetryTimer);
   if (diagReportTimer !== undefined) clearTimeout(diagReportTimer);
   if (scanTimer !== undefined) clearTimeout(scanTimer);
@@ -644,7 +657,7 @@ window.addEventListener(
 // its real-path-segment anchoring, not a bare substring match) can never drift
 // between the three call sites.
 function currentMediaSource(): MediaSource {
-  return mediaSourceFromPath(location.pathname);
+  return mediaSourceFromLocation(location.pathname, location.search);
 }
 
 // scanDom() re-walks the WHOLE document on every throttled pass (see the
@@ -789,6 +802,7 @@ const PLAYING_ACK_TIMEOUT_MS = 5_000;
 let lastPlayingDetectedAt = 0;
 let lastVisibleCaptureKey = '';
 let emptySince: number | undefined;
+let emptyOverlayChecked = false;
 
 async function deliverPlaying(message: NowPlayingMsg): Promise<AckedLatestOutcome> {
   if (disposed) return 'retry';
@@ -1102,10 +1116,23 @@ function detectPlaying(): void {
   // Debounce transient empties during slide transitions to avoid flicker.
   if (ids.length === 0 && !hasVideo) {
     const monotonicNow = performance.now();
-    if (emptySince === undefined) emptySince = monotonicNow;
+    if (emptySince === undefined) {
+      emptySince = monotonicNow;
+    } else if (!emptyOverlayChecked && monotonicNow - emptySince >= 300) {
+      // The 1200ms debounce below is for what the WORKER learns — mark, cover, the
+      // pin it keeps — and that has to tolerate a slide transition blinking empty.
+      // The in-page button does not: it is a local element, its own DOM check
+      // hides it without asking anyone, and making it sit out the full debounce is
+      // what leaves it on screen for a beat after a viewer closes. One tick of the
+      // 300ms poller is enough to tell a closed viewer from that blink, and the
+      // flag keeps this to one call per empty run rather than one per tick.
+      emptyOverlayChecked = true;
+      void downloadOverlay?.refresh({ mediaChanged: true });
+    }
     if (monotonicNow - emptySince < 1200) return;
   } else {
     emptySince = undefined;
+    emptyOverlayChecked = false;
   }
   // Prefer the reels feed's DOM data-video-id (accurate, per-reel) over location's
   // /reel/<id>, which lags the scroll; fall back to the URL on watch pages.
@@ -1113,7 +1140,17 @@ function detectPlaying(): void {
   const key = `${hasVideo ? 'v' : '-'}|${vid ?? ''}|${mark}|${ids.slice().sort().join(',')}`;
   const message = { type: 'NOW_PLAYING', ids, hasVideo, vid, covers, mark, detectedAt, documentToken } satisfies NowPlayingMsg;
   if (!playingDelivery.offer(key, message)) return;
-  void playingDelivery.pump(deliverPlaying);
+  // The slide identity, WITHOUT the id set: ids keep growing as more of the same
+  // video's representations get captured, and closing an open resolution menu on
+  // that would fight the user mid-pick. mark and vid move only on a real slide.
+  const slideKey = `${hasVideo ? 'v' : '-'}|${vid ?? ''}|${mark}`;
+  const mediaChanged = slideKey !== lastOverlaySlideKey;
+  lastOverlaySlideKey = slideKey;
+  // Refresh the in-page button only AFTER the new state lands: it asks the worker
+  // what is playing, and until this delivery commits the worker still holds the
+  // previous slide. Refreshing before it would offer the resolutions of the video
+  // that just left — and a click would download that one.
+  void playingDelivery.pump(deliverPlaying).then(() => downloadOverlay?.refresh({ mediaChanged }));
 }
 
 for (const evt of ['play', 'playing', 'pause', 'seeked', 'loadeddata'] as const) {
@@ -1157,6 +1194,21 @@ document.addEventListener(
 // the panel's anti-prefetch relay hold bite when it shouldn't. centreMedia is
 // one elementsFromPoint walk plus a <video> scan — cheap at this rate.
 poller = window.setInterval(detectPlaying, 300);
+
+// In-page download button. It carries no capture logic of its own: it asks the
+// worker what the playing media could be saved as and sends back a resolution
+// label, so no fbcdn URL ever reaches this process (see download-overlay.ts).
+// Refreshed on its own slower interval — the 300ms detection tick is far more
+// often than a resolution list can change, and each refresh is a round trip.
+downloadOverlay = createDownloadOverlay({
+  sendMessage: (message) => chrome.runtime.sendMessage(message),
+  isAlive: () => !disposed && alive(),
+  onError: () => diagBump('overlayQueryFailed'),
+});
+void downloadOverlay.refresh();
+overlayTimer = window.setInterval(() => {
+  void downloadOverlay?.refresh();
+}, OVERLAY_REFRESH_MS);
 
 // Returning to the tab fires no media event (the video is already loaded) and the 1s
 // poller is throttled while the tab is hidden, so force a fresh emit (clear the
