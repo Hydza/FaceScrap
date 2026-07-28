@@ -135,6 +135,10 @@ function children(bytes: Uint8Array, from: number, to: number): BoxHeader[] {
     const type = fourcc(bytes, at + 4);
     let bodyStart = at + 8;
     if (size === 1) {
+      // The loop guard only proved 8 bytes remain. A truncated box that declares
+      // an extended size without carrying one would read past the buffer and throw
+      // a RangeError instead of stopping — topLevelBoxes guards this the same way.
+      if (at + 16 > to) break;
       const hi = view.getUint32(at + 8);
       const lo = view.getUint32(at + 12);
       size = hi * 2 ** 32 + lo;
@@ -196,6 +200,17 @@ function boundedEntries(declared: number, availableBytes: number, entryBytes: nu
   return Math.min(declared, fits);
 }
 
+/** How many more samples this track may take. Shared by both readers: the
+ *  progressive tables and the fragmented `trun` loop are fed by the same
+ *  attacker-influenced count fields and need the same ceiling. Throws rather than
+ *  truncating — a silently short sample table writes a file that does not play. */
+function sampleRoom(have: number): number {
+  if (have > MAX_SAMPLES_PER_TRACK) {
+    throw new Error(`This track declares more than ${MAX_SAMPLES_PER_TRACK} samples; refusing to expand it.`);
+  }
+  return MAX_SAMPLES_PER_TRACK - have;
+}
+
 /** Expand stsc/stsz/stco/stts/ctts/stss into one flat sample list. */
 function readSampleTable(moov: Uint8Array, stbl: BoxHeader): Mp4Sample[] {
   const boxes = children(moov, stbl.bodyStart, stbl.end);
@@ -212,12 +227,7 @@ function readSampleTable(moov: Uint8Array, stbl: BoxHeader): Mp4Sample[] {
 
   /** Every expansion below grows one of these arrays; one shared budget bounds the
    *  lot, so a table cannot be made enormous by any single field. */
-  const room = (have: number): number => {
-    if (have > MAX_SAMPLES_PER_TRACK) {
-      throw new Error(`This track declares more than ${MAX_SAMPLES_PER_TRACK} samples; refusing to expand it.`);
-    }
-    return MAX_SAMPLES_PER_TRACK - have;
-  };
+  const room = sampleRoom;
 
   // stts: run-length encoded durations.
   const stts = new Cursor(moov.subarray(sttsBox.bodyStart, sttsBox.end));
@@ -252,7 +262,9 @@ function readSampleTable(moov: Uint8Array, stbl: BoxHeader): Mp4Sample[] {
     if (fieldSize !== 4 && fieldSize !== 8 && fieldSize !== 16) {
       throw new Error(`Unsupported stz2 field size ${fieldSize}.`);
     }
-    const bits = stszBox.end - stszBox.bodyStart - 8;
+    // 12, not 8: version+flags (4) + reserved (3) + field_size (1) + sample_count (4),
+    // same header arithmetic the stsz branch above uses.
+    const bits = stszBox.end - stszBox.bodyStart - 12;
     const count = boundedEntries(c.u32(), bits, fieldSize / 8);
     for (let i = 0; i < count; i++) {
       if (fieldSize === 16) sizes.push(c.u16());
@@ -388,7 +400,11 @@ async function readFragmentedSamples(
         const trun = new Cursor(bytes.subarray(trunBox.bodyStart, trunBox.end));
         const version = trun.u8();
         const flags = (trun.u8() << 16) | (trun.u8() << 8) | trun.u8();
-        const count = trun.u32();
+        // Bounded like every table in the progressive reader, and for the same
+        // reason: this count comes off the wire. A trun whose flags request no
+        // per-sample fields reads ZERO bytes per iteration, so a declared count of
+        // four billion is a hang in a box small enough to arrive in one packet.
+        const count = Math.min(trun.u32(), sampleRoom(samples.length));
         // data_offset is relative to baseOffset, and signed.
         let at = baseOffset + (flags & 0x000001 ? trun.i32() : 0);
         const firstFlags = flags & 0x000004 ? trun.u32() : undefined;

@@ -5,6 +5,7 @@
 
 import { sanitizeDiagCounters, setDiagEnabled, type DiagReason } from '../shared/diag';
 import {
+  DIAG_EVENT_MAX,
   diagLog,
   diagLogDrain,
   sanitizeDiagEvents,
@@ -138,7 +139,13 @@ export function setupDiagChannel(runtime: ContentRuntime): DiagChannel {
       // Sanitized HERE as well as in the worker: this is the boundary with the
       // page's own process, and the queue below must be bounded by shape before
       // it is bounded by count.
-      const cleanEvents = sanitizeDiagEvents(events, DIAG_EVENT_QUEUE_MAX);
+      //
+      // The cap passed here is the HOOK's ring size, not this queue's: the hook can
+      // legitimately hand over its whole ring plus an overflow marker in one flush,
+      // and sanitizeDiagEvents truncates silently. Cutting to the queue's smaller
+      // cap here would drop the tail BEFORE the loop below could count it, and the
+      // report would then say zero events were lost while up to a hundred were.
+      const cleanEvents = sanitizeDiagEvents(events, DIAG_EVENT_MAX + 1);
       if (Object.keys(clean).length === 0 && cleanEvents.length === 0) return;
       if (Object.keys(clean).length > 0) reports.add(clean);
       for (const event of cleanEvents) {

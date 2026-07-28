@@ -657,6 +657,9 @@ export function resolutionOf(item: Pick<MediaItem, 'url' | 'height' | 'width'>):
   // both Facebook's own picker and the "1080p" everyone means by the word name the short
   // one. Labelling by height put "1920p" next to a sibling rung whose label came from the
   // encode tag as "720p", so one menu ranked its options on two different scales.
+  // With only a height there is nothing to take the minimum OF, so it stays in
+  // charge — a label from one known edge beats no label at all, and the ladder is
+  // consistent as soon as the second edge is learned.
   const short =
     item.width != null && item.width > 0 && item.height != null && item.height > 0
       ? Math.min(item.width, item.height)
@@ -782,12 +785,16 @@ export function mediaItemWeight(value: unknown): number {
   return weight;
 }
 
+/** Per element, like normalizeStoryIds beside it: one malformed entry drops itself,
+ *  not the whole list. All-or-nothing let a single oversized id from the page cost
+ *  an item every track key the now-playing filter matches on. */
 function normalizeTrackIds(raw: unknown): string[] {
   if (!Array.isArray(raw)) return [];
-  const prefix = raw.slice(0, MAX_TRACK_IDS);
-  return prefix.every((track) => typeof track === 'string' && track.length <= 512)
-    ? prefix as string[]
-    : [];
+  const out: string[] = [];
+  for (const track of raw.slice(0, MAX_TRACK_IDS)) {
+    if (typeof track === 'string' && track.length <= 512) out.push(track);
+  }
+  return out;
 }
 
 function normalizeStoryIds(raw: unknown): string[] {

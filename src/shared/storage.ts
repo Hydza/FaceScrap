@@ -561,17 +561,22 @@ export function addMedia(tabId: number, items: MediaItem[]): Promise<number> {
         if (changed && merged.length > maxItemsCache) {
           const { ordinary, reserved } = await partitionMediaForRetention(tabId, merged);
           merged.splice(0, merged.length, ...ordinary, ...reserved);
-          // Oldest-first, and insertion order is not viewing order — a capture the user
-          // actually watched would vanish here without the partition above. The counter
-          // still records how much unrelated evidence was shed.
-          //
           // Spend the hysteresis margin only when `stored` (the durable count BEFORE
           // this batch) was already at or over the cap; see MAX_ITEMS_HYSTERESIS.
           const hysteresis =
             stored.length >= maxItemsCache ? Math.min(MAX_ITEMS_HYSTERESIS, Math.floor(maxItemsCache / 10)) : 0;
           const target = maxItemsCache - hysteresis;
-          diagBump('storageMaxItemsEvicted', merged.length - target);
-          merged.splice(0, merged.length - target);
+          // Oldest first, but never past the reserved tail: the splice cuts from the
+          // FRONT, and `ordinary` is all that sits there. Reserved rows are what the
+          // user is watching or what a confirmed Story pinned; a small enough maxItems
+          // would otherwise let the cut run straight through them into the very item
+          // the partition exists to protect. reclaimGlobalMediaQuota, the other
+          // eviction path in this file, already refuses to touch them.
+          const evict = Math.min(merged.length - target, ordinary.length);
+          if (evict > 0) {
+            diagBump('storageMaxItemsEvicted', evict);
+            merged.splice(0, evict);
+          }
         }
         // Default the badge count to what is ALREADY stored: a failed set() is an
         // atomic no-op, so a rejected write cannot make the badge claim an empty

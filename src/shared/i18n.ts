@@ -533,7 +533,7 @@ const MESSAGES: Record<Lang, Record<MsgKey, string>> = {
     nowEmptyTitle: 'Nada reproduciéndose aún',
     nowEmptyBody:
       'Ve a un reel, historia o destacada en esta pestaña. Aparecerá aquí en cuanto empiece.',
-    nowEmptyPromise: 'no se descarga nada hasta que le das a reproducir',
+    nowEmptyPromise: 'no se pide nada a la red hasta que le das a reproducir',
     nowEmptyToLibrary: 'Ver lo capturado en esta pestaña',
     videoQuality: 'Resolución',
     piecesInPost: '{n} piezas',
@@ -589,7 +589,7 @@ const MESSAGES: Record<Lang, Record<MsgKey, string>> = {
     titleBlobUnavailable: 'Este medio es un blob: de MSE y no puede guardarse.',
     titleSavedGone: 'Ya descargado. La captura ya no está: reprodúcelo en esta pestaña para reactivar la descarga.',
     bannerDegraded:
-      'Este navegador no puede unir audio y video: los HD se descargan solo con imagen. Usa Chrome o Edge para incluir el audio.',
+      'Este navegador no puede unir audio y video: los HD se descargan sin audio. Usa Chrome o Edge para incluirlo.',
     settings: 'Ajustes',
     settingsAutosave: 'se guarda solo',
     settingsSearch: 'Buscar en ajustes',
