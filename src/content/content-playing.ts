@@ -14,6 +14,7 @@ import {
   isFbcdn,
   isNumericMediaId,
   isStaticFbAsset,
+  MAX_MEDIA_URL_LEN,
   mediaId,
   NUMERIC_MEDIA_ID_SOURCE,
   type MediaItem,
@@ -243,6 +244,15 @@ export function setupPlayingDetection(
     // `overCover`: adopted DESPITE a cover hit-tested at the centre, so that cover
     // belongs to a placeholder, not to what is playing. The panel learns groupCover from
     // covers[0], so the adopted video's own poster has to lead.
+    // Every other edge that reaches mediaId() bounds its URL first — the page-message
+    // sanitizer, the network classifier, visible-media, the playing handler and storage.
+    // These three read straight from the page's own DOM, which is the one source that
+    // never passed one of those gates. 8192 is ~10x the longest real fbcdn URL, so this
+    // rejects nothing Facebook serves; what it rejects is a nested proxy chain built to
+    // make genericEndpointId's recursive parse walk it layer by layer.
+    const identify = (url: string): string | undefined =>
+      url.length <= MAX_MEDIA_URL_LEN ? mediaId(url) : undefined;
+
     const adoptVideo = (el: HTMLVideoElement, overCover = false): void => {
       hasVideo = true;
       videoEl = el;
@@ -256,9 +266,13 @@ export function setupPlayingDetection(
           coverSharesVideoCard(el, coverEl, (ancestor, node) => (ancestor as Element).contains(node as Node)),
         );
       }
-      if (src && !src.startsWith('blob:') && isFbcdn(src)) ids.add(mediaId(src));
+      if (src && !src.startsWith('blob:') && isFbcdn(src)) {
+        const id = identify(src);
+        if (id != null) ids.add(id);
+      }
       if (el.poster && isFbcdn(el.poster)) {
-        ids.add(mediaId(el.poster));
+        const id = identify(el.poster);
+        if (id != null) ids.add(id);
         if (overCover) covers.unshift(el.poster);
         else covers.push(el.poster);
       }
@@ -288,8 +302,8 @@ export function setupPlayingDetection(
         const r = el.getBoundingClientRect();
         if (r.width >= 160 && r.height >= 160) {
           const url = fbcdnCoverUrl(el);
-          if (url) {
-            const id = mediaId(url);
+          const id = url == null ? undefined : identify(url);
+          if (url && id != null) {
             ids.add(id);
             coverIds.add(id);
             covers.push(url);
