@@ -241,7 +241,10 @@ const contentScriptRecovery = createContentScriptRecoveryCoordinator({
       world: 'MAIN',
     });
   },
-  onError: (tabId, error) => console.warn(`[FaceScrap] content recovery failed for tab ${tabId}`, error),
+  // diagError, not console.warn: a sweep that half-failed is only ever diagnosed later,
+  // from a tab that captures nothing, and the console of a worker that has since been
+  // reaped is gone. This writes live AND into the exported trace.
+  onError: (tabId, error) => diagError('content recovery failed', error, { tab: tabId }),
 });
 
 // Chrome treats an unpacked reload as an update, and public updates invalidate

@@ -2398,7 +2398,13 @@ async function captureOpenResolutionList(page, { surface, filename }) {
           spansTheTrigger: Math.abs(listRect.width - triggerRect.width) <= 1,
           floatsAboveTheFrame: Number(style.zIndex) >= 30,
           blursWhatIsBehindIt: /blur/.test(style.backdropFilter || style.webkitBackdropFilter || ''),
-          edgeLightSpins: edge.animationName === 'edgespin',
+          // The one continuous animation in the panel — and the stylesheet turns it OFF
+          // under prefers-reduced-motion, which a machine with Windows animations
+          // disabled reports. Asserting 'edgespin' unconditionally made this gate fail on
+          // an accessibility setting rather than on a defect, so check what the sheet
+          // actually promises for the environment the run is in.
+          edgeLightSpins:
+            edge.animationName === (matchMedia('(prefers-reduced-motion: reduce)').matches ? 'none' : 'edgespin'),
           everyRowIsAnOption: rows.length >= 2 && rows.every((row) => row.getAttribute('role') === 'option'),
           exactlyOneSelected: selected.length === 1,
           selectedRowMatchesTrigger:

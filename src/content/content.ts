@@ -39,9 +39,9 @@ const startContentInstance = shouldStartContentInstance(
 // Nothing above runs at import time: the modules export setup functions precisely so
 // this order — not module resolution order — is what decides it.
 
-if (!startContentInstance) {
-  // Another live instance already owns this document — nothing left for this pass to do.
-} else {
+// Skipped outright when another live instance already owns this document: with the hook
+// bootstrap gone from this file, a second pass has nothing else left to do.
+if (startContentInstance) {
   const runtime = createContentRuntime((instance) => {
     contentBootstrap.__facescrapContentInstance = instance;
   });

@@ -7,6 +7,8 @@ function harness(liveTabs: ReadonlySet<number>, hookedTabs: ReadonlySet<number> 
   const pings: number[] = [];
   const injections: Array<{ tabId: number; file: string }> = [];
   const hooks: number[] = [];
+  /** Both installs in one list, so their relative order is observable. */
+  const order: string[] = [];
   const coordinator = createContentScriptRecoveryCoordinator({
     queryFacebookTabs: async () => [
       { id: 41, url: 'https://www.facebook.com/stories/example/1' },
@@ -18,13 +20,15 @@ function harness(liveTabs: ReadonlySet<number>, hookedTabs: ReadonlySet<number> 
     },
     inject: async (tabId, file) => {
       injections.push({ tabId, file });
+      order.push(file);
     },
     hasPageHook: async (tabId) => ({ hooked: hookedTabs.has(tabId) }),
     installPageHook: async (tabId) => {
       hooks.push(tabId);
+      order.push('page-hook.js');
     },
   });
-  return { coordinator, hooks, injections, pings };
+  return { coordinator, hooks, injections, order, pings };
 }
 
 test('extension restart recovers already-open Facebook tabs whose content receiver is missing', async () => {
@@ -68,25 +72,15 @@ test('only a document with no live hook gets one', async () => {
 });
 
 test('the hook goes in after the detector, never before it', async () => {
-  const order: string[] = [];
-  const coordinator = createContentScriptRecoveryCoordinator({
-    queryFacebookTabs: async () => [{ id: 41, url: 'https://www.facebook.com/reel/1' }],
-    ping: async () => false,
-    inject: async (_tabId, file) => {
-      order.push(file);
-    },
-    hasPageHook: async () => ({ hooked: false }),
-    installPageHook: async () => {
-      order.push('page-hook.js');
-    },
-  });
+  const { coordinator, order } = harness(new Set());
 
   await coordinator.recover();
 
   // The detector registers its window-message listener as it evaluates; the hook posts
   // its one startup query — never retried — the moment it loads. Reversed, that query
-  // lands with nobody listening and the hook never learns the diagnostics flag.
-  assert.deepEqual(order, ['content.js', 'page-hook.js']);
+  // lands with nobody listening and the hook never learns the diagnostics flag. Both tabs
+  // are hookless here, so the pairing has to hold twice over.
+  assert.deepEqual(order, ['content.js', 'page-hook.js', 'content.js', 'page-hook.js']);
 });
 
 test('a failing ping or inject on one tab never blocks recovery of the others', async () => {

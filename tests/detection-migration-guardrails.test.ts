@@ -81,7 +81,7 @@ test('the packaged update-recovery path pings before scripting injection', () =>
   assert.match(content, /__facescrapForceContentRecovery/);
   assert.match(content, /shouldStartContentInstance\(\s*existingContentInstance,\s*forceContentRecovery/);
   assert.match(contentRuntime, /instance\.active && Boolean\(chromeRuntime\?\.id\)/);
-  assert.match(content, /if \(!startContentInstance\)/);
+  assert.match(content, /if \(startContentInstance\)/);
   assert.match(contentRuntime, /removeListener\(handlePing\)/);
   assert.ok(instanceClaim >= 0 && instanceClaim < pingListenerRegistration);
   // One flag is all content-recovery.js hands over now: replace the detector this update
@@ -94,9 +94,9 @@ test('the packaged update-recovery path pings before scripting injection', () =>
   // refuses top-level await in an iife bundle, so nothing can await it. What puts the
   // detector ahead of the hook the worker injects next is the import being INLINED into
   // the same bundle, which drains as a microtask before the next injection arrives. Code
-  // splitting would emit a real chunk and a real network round trip in its place.
+  // splitting would emit a real chunk and a real network round trip in its place — and
+  // esbuild only offers splitting for the esm format, so this one assertion covers both.
   assert.match(build, /format: 'iife'/);
-  assert.doesNotMatch(build, /splitting/);
 });
 
 test('a transient tabs.get failure does not freeze the panel on the previous tab', () => {

@@ -54,12 +54,14 @@ import { HOOK_ALIVE_ATTR } from '../shared/hook-attr';
 // thing this world shares with the ISOLATED-world content scripts — can answer "is a hook
 // alive" synchronously, with no listener race.
 //
-// The stamp is the ONLY statement outside the install block at the bottom, because the
-// stamp IS the test. Everything that outlives an evaluation — a window listener, a
-// wrapper on the page's fetch, a patched history method — installs inside that block, so
-// a redundant run reads one attribute and leaves the document exactly as it found it.
+// Reading the stamp is the ONLY page contact outside the install block at the bottom,
+// because the stamp IS the test. Everything that outlives an evaluation — a window
+// listener, a wrapper on the page's fetch, a patched history method — installs inside
+// that block, so a redundant run reads one attribute and leaves the document exactly as
+// it found it. WRITING the stamp lives in that block too, next to what it attests: set
+// here, anything that threw in between would leave a document marked as hooked with no
+// hook in it, and the worker's probe would believe that mark forever.
 const alreadyHooked = document.documentElement.hasAttribute(HOOK_ALIVE_ATTR);
-if (!alreadyHooked) document.documentElement.setAttribute(HOOK_ALIVE_ATTR, '1');
 
 // --- Diagnostics control channel (see diag.ts) ---
 // This world has no chrome.*, so the flag has to be handed over by the content
@@ -696,6 +698,10 @@ const hookedOpen = function (this: XMLHttpRequest, _method: string, url: string 
 // change how the id is resolved: reelVideoId (data-video-id) still outranks the URL,
 // which lags the scroll. It only makes the content script look sooner.
 if (!alreadyHooked) {
+  // First, so the rest of this block cannot run twice in one document even if a later
+  // statement here throws. setAttribute and not a plain flag: the ISOLATED world and the
+  // worker's probe read this same DOM, and nothing else crosses that boundary.
+  document.documentElement.setAttribute(HOOK_ALIVE_ATTR, '1');
   setDiagContext('hook');
   window.addEventListener('message', onDiagControl);
   window.postMessage({ __vpCtl: true, query: true }, '*');

@@ -7,21 +7,18 @@
 // decided here any more — the worker reads page-hook.ts's own <html> stamp and injects
 // one only where it is missing (background/content-script-recovery.ts).
 
-// Keeps this file a MODULE now that nothing is imported statically. Without it a
-// file whose only import is dynamic has no top-level import/export, so TypeScript
-// treats it as a global script and `recoveryBootstrap` leaks into the ambient scope
-// of every other file in src/. The import below stays DYNAMIC on purpose: a static
-// one hoists and would run content.ts before the flag below is set.
-//
-// It also FLOATS, and cannot not: esbuild rejects top-level await in an iife bundle. So
-// this file's evaluation — and with it the worker's executeScript promise — finishes
-// before the detector exists, and only the import being inlined (no code splitting) puts
-// the detector on a microtask that runs first. background/content-script-recovery.ts says
-// what that ordering is worth and what it costs when it slips.
+// Keeps this file a MODULE now that nothing is imported statically: isolatedModules
+// rejects a file whose only import is dynamic, because it has no top-level import or
+// export to mark it as one.
 export {};
 
-const recoveryBootstrap = globalThis as typeof globalThis & {
-  __facescrapForceContentRecovery?: boolean;
-};
-recoveryBootstrap.__facescrapForceContentRecovery = true;
+// The import stays DYNAMIC on purpose — a static one hoists and would run content.ts
+// before this flag is set. It also FLOATS, and cannot not: esbuild rejects top-level
+// await in an iife bundle. So this file's evaluation — and with it the worker's
+// executeScript promise — finishes before the detector exists, and only the import being
+// inlined (no code splitting) puts the detector on a microtask that runs first.
+// background/content-script-recovery.ts says what that ordering is worth and what it
+// costs when it slips.
+(globalThis as typeof globalThis & { __facescrapForceContentRecovery?: boolean }).__facescrapForceContentRecovery =
+  true;
 void import('./content');

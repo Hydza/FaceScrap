@@ -1,15 +1,12 @@
-import { diagError } from '../shared/diag-log';
-
 interface RecoverableFacebookTab {
   id?: number;
   url?: string;
 }
 
-/** What one probe answered, and WHICH document answered it — the identity every later
- *  step is pinned to. */
+/** What one probe answered, and WHICH document answered it. A probe that ran always
+ *  reports its document; the absent case is the caller's own failure value below. */
 interface PageHookProbe {
   hooked: boolean;
-  /** Absent only when the probe itself could not run. */
   documentId?: string;
 }
 
@@ -21,6 +18,8 @@ interface ContentScriptRecoveryDependencies {
   /** Is a MAIN-world hook already alive in this document? */
   hasPageHook(tabId: number, documentId: string | undefined): Promise<PageHookProbe>;
   installPageHook(tabId: number, documentId: string | undefined): Promise<void>;
+  /** Every per-tab failure, detector or hook. The composition root picks the channel —
+   *  this module deliberately reaches no logger of its own. */
   onError?(tabId: number, error: unknown): void;
 }
 
@@ -43,13 +42,17 @@ interface ContentScriptRecoveryResult {
  * meant a <script src="chrome-extension://…"> in facebook.com's DOM; the page could see
  * that node and fetch the hook's source from it.
  *
- * Every step after the first targets a DOCUMENT, never frame 0 again. inject → probe →
- * install is three IPC round trips, and frame 0 follows the FRAME across a navigation
- * inside that window. Pinning buys two things: a document that has gone makes the
- * injection reject rather than land somewhere else (the fail-closed answer the old
- * <script>.onerror gave), and a tab that navigated to fbcdn.net mid-sequence — a host
- * this extension holds permission for, with no declarative entry of its own — does not
- * get the hook evaluated in a media document's MAIN world.
+ * Once a step has named a document, every step after it is pinned to that document
+ * rather than to frame 0, which follows the FRAME across a navigation. So an install
+ * aimed at a document that has since gone REJECTS instead of landing somewhere else —
+ * the fail-closed answer the old <script>.onerror gave.
+ *
+ * The pin only covers the span it can see. Where the ping answered there was no
+ * injection to name a document, so the probe itself opens on frame 0 and a tab that
+ * navigates before it lands is answered for by whatever document is there — including
+ * an fbcdn.net one, a host this extension holds permission for and which carries no
+ * declarative entry of its own. Resolving the document once per tab up front would
+ * close that too; it is not closed today.
  */
 export function createContentScriptRecoveryCoordinator(
   dependencies: ContentScriptRecoveryDependencies,
@@ -58,11 +61,15 @@ export function createContentScriptRecoveryCoordinator(
    * Give one document a hook, and only where none is alive. Never rejects: the sweep
    * below runs it per tab and must not stop at the first unreachable one.
    *
-   * "Only where none is alive" is an optimisation now, not a correctness rule:
-   * page-hook.js installs nothing at all once its own <html> stamp is there
-   * (tests/page-hook-idempotent.test.ts), so a redundant injection costs a round trip
-   * rather than another wrapper on the page's fetch and another set of window listeners
-   * that never come off.
+   * The probe never saves a round trip — it IS one, and a redundant install would have
+   * cost the same. What it buys is the document id on the path where the ping answered
+   * and nothing else named one, plus the parse of the hook bundle on a tab that already
+   * carries it. It is no longer a correctness rule: page-hook.js installs nothing at all
+   * once its own <html> stamp is there (tests/page-hook-idempotent.test.ts), so being
+   * wrong here costs a wasted injection rather than a second wrapper on the page's fetch
+   * and a second set of window listeners that never come off. That stamp lives in the
+   * page's DOM and the page may delete it, which is exactly why the answer is allowed to
+   * be wrong.
    */
   async function ensurePageHook(tabId: number, documentId?: string): Promise<void> {
     // Its own catch, answering "no hook": a probe that could not run has told us nothing,
@@ -78,12 +85,15 @@ export function createContentScriptRecoveryCoordinator(
     }
     if (probe.hooked) return;
     try {
+      // The probe's document when it ran, the injected one otherwise: the catch above
+      // synthesises no id, and falling back keeps a failed probe pinned rather than
+      // reopening on frame 0.
       await dependencies.installPageHook(tabId, probe.documentId ?? documentId);
     } catch (error) {
-      // Not onError: that is a console.warn, and this failure is only ever read long
-      // afterwards, from a tab that captures nothing. diagError writes both — live, and
-      // into the exported trace.
-      diagError('page hook install failed', error, { tab: tabId });
+      // Reported like any other per-tab failure. This one is read long afterwards, from a
+      // tab that captures nothing, so the worker points onError at the trace rather than
+      // at the console alone.
+      dependencies.onError?.(tabId, error);
     }
   }
 
