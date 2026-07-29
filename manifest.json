@@ -51,13 +51,6 @@
       "run_at": "document_start"
     }
   ],
-  "web_accessible_resources": [
-    {
-      "resources": ["page-hook.js"],
-      "matches": ["*://*.facebook.com/*"],
-      "use_dynamic_url": true
-    }
-  ],
   "declarative_net_request": {
     "rule_resources": [
       {

@@ -38,15 +38,6 @@ export function shouldStartContentInstance(
   }
 }
 
-/**
- * Decide whether this content-script pass must install the MAIN-world page hook.
- * Deliberately independent of shouldStartContentInstance: a pass that reuses a
- * live detector — e.g. a fresh navigation whose document_start injection raced an
- * update-recovery injection into the same world — has its detector body skipped,
- * yet the freshly navigated document owns no hook. Gating injection on a
- * per-document marker instead of the instance-start decision keeps that page load
- * from silently losing every GraphQL-origin capture.
- */
-export function shouldInjectPageHook(skipRequested: boolean, alreadyInjected: boolean): boolean {
-  return !skipRequested && !alreadyInjected;
-}
+// Gone from here: shouldInjectPageHook. The content script no longer installs the
+// MAIN-world hook, so there is no per-pass decision left to make — the worker asks the
+// document itself whether one is alive (background/content-script-recovery.ts).

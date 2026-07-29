@@ -3,9 +3,10 @@ import test from 'node:test';
 
 import { createContentScriptRecoveryCoordinator } from '../src/background/content-script-recovery';
 
-function harness(liveTabs: ReadonlySet<number>) {
+function harness(liveTabs: ReadonlySet<number>, hookedTabs: ReadonlySet<number> = new Set()) {
   const pings: number[] = [];
   const injections: Array<{ tabId: number; file: string }> = [];
+  const hooks: number[] = [];
   const coordinator = createContentScriptRecoveryCoordinator({
     queryFacebookTabs: async () => [
       { id: 41, url: 'https://www.facebook.com/stories/example/1' },
@@ -18,8 +19,12 @@ function harness(liveTabs: ReadonlySet<number>) {
     inject: async (tabId, file) => {
       injections.push({ tabId, file });
     },
+    hasPageHook: async (tabId) => ({ hooked: hookedTabs.has(tabId) }),
+    installPageHook: async (tabId) => {
+      hooks.push(tabId);
+    },
   });
-  return { coordinator, injections, pings };
+  return { coordinator, hooks, injections, pings };
 }
 
 test('extension restart recovers already-open Facebook tabs whose content receiver is missing', async () => {
@@ -39,7 +44,7 @@ test('extension restart never reinjects a content script when the tab already ha
   assert.deepEqual(injections, []);
 });
 
-test('update recovery can select the detector entry that preserves the existing page hook', async () => {
+test('update recovery can select the detector entry that replaces an invalidated instance', async () => {
   const { coordinator, injections } = harness(new Set());
 
   await coordinator.recover('content-recovery.js');
@@ -48,6 +53,40 @@ test('update recovery can select the detector entry that preserves the existing 
     { tabId: 41, file: 'content-recovery.js' },
     { tabId: 42, file: 'content-recovery.js' },
   ]);
+});
+
+test('only a document with no live hook gets one', async () => {
+  // 41 lost its hook (its tab loaded while the extension was switched off); 42's is a
+  // MAIN-world hook that outlived the update, since it is plain page JS. Injecting there
+  // again would install nothing on top of it — page-hook.js stops at its own stamp, which
+  // tests/page-hook-idempotent.test.ts exercises — so what this pins is the trip not taken.
+  const { coordinator, hooks } = harness(new Set(), new Set([42]));
+
+  await coordinator.recover('content-recovery.js');
+
+  assert.deepEqual(hooks, [41]);
+});
+
+test('the hook goes in after the detector, never before it', async () => {
+  const order: string[] = [];
+  const coordinator = createContentScriptRecoveryCoordinator({
+    queryFacebookTabs: async () => [{ id: 41, url: 'https://www.facebook.com/reel/1' }],
+    ping: async () => false,
+    inject: async (_tabId, file) => {
+      order.push(file);
+    },
+    hasPageHook: async () => ({ hooked: false }),
+    installPageHook: async () => {
+      order.push('page-hook.js');
+    },
+  });
+
+  await coordinator.recover();
+
+  // The detector registers its window-message listener as it evaluates; the hook posts
+  // its one startup query — never retried — the moment it loads. Reversed, that query
+  // lands with nobody listening and the hook never learns the diagnostics flag.
+  assert.deepEqual(order, ['content.js', 'page-hook.js']);
 });
 
 test('a failing ping or inject on one tab never blocks recovery of the others', async () => {
@@ -65,6 +104,8 @@ test('a failing ping or inject on one tab never blocks recovery of the others', 
     inject: async (tabId) => {
       injected.push(tabId);
     },
+    hasPageHook: async () => ({ hooked: true }),
+    installPageHook: async () => {},
     onError: (tabId, error) => {
       errors.push({ tabId, message: (error as Error).message });
     },

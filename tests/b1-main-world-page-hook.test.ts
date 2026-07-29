@@ -10,11 +10,10 @@
 // content_scripts entry in manifest.json: Chrome guarantees a document_start
 // content script (in any world) runs before any other DOM is constructed or
 // any other script runs, so this installs before the page ever gets a chance
-// to fetch anything. content.ts's old unconditional runtime injection becomes
-// a fallback, gated on document.readyState, for the one case the declarative
-// entry cannot reach: an already-open tab the background force-recovers into
-// (content-recovery.ts), whose document already finished loading before the
-// background ever reached for it.
+// to fetch anything. The one case it cannot reach — an already-open tab whose
+// document finished loading before the worker ever reached for it — is covered
+// by the worker's own chrome.scripting injection (content-script-recovery.ts).
+// tests/page-hook-injection.test.ts drives that path end to end.
 //
 // manifest.json is real JSON and is exercised directly here. content.ts /
 // content-recovery.ts require a live document/chrome content-script
@@ -23,7 +22,7 @@
 // tests/detection-migration-guardrails.test.ts — the checks on them assert on
 // the source text instead of executing it.
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import test from 'node:test';
 
@@ -88,21 +87,34 @@ test('manifest.json registers page-hook.js as a declarative MAIN-world, document
   );
 });
 
-test('page-hook.js stays web-accessible for the runtime fallback content.ts still needs', () => {
-  const resource = manifest.web_accessible_resources?.find((entry) => entry.resources?.includes('page-hook.js'));
-  assert.ok(
-    resource,
-    "content.ts's ensurePageHook() runtime fallback (still the only way to reach an already-open tab the " +
-      'declarative entry cannot touch) loads page-hook.js via chrome.runtime.getURL() + a <script> element — ' +
-      'removing this entry would make that fetch fail',
+test('page-hook.js is NOT web-accessible, and nothing builds a URL for it', () => {
+  // The whole KEY, not a search for this one filename: `resources` accepts globs, so
+  // an entry of ["*.js"] would expose page-hook.js again and still not contain its name.
+  assert.equal(
+    manifest.web_accessible_resources,
+    undefined,
+    'nothing may be web-accessible. That key had exactly one caller: a content-script ' +
+      'fallback appending <script src="chrome-extension://…/page-hook.js"> to facebook.com. Any page ' +
+      'script watching <head> sees that node, and the URL it carries is one the page may then fetch. ' +
+      'The worker injects with chrome.scripting instead, which reads the file from the package and ' +
+      'needs no web-accessible resource. This does NOT make the hook unattributable — the page still ' +
+      'sees a non-native window.fetch, the __vp* postMessage traffic and the <html> stamp; it removes ' +
+      'an extension-origin URL and a node of ours from the page, which is what this entry cost.',
   );
-  assert.ok(resource?.matches?.includes('*://*.facebook.com/*'));
+  // Every content module, not a hand-kept pair: the directory is split often.
+  for (const file of readdirSync(join(ROOT, 'src', 'content')).filter((name) => name.endsWith('.ts'))) {
+    assert.doesNotMatch(
+      readFileSync(join(ROOT, 'src', 'content', file), 'utf8'),
+      /getURL\(\s*['"]page-hook\.js['"]\s*\)/,
+      `${file} must never turn page-hook.js into a URL — the URL is what reaches the page`,
+    );
+  }
 });
 
-// Two tests are gone from here: they asserted the STATEMENT ORDER inside
-// content.ts's ensurePageHook() and inside its query-message handler (this index
+// Two tests are gone from here: they asserted the STATEMENT ORDER inside the
+// ensurePageHook() content.ts used to carry, and inside its query-message handler (this index
 // must be greater than that one). What they were guarding — no second hook
 // double-patching fetch/XHR — is real, but the check was source ordering, which
-// breaks on any reshuffle of correct code. The live guards are the DOM marker the
-// hook stamps and the injection flag; a double patch shows up immediately in a
-// real tab as duplicated captures.
+// breaks on any reshuffle of correct code. The live guard is the DOM marker the hook
+// stamps, and tests/page-hook-idempotent.test.ts exercises it the only way that proves
+// anything: by evaluating the real bundle over one document more than once.

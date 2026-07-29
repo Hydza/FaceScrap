@@ -19,8 +19,6 @@ interface PageHookDeps {
   announceDiag: () => void;
   /** An SPA navigation: re-detect now instead of waiting for a poller tick. */
   onNavigation: () => void;
-  /** page-hook.ts having posted at all proves it already ran in this document. */
-  onHookProven: () => void;
 }
 
 export function setupPageHookIngress(runtime: ContentRuntime, deps: PageHookDeps): void {
@@ -35,7 +33,6 @@ export function setupPageHookIngress(runtime: ContentRuntime, deps: PageHookDeps
       // Only `query` is honoured: `diag` on this channel is the hook reading its own
       // announcement back, not a request.
       if (data && data.__vpCtl === true && data.query === true) {
-        deps.onHookProven();
         deps.announceDiag();
         return;
       }

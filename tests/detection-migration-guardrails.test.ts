@@ -84,13 +84,19 @@ test('the packaged update-recovery path pings before scripting injection', () =>
   assert.match(content, /if \(!startContentInstance\)/);
   assert.match(contentRuntime, /removeListener\(handlePing\)/);
   assert.ok(instanceClaim >= 0 && instanceClaim < pingListenerRegistration);
-  // The recovery skip flag still gates page-hook injection (no second fetch/XHR
-  // wrap after an update), now via the instance-independent ensurePageHook path.
-  assert.match(content, /ensurePageHook\(\);/);
-  assert.match(content, /shouldInjectPageHook\(skipPageHookInjection,\s*contentBootstrap\.__facescrapHookInjected/);
-  assert.match(recovery, /__facescrapSkipPageHook\s*=\s*true/);
+  // One flag is all content-recovery.js hands over now: replace the detector this update
+  // invalidated. The MAIN-world hook belongs to the worker (tests/page-hook-injection.test.ts),
+  // and content.js must never build a script node for it again — that node is what put an
+  // extension-origin URL inside facebook.com's DOM.
   assert.match(recovery, /__facescrapForceContentRecovery\s*=\s*true/);
   assert.match(build, /'content-recovery'/);
+  // content-recovery.js sets its flag and starts a FLOATING import('./content') — esbuild
+  // refuses top-level await in an iife bundle, so nothing can await it. What puts the
+  // detector ahead of the hook the worker injects next is the import being INLINED into
+  // the same bundle, which drains as a microtask before the next injection arrives. Code
+  // splitting would emit a real chunk and a real network round trip in its place.
+  assert.match(build, /format: 'iife'/);
+  assert.doesNotMatch(build, /splitting/);
 });
 
 test('a transient tabs.get failure does not freeze the panel on the previous tab', () => {

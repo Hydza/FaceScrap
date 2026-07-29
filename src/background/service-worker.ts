@@ -56,6 +56,7 @@ import { forgetVideoGroupMemory } from '../shared/now-playing';
 import { type RuntimeMessage } from '../shared/messages';
 import { facebookThemeRefAtReceipt } from '../shared/theme';
 import { hasOffscreen, hasSidePanel } from '../shared/capabilities';
+import { HOOK_ALIVE_ATTR } from '../shared/hook-attr';
 import { createSettingsMessageHandler, loadSettings } from '../shared/settings';
 import { createDiagObserver } from './diag-observer';
 import { createBindingMessageHandler } from './binding-handler';
@@ -182,6 +183,14 @@ const FB_URL = /^https?:\/\/([^/]+\.)?facebook\.com(?:[/?#]|$)/i;
 // label precision until the next navigation or tab activation re-derives it.
 const tabSurface = new Map<number, MediaSource>();
 
+// Pin a step to the document the previous one answered from. frameIds: [0] is only the
+// opening move — after that, a target of frame 0 would follow the FRAME across a
+// navigation and hand the hook to a document that already has a declarative one.
+// documentIds is excluded from carrying frameIds too, which is exactly the point.
+function hookTarget(tabId: number, documentId: string | undefined): chrome.scripting.InjectionTarget {
+  return documentId != null ? { tabId, documentIds: [documentId] } : { tabId, frameIds: [0] };
+}
+
 const contentScriptRecovery = createContentScriptRecoveryCoordinator({
   queryFacebookTabs: () => chrome.tabs.query({ url: ['*://*.facebook.com/*'] }),
   ping: async (tabId) => {
@@ -196,10 +205,40 @@ const contentScriptRecovery = createContentScriptRecoveryCoordinator({
       return false;
     }
   },
+  // frameIds: [0] mirrors the declarative entries, which carry no all_frames — and this
+  // is the one step with no document to aim at yet. The result reports which one it hit,
+  // and every step after this is pinned to that.
   inject: async (tabId, file) => {
-    await chrome.scripting.executeScript({
+    const [frame] = await chrome.scripting.executeScript({
       target: { tabId, frameIds: [0] },
       files: [file],
+    });
+    return frame?.documentId;
+  },
+  // Both worlds share the DOM, so the hook's own <html> stamp reads fine from the
+  // cheaper ISOLATED world. Handed in as an argument, never closed over: executeScript
+  // serializes this function, so it arrives in the page without its module scope.
+  hasPageHook: async (tabId, documentId) => {
+    const [frame] = await chrome.scripting.executeScript({
+      target: hookTarget(tabId, documentId),
+      func: (attr: string): boolean => document.documentElement.hasAttribute(attr),
+      args: [HOOK_ALIVE_ATTR],
+    });
+    return { hooked: frame?.result === true, documentId: frame?.documentId };
+  },
+  // The hook itself, read straight out of the extension package. content.js used to
+  // insert it as <script src=chrome.runtime.getURL('page-hook.js')>, which put an
+  // extension-origin URL into facebook.com's own head: a node any page script can watch
+  // for, and a URL it can fetch to read this hook's entire source. Nothing here is
+  // reachable from the page, and no web_accessible_resources entry is needed at all.
+  // Aimed at the probed document, so a navigation between the two cannot land this on a
+  // page that already hooked itself declaratively. A document that has gone makes this
+  // REJECT, which is the fail-closed behaviour the old <script>.onerror gave.
+  installPageHook: async (tabId, documentId) => {
+    await chrome.scripting.executeScript({
+      target: hookTarget(tabId, documentId),
+      files: ['page-hook.js'],
+      world: 'MAIN',
     });
   },
   onError: (tabId, error) => console.warn(`[FaceScrap] content recovery failed for tab ${tabId}`, error),

@@ -1,11 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import {
-  shouldInjectPageHook,
-  shouldStartContentInstance,
-  type ContentScriptInstance,
-} from '../src/content/content-instance';
+import { shouldStartContentInstance, type ContentScriptInstance } from '../src/content/content-instance';
 
 function liveInstance(): ContentScriptInstance & { disposals: number } {
   const instance: ContentScriptInstance & { disposals: number } = {
@@ -47,17 +43,8 @@ test('an invalidated detector whose liveness probe throws never blocks reinjecti
   assert.equal(shouldStartContentInstance(existing, false), true);
 });
 
-test('a fresh page reusing a live detector still installs its own page hook', () => {
-  // The recovery race: this pass reuses a live instance (its detector body is
-  // skipped), yet the freshly navigated document owns no hook — injection must
-  // not be gated on starting a new instance.
-  const reused = liveInstance();
-  assert.equal(shouldStartContentInstance(reused, false), false);
-  assert.equal(shouldInjectPageHook(false, false), true);
-});
-
-test('page-hook injection is skipped only for recovery or an already-hooked document', () => {
-  assert.equal(shouldInjectPageHook(true, false), false); // recovery: a surviving MAIN-world hook still owns fetch/XHR
-  assert.equal(shouldInjectPageHook(false, true), false); // already injected in this document
-  assert.equal(shouldInjectPageHook(false, false), true); // fresh document, no hook
-});
+// Two tests are gone from here: both drove shouldInjectPageHook, the per-pass decision
+// the content script used to make about installing the MAIN-world hook. It makes no such
+// decision now — the worker asks the document itself, by reading the stamp page-hook.ts
+// puts on <html>, and injects with chrome.scripting. The question moved with it, to
+// tests/content-script-recovery.test.ts and tests/page-hook-injection.test.ts.

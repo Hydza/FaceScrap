@@ -48,21 +48,26 @@ import { HOOK_ALIVE_ATTR } from '../shared/hook-attr';
 
 // --- Idempotency: is a hook already alive in this document? ---
 // page-hook.js can run twice in one document: manifest.json's declarative MAIN-world
-// entry, and content.ts's runtime <script> fallback if it believes no hook survived an
-// update (see content-recovery.ts). Each run is a fresh module evaluation with its own
-// state, so only the DOM — the one thing this world shares with the ISOLATED-world
-// content scripts — can answer "is a hook alive" synchronously, with no listener race.
+// entry covers every fresh navigation, and the worker injects the same file into a tab
+// that was already open when the extension updated (background/content-script-recovery.ts).
+// Each run is a fresh module evaluation with its own state, so only the DOM — the one
+// thing this world shares with the ISOLATED-world content scripts — can answer "is a hook
+// alive" synchronously, with no listener race.
+//
+// The stamp is the ONLY statement outside the install block at the bottom, because the
+// stamp IS the test. Everything that outlives an evaluation — a window listener, a
+// wrapper on the page's fetch, a patched history method — installs inside that block, so
+// a redundant run reads one attribute and leaves the document exactly as it found it.
 const alreadyHooked = document.documentElement.hasAttribute(HOOK_ALIVE_ATTR);
 if (!alreadyHooked) document.documentElement.setAttribute(HOOK_ALIVE_ATTR, '1');
 
 // --- Diagnostics control channel (see diag.ts) ---
 // This world has no chrome.*, so the flag has to be handed over by the content
-// script. Ask for it rather than waiting to be told: the hook is injected as a
-// separate <script> and either side can win the load race, and delaying the
+// script. Ask for it rather than waiting to be told: the hook and the detector are
+// separate injections and either side can win the load race, and delaying the
 // fetch/XHR patches below to await an answer would miss early traffic — the one
-// cost never worth paying.
-setDiagContext('hook');
-window.addEventListener('message', (e) => {
+// cost never worth paying. Registered, with the query that opens it, at the bottom.
+function onDiagControl(e: MessageEvent): void {
   if (e.source !== window) return;
   const d = e.data as { __vpCtl?: boolean; diag?: unknown } | null;
   if (d && d.__vpCtl === true && typeof d.diag === 'boolean') {
@@ -71,10 +76,9 @@ window.addEventListener('message', (e) => {
     // was taken, the trace tells you which response took it. Split flags would
     // make "diagnostics on" mean two different things in two contexts.
     setDiagLogEnabled(d.diag);
-    if (d.diag) diagLog('hookReady', { url: redactUrl(location.href), alreadyHooked });
+    if (d.diag) diagLog('hookReady', { url: redactUrl(location.href) });
   }
-});
-window.postMessage({ __vpCtl: true, query: true }, '*');
+}
 
 /** Hand this world's counts and trace to the content script, which owns chrome.storage. */
 function flushDiag(): void {
@@ -101,17 +105,18 @@ function scheduleDiagFlush(): void {
 // preventDefault()ed, never re-thrown, so the page's own handling is unchanged.
 // This is the one signal that says "the page broke" rather than "we captured
 // nothing", and those two look identical from the panel. Only the message and
-// the source file are recorded; a stack would carry page internals.
-window.addEventListener('error', (e) => {
+// the source file are recorded; a stack would carry page internals. Both are
+// registered at the bottom, alongside every other durable effect.
+function onPageError(e: ErrorEvent): void {
   if (!diagLogEnabled()) return;
   diagLog('pageError', { message: errorText(e.message), src: redactUrl(e.filename), line: e.lineno ?? 0 }, 'warn');
   scheduleDiagFlush();
-});
-window.addEventListener('unhandledrejection', (e) => {
+}
+function onPageRejection(e: PromiseRejectionEvent): void {
   if (!diagLogEnabled()) return;
   diagLog('pageRejection', { reason: errorText(e.reason) }, 'warn');
   scheduleDiagFlush();
-});
+}
 
 function post(items: readonly MediaItem[]): void {
   // The receiver hard-caps each message at MAX_ITEMS_PER_MESSAGE to bound a hostile
@@ -589,16 +594,12 @@ function friendlyName(init: unknown): string | undefined {
 }
 
 // --- Patch fetch ---
+// Built here, installed at the bottom and only there. Reading window.fetch installs
+// nothing, so a redundant evaluation gets its own unused copy of this wrapper and the
+// page keeps calling the one instance that is doing the work.
 const origFetch = window.fetch;
-window.fetch = function (this: unknown, ...args: Parameters<typeof fetch>) {
+const hookedFetch = function (this: unknown, ...args: Parameters<typeof fetch>) {
   const p = origFetch.apply(this as typeof globalThis, args);
-  // A redundant second installation in this document (see alreadyHooked
-  // above) must not attach a second scan chain to the same response — that
-  // is the "wrapping page APIs a second time" failure this guard exists to
-  // make impossible, not merely unlikely. The still-live original wrapper —
-  // `origFetch`, from this instance's own point of view — already does the
-  // real work, so this instance becomes a transparent passthrough.
-  if (alreadyHooked) return p;
   try {
     const input = args[0];
     const url = typeof input === 'string' ? input : input instanceof URL ? input.href : (input as Request).url;
@@ -636,15 +637,9 @@ window.fetch = function (this: unknown, ...args: Parameters<typeof fetch>) {
 } as typeof fetch;
 
 // --- Patch XHR ---
+// Same shape as the fetch patch above: built here, installed at the bottom.
 const origOpen = XMLHttpRequest.prototype.open;
-XMLHttpRequest.prototype.open = function (this: XMLHttpRequest, _method: string, url: string | URL) {
-  // Same guard as the fetch patch above: a redundant second installation
-  // must not tag the instance or attach a second load listener — it must be
-  // a transparent passthrough to the still-live original wrapper.
-  if (alreadyHooked) {
-    // eslint-disable-next-line prefer-rest-params
-    return origOpen.apply(this, arguments as unknown as Parameters<typeof origOpen>);
-  }
+const hookedOpen = function (this: XMLHttpRequest, _method: string, url: string | URL) {
   const self = this as XMLHttpRequest & {
     __vpUrl?: string;
     __vpSource?: MediaSource;
@@ -681,30 +676,34 @@ XMLHttpRequest.prototype.open = function (this: XMLHttpRequest, _method: string,
   return origOpen.apply(this, arguments as unknown as Parameters<typeof origOpen>);
 } as typeof XMLHttpRequest.prototype.open;
 
-// --- Tell the content script when the SPA navigates ---
-// Facebook advances feed → /reel/<id> with pushState, which fires no popstate
-// and no main_frame request (the service worker's own comment notes this). The
-// content script had no navigation signal at all: it waited for its 300ms
-// poller or a media event, and a slide transition detected late restamps
-// slideAt, which is what the anchoring window in now-playing.ts measures
-// against. Patching history has to happen HERE — an isolated content script
-// sees its own History object, not the page's.
-//
-// This does NOT change how the id is resolved: reelVideoId (data-video-id)
-// still outranks the URL, which lags the scroll. It only makes the content
-// script look sooner.
-// Everything below is installation work only the FIRST hook instance may do.
-// The fetch/XHR patches above check alreadyHooked inside their own bodies, so a
-// redundant chain is merely wasteful; these are not idempotent — a wrapped
-// pushState calls notifyNav() on every real call, and scanDocument's WeakSet is
-// per-evaluation, so a second instance would re-walk every <script> in the
-// document on the main thread this file works to protect.
+// --- Install: everything that outlives this evaluation, in one place ---
+// The two wrappers built above, every window listener, the history patch and the
+// document scan. Nothing before this block touches the page, so skipping it IS the whole
+// of "a hook is already alive here": a redundant evaluation — the declarative entry plus
+// a worker injection into the same document, or an unpacked reload loop — reads one
+// attribute and stops, leaving no listener and no extra frame on fetch behind it.
 //
 // Guarded as ONE block rather than per-effect: a new effect added later would
-// otherwise need to remember its own check. The DOM stamp and the diag channel
-// above stay outside it — the stamp IS the alreadyHooked test, and the diag flag
-// is per-instance state nothing below reads once this block is skipped.
+// otherwise need to remember its own check. Only the DOM stamp stays outside it,
+// because the stamp IS the alreadyHooked test.
+//
+// Patching history has to happen HERE — an isolated content script sees its own History
+// object, not the page's. Facebook advances feed → /reel/<id> with pushState, which
+// fires no popstate and no main_frame request (the service worker's own comment notes
+// this), so without it the content script has no navigation signal at all and waits for
+// its 300ms poller or a media event; a slide transition detected late restamps slideAt,
+// which is what the anchoring window in now-playing.ts measures against. It does NOT
+// change how the id is resolved: reelVideoId (data-video-id) still outranks the URL,
+// which lags the scroll. It only makes the content script look sooner.
 if (!alreadyHooked) {
+  setDiagContext('hook');
+  window.addEventListener('message', onDiagControl);
+  window.postMessage({ __vpCtl: true, query: true }, '*');
+  window.addEventListener('error', onPageError);
+  window.addEventListener('unhandledrejection', onPageRejection);
+  window.fetch = hookedFetch;
+  XMLHttpRequest.prototype.open = hookedOpen;
+
   function notifyNav(): void {
     try {
       diagLog('nav', { url: redactUrl(location.href) });
@@ -776,6 +775,6 @@ if (!alreadyHooked) {
     void scanDocument();
     window.setTimeout(() => void scanDocument(), 2500);
   });
-} // end: installation work gated to the first hook instance in this document
-// Counts bumped after the last drain would otherwise die with the page.
-window.addEventListener('pagehide', flushDiag);
+  // Counts bumped after the last drain would otherwise die with the page.
+  window.addEventListener('pagehide', flushDiag);
+} // end: every durable effect this document gets, and the only place it gets one
