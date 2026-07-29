@@ -41,6 +41,21 @@ export function createNavIngressBudget(now: number): TokenBudget {
   });
 }
 
+/** The hook's own counts and trace. Sized to the flush it really makes: the page hook
+ *  coalesces on a 2 s timer, so a burst of reports is a co-resident script forging them
+ *  rather than our own flush. It matters more now than it used to — the trace records
+ *  permanently, so an unbudgeted forger could keep the ring full of its own noise
+ *  indefinitely and evict every real event. */
+export function createDiagIngressBudget(now: number): TokenBudget {
+  return createTokenBudget({
+    capacityItems: 4,
+    capacityBytes: 4,
+    refillItemsPerMs: 1 / 2_000,
+    refillBytesPerMs: 1 / 2_000,
+    now,
+  });
+}
+
 /** A deterministic two-dimensional token bucket. Callers charge only bounded,
  * sanitized values so calculating the item/byte cost cannot itself become an
  * attacker-controlled scan of an unbounded page payload. */

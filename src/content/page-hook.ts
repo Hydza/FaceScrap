@@ -25,15 +25,13 @@ import {
   VIDEO_KEYS,
   type DashPair,
 } from '../shared/dash';
-import { diagBump, diagDrain, setDiagEnabled } from '../shared/diag';
+import { diagBump, diagDrain } from '../shared/diag';
 import {
   diagLog,
   diagLogDrain,
-  diagLogEnabled,
   errorText,
   redactUrl,
   setDiagContext,
-  setDiagLogEnabled,
 } from '../shared/diag-log';
 import { graphqlImageCandidate, graphqlVideoUrl } from '../shared/graphql-media';
 import { storyDomIdForGraphqlChild, storyDomIdFromGraphqlNode } from '../shared/story-mark';
@@ -63,24 +61,12 @@ import { HOOK_ALIVE_ATTR } from '../shared/hook-attr';
 // hook in it, and the worker's probe would believe that mark forever.
 const alreadyHooked = document.documentElement.hasAttribute(HOOK_ALIVE_ATTR);
 
-// --- Diagnostics control channel (see diag.ts) ---
-// This world has no chrome.*, so the flag has to be handed over by the content
-// script. Ask for it rather than waiting to be told: the hook and the detector are
-// separate injections and either side can win the load race, and delaying the
-// fetch/XHR patches below to await an answer would miss early traffic — the one
-// cost never worth paying. Registered, with the query that opens it, at the bottom.
-function onDiagControl(e: MessageEvent): void {
-  if (e.source !== window) return;
-  const d = e.data as { __vpCtl?: boolean; diag?: unknown } | null;
-  if (d && d.__vpCtl === true && typeof d.diag === 'boolean') {
-    setDiagEnabled(d.diag);
-    // One user-facing switch drives both: a counter tells you how often a path
-    // was taken, the trace tells you which response took it. Split flags would
-    // make "diagnostics on" mean two different things in two contexts.
-    setDiagLogEnabled(d.diag);
-    if (d.diag) diagLog('hookReady', { url: redactUrl(location.href) });
-  }
-}
+// --- Diagnostics (see diag.ts) ---
+// This world has no chrome.*, so counts and trace leave on the same window channel the
+// captured items already use. There is no control channel any more: with the log always
+// recording there is no flag to hand over, so the query this hook used to post on every
+// page load — and the content script's answer to it — are both gone. That is one message
+// type FEWER on facebook.com's window than when the switch existed.
 
 /** Hand this world's counts and trace to the content script, which owns chrome.storage. */
 function flushDiag(): void {
@@ -96,7 +82,7 @@ function flushDiag(): void {
 // GraphQL response happened to arrive, which on an idle reel page is never.
 let diagFlushTimer: number | undefined;
 function scheduleDiagFlush(): void {
-  if (!diagLogEnabled() || diagFlushTimer !== undefined) return;
+  if (diagFlushTimer !== undefined) return;
   diagFlushTimer = window.setTimeout(() => {
     diagFlushTimer = undefined;
     flushDiag();
@@ -110,12 +96,10 @@ function scheduleDiagFlush(): void {
 // the source file are recorded; a stack would carry page internals. Both are
 // registered at the bottom, alongside every other durable effect.
 function onPageError(e: ErrorEvent): void {
-  if (!diagLogEnabled()) return;
   diagLog('pageError', { message: errorText(e.message), src: redactUrl(e.filename), line: e.lineno ?? 0 }, 'warn');
   scheduleDiagFlush();
 }
 function onPageRejection(e: PromiseRejectionEvent): void {
-  if (!diagLogEnabled()) return;
   diagLog('pageRejection', { reason: errorText(e.reason) }, 'warn');
   scheduleDiagFlush();
 }
@@ -470,24 +454,22 @@ async function processScan(text: string, source: MediaSource, label?: string): P
   // this says WHICH query returned nothing, which is what a shape change looks
   // like from the outside. `videos` counts the linked DASH pairs specifically —
   // an item count that is all images is a different failure from an empty one.
-  if (diagLogEnabled()) {
-    let videos = 0;
-    let withAudio = 0;
-    for (const item of out.items) {
-      if (item.kind !== 'video') continue;
-      videos += 1;
-      if (item.audioUrl != null) withAudio += 1;
-    }
-    diagLog('graphql', {
-      q: label ?? 'unknown',
-      bytes: text.length,
-      items: out.items.length,
-      videos,
-      withAudio,
-      capped: out.full,
-      source,
-    });
+  let videos = 0;
+  let withAudio = 0;
+  for (const item of out.items) {
+    if (item.kind !== 'video') continue;
+    videos += 1;
+    if (item.audioUrl != null) withAudio += 1;
   }
+  diagLog('graphql', {
+    q: label ?? 'unknown',
+    bytes: text.length,
+    items: out.items.length,
+    videos,
+    withAudio,
+    capped: out.full,
+    source,
+  });
   post(out.items);
 }
 
@@ -575,7 +557,8 @@ async function drainScans(): Promise<void> {
 }
 
 /** The name Facebook gives the query it is issuing, read from the request body
- *  it already built. Diagnostics only, and only while they are on.
+ *  it already built. Diagnostics only: one non-backtracking regex over a string the
+ *  page has already serialized, once per GraphQL call.
  *
  *  Reads `init.body` exclusively — never a Request object's body, which is a
  *  one-shot stream this hook must not consume (that would break the very request
@@ -583,7 +566,6 @@ async function drainScans(): Promise<void> {
  *  sending and never adds, alters or re-issues a query, so ARCHITECTURE.md's
  *  passive-hook invariant holds unchanged. */
 function friendlyName(init: unknown): string | undefined {
-  if (!diagLogEnabled()) return undefined;
   try {
     const body = (init as RequestInit | undefined)?.body;
     const text =
@@ -703,17 +685,31 @@ if (!alreadyHooked) {
   // worker's probe read this same DOM, and nothing else crosses that boundary.
   document.documentElement.setAttribute(HOOK_ALIVE_ATTR, '1');
   setDiagContext('hook');
-  window.addEventListener('message', onDiagControl);
-  window.postMessage({ __vpCtl: true, query: true }, '*');
+  // The first line of every trace, and the only proof this block ran at all: a document
+  // whose trace starts at its first GraphQL response cannot be told apart from one where
+  // the hook never installed. Flushed on its own timer for the same reason the content
+  // script arms one after contentReady — an idle tab may never drain a scan.
+  diagLog('hookReady', { url: redactUrl(location.href) });
+  scheduleDiagFlush();
   window.addEventListener('error', onPageError);
   window.addEventListener('unhandledrejection', onPageRejection);
   window.fetch = hookedFetch;
   XMLHttpRequest.prototype.open = hookedOpen;
 
+  // The last URL this recorded, so a replaceState that changes nothing records nothing.
+  // Facebook drives scroll restoration through replaceState, so without this a single
+  // feed session fills the ring with identical lines and evicts everything worth reading.
+  // The DETECTOR is still told every time: it re-reads the DOM, which may have moved on
+  // even when the URL did not.
+  let lastLoggedNav: string | undefined;
   function notifyNav(): void {
     try {
-      diagLog('nav', { url: redactUrl(location.href) });
-      scheduleDiagFlush();
+      const url = redactUrl(location.href);
+      if (url !== lastLoggedNav) {
+        lastLoggedNav = url;
+        diagLog('nav', { url });
+        scheduleDiagFlush();
+      }
       window.postMessage({ __vpData: true, nav: true }, '*');
     } catch {
       /* ignore */

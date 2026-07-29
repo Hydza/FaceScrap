@@ -92,9 +92,8 @@ y una fila por función asignable. **Avanzado**: plantilla de nombre de archivo
 (tokens `{source}`, `{date}`, `{id}`), vista de solo videos, filtro de resolución
 mínima, un tope editable de números enteros por pestaña (por defecto 1500 items,
 se descartan primero los más viejos; 0 = sin límite), confirmar antes de vaciar,
-y el interruptor de **diagnóstico** (desactivado por defecto): contadores de
-capturas descartadas más un registro de lo que hizo cada contexto, con un botón
-Exportar informe que lo escribe todo en un solo archivo JSON
+y una sola acción de **diagnóstico**: un botón Exportar informe que escribe en un
+solo archivo JSON los contadores y el registro, que están siempre activos
 (ver [Diagnóstico](#diagnóstico)).
 
 ## Qué es confiable y qué no
@@ -190,18 +189,19 @@ Referer en las solicitudes a fbcdn.
 Los internos de Facebook cambian, y aquí cada camino de captura se traga sus
 propios fallos a propósito: el hook de la página no puede romper la página en la
 que corre. Eso hace que «no se capturó nada» y «la página se rompió» se vean
-igual. Ajustes → Avanzado → **Registrar diagnóstico** enciende el registro que
-los distingue.
+igual. El registro que los distingue anota siempre, y no puede ser de otra manera:
+era un interruptor, lo que obligaba a encenderlo y recargar Facebook después de que
+algo ya hubiera fallado, cuando la evidencia ya se había perdido.
 
-Mientras está encendido, cada contexto anota lo que hizo: qué consulta GraphQL
+Cada contexto anota lo que hizo: qué consulta GraphQL
 devolvió cuántos elementos y cuántos pares DASH (y cuál devolvió un error HTTP),
 qué peticiones de medios a fbcdn se clasificaron, qué video creyó el detector que
 estaba sonando, qué limpió cada navegación y cómo terminó cada descarga y cada
 unión. También anota los errores no capturados de la propia página. Los
-contadores de capturas descartadas —la mitad más antigua de esta función— siguen
-funcionando al lado.
+contadores de capturas descartadas —la mitad más antigua de esta función— corren
+al lado.
 
-**Exportar informe** escribe un solo archivo JSON en tu carpeta de descargas: los
+Ajustes → Avanzado → **Exportar informe** escribe un solo archivo JSON en tu carpeta de descargas: los
 contadores, el registro de eventos (como objetos y como líneas legibles), tus
 ajustes y las versiones de la extensión y del navegador.
 
@@ -216,12 +216,13 @@ Lo que deliberadamente NO contiene:
 - **Ninguna subida, nunca.** El archivo se escribe en local y no va a ningún
   lado hasta que tú lo mandes.
 
-El registro está limitado a 2000 eventos y ~700 KB, descartando primero los más
-viejos, y lo dice en el propio registro cuando descarta algo. Apagar el
-interruptor borra tanto los contadores como el registro. Los mismos datos están
-en la consola del worker (`chrome://extensions` → Inspeccionar vistas: service
-worker) con `faceScrapDiag.dump()`, `faceScrapDiag.log()` y
-`faceScrapDiag.report()`.
+El registro está limitado a 1500 eventos y 256 KB, descartando primero los más
+viejos, y lo dice en el propio registro cuando descarta algo. Los mismos datos
+están en la consola del worker (`chrome://extensions` → Inspeccionar vistas:
+service worker) con `faceScrapDiag.dump()`, `faceScrapDiag.log()` y
+`faceScrapDiag.report()`; esa consola tiene además `faceScrapDiag.reset()`, que es
+la única forma de vaciar cualquiera de los dos ahora que Ajustes no tiene botón de
+reinicio.
 
 ## Hoja de ruta
 

@@ -86,9 +86,8 @@ surfaces and the hairline together. **Keys**: the master switch and one row per
 bindable function. **Advanced**: filename template (`{source}`, `{date}`, `{id}`
 tokens), videos-only view, minimum-resolution filter, an editable whole-number
 per-tab retention cap (default 1500 items, oldest evicted first; 0 = unlimited),
-confirm before clearing, and the off-by-default **diagnostics** switch — counters
-for discarded captures plus an event log of what each context actually did, with
-an Export report button that writes the whole thing to one JSON file
+confirm before clearing, and one **diagnostics** action — an Export report button
+that writes the always-on counters and event log to one JSON file
 (see [Diagnostics](#diagnostics)).
 
 ## What's reliable and what isn't
@@ -177,17 +176,19 @@ rule that sets the Referer on fbcdn requests.
 
 Facebook's internals move, and every capture path here swallows its own failures
 on purpose — the page hook must never break the page it runs in. That makes
-"nothing was captured" and "the page broke" look identical. Settings → Advanced →
-**Record diagnostics** turns on the trace that tells them apart.
+"nothing was captured" and "the page broke" look identical. The trace that tells
+them apart records all the time, and always has to: it used to be a switch, which
+meant turning it on and reloading Facebook after something had already gone wrong,
+by which point the evidence was gone.
 
-While it is on, each context records what it did: which GraphQL query returned
+Each context records what it did: which GraphQL query returned
 how many items and DASH pairs (and which returned an HTTP error), which fbcdn
 media requests were classified, which video the detector believed was playing,
 what each navigation cleared, and how every download and remux ended. It also
 records the page's own uncaught errors. Counters for discarded captures — the
-older half of this feature — keep working alongside it.
+older half of this feature — run alongside it.
 
-**Export report** writes one JSON file to your Downloads folder: the counters,
+Settings → Advanced → **Export report** writes one JSON file to your Downloads folder: the counters,
 the event log (as objects and as readable lines), your settings, and the
 extension and browser versions.
 
@@ -201,11 +202,12 @@ What it deliberately does not contain:
 - **No upload, ever.** The file is written locally and goes nowhere until you
   send it somewhere.
 
-The log is capped at 2 000 events and ~700 KB, oldest dropped first, and says so
-in the trace when it drops any. Turning the switch off clears both the counters
-and the log. The same data is reachable from the worker console
+The log is capped at 1 500 events and 256 KB, oldest dropped first, and says so in
+the trace when it drops any. The same data is reachable from the worker console
 (`chrome://extensions` → Inspect views: service worker) via
-`faceScrapDiag.dump()`, `faceScrapDiag.log()` and `faceScrapDiag.report()`.
+`faceScrapDiag.dump()`, `faceScrapDiag.log()` and `faceScrapDiag.report()`; that
+console also has `faceScrapDiag.reset()`, which is the only way to clear either
+store now that Settings has no reset button.
 
 ## Roadmap
 

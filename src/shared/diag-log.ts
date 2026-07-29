@@ -1,4 +1,4 @@
-// Diagnostic event log (opt-in — it shares diag.ts's flag and its threat model).
+// Diagnostic event log, always on — it shares diag.ts's threat model and its bounds.
 //
 // diag.ts answers "how many captures were discarded, and why". This answers the
 // question a counter cannot: WHAT happened, in order, in this tab — which GraphQL
@@ -117,24 +117,11 @@ export function createEventRing(max: number): EventRing {
 }
 
 let context: DiagContext = 'content';
-let enabled = false;
 const ring = createEventRing(DIAG_EVENT_MAX);
 
 /** Name this context once, at its entry point. */
 export function setDiagContext(ctx: DiagContext): void {
   context = ctx;
-}
-
-/** Shares diag.ts's switch deliberately: one user-facing "diagnostics" toggle,
- *  not two. Kept as its own flag here rather than importing diag.ts's, so the
- *  page hook's hot path (diagBump) has no reason to reach into this module. */
-export function setDiagLogEnabled(on: boolean): void {
-  enabled = on;
-  ring.clear();
-}
-
-export function diagLogEnabled(): boolean {
-  return enabled;
 }
 
 function clampString(value: string, max: number): string {
@@ -203,12 +190,11 @@ function clampData(raw: Record<string, DiagValue> | undefined): Record<string, D
   return keys > 0 ? out : undefined;
 }
 
-/** Record one event. The enabled check lives HERE, not at the call sites, for the
- *  same reason diagBump's does — instrumenting a new path stays a one-line edit.
- *  Disabled cost is one boolean compare, so a call site may sit anywhere except
- *  inside harvest()'s per-node success path. */
+/** Record one event. What bounds this is the ring, not a flag: a call site costs one
+ *  clamped object and one push, and the oldest event leaves when the ring is full. So
+ *  a call site may sit anywhere a burst is already bounded — never inside harvest()'s
+ *  per-node success path, and never once per DASH segment. */
 export function diagLog(ev: string, data?: Record<string, DiagValue>, lvl?: 'warn' | 'error'): void {
-  if (!enabled) return;
   const event: DiagEvent = { at: Date.now(), ctx: context, ev: clampString(ev, MAX_EV_NAME) };
   if (lvl != null) event.lvl = lvl;
   const clean = clampData(data);
@@ -216,20 +202,29 @@ export function diagLog(ev: string, data?: Record<string, DiagValue>, lvl?: 'war
   ring.push(event);
 }
 
-/** One line of text for an unknown throwable, bounded. */
+/** Any http(s) URL embedded in free text, so an error message that quotes one is
+ *  redacted the same way a URL field is. Facebook's own errors quote signed fbcdn
+ *  URLs, and the log is meant to be handed to someone. */
+const EMBEDDED_URL = /https?:\/\/[^\s"'<>)\]]+/g;
+
+/** One line of text for an unknown throwable, bounded and with any URL in it reduced
+ *  to host + trimmed path. The text itself is page-controlled on the hook's error
+ *  path, and the log now records for the life of the install rather than for one
+ *  session someone opted into. */
 export function errorText(error: unknown): string {
-  if (error instanceof Error) return clampString(`${error.name}: ${error.message}`, MAX_STRING);
-  if (typeof error === 'string') return clampString(error, MAX_STRING);
+  const redactEmbedded = (text: string): string =>
+    clampString(text.replace(EMBEDDED_URL, (url) => redactUrl(url)), MAX_STRING);
+  if (error instanceof Error) return redactEmbedded(`${error.name}: ${error.message}`);
+  if (typeof error === 'string') return redactEmbedded(error);
   try {
-    return clampString(String(error), MAX_STRING);
+    return redactEmbedded(String(error));
   } catch {
     return 'unknown error';
   }
 }
 
-/** Report a failure to BOTH the console and the log. The console call is
- *  unconditional: someone watching the worker console live must not need
- *  diagnostics on to see it. The log copy is what makes the same failure readable
+/** Report a failure to BOTH the console and the log. The console is for someone
+ *  watching the worker live; the log copy is what makes the same failure readable
  *  afterwards, from an export, by someone who was not watching. */
 export function diagError(ev: string, error: unknown, data?: Record<string, DiagValue>): void {
   console.error(`[FaceScrap] ${ev}`, error);

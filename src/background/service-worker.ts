@@ -15,7 +15,7 @@
 // Service workers are ephemeral: do minimal synchronous work in listeners and
 // persist immediately. Never keep capture state in module-scope variables.
 
-import { diagBump, diagDrain, setDiagEnabled } from '../shared/diag';
+import { diagBump, diagDrain } from '../shared/diag';
 import {
   diagError,
   diagLog,
@@ -24,7 +24,6 @@ import {
   formatDiagEvent,
   redactUrl,
   setDiagContext,
-  setDiagLogEnabled,
 } from '../shared/diag-log';
 import {
   addMedia,
@@ -57,7 +56,7 @@ import { type RuntimeMessage } from '../shared/messages';
 import { facebookThemeRefAtReceipt } from '../shared/theme';
 import { hasOffscreen, hasSidePanel } from '../shared/capabilities';
 import { HOOK_ALIVE_ATTR } from '../shared/hook-attr';
-import { createSettingsMessageHandler, loadSettings } from '../shared/settings';
+import { createSettingsMessageHandler } from '../shared/settings';
 import { createDiagObserver } from './diag-observer';
 import { createBindingMessageHandler } from './binding-handler';
 import { createDownloadHandler } from './download-handler';
@@ -99,24 +98,16 @@ void captureStorageReady
   .then(() => setCaps({ sidePanel: hasSidePanel(), offscreen: hasOffscreen() }))
   .catch(() => {});
 
-// Diagnostics are opt-in at BOTH trust boundaries. Renderer reports are
-// accumulated in memory and persisted at most once per interval; the worker's
-// own counters join the same write instead of causing a second storage update.
+// Renderer reports are accumulated in memory and persisted at most once per
+// interval; the worker's own counters and trace join that same write instead of
+// causing a second storage update.
 setDiagContext('worker');
 const diagObserver = createDiagObserver({
   write: addDiagCounters,
   writeEvents: addDiagEvents,
-  workerCounters: { drain: diagDrain, setEnabled: setDiagEnabled },
-  workerEvents: { drain: diagLogDrain, setEnabled: setDiagLogEnabled },
+  workerCounters: { drain: diagDrain },
+  workerEvents: { drain: diagLogDrain },
   onError: (error) => console.error('[FaceScrap] diagnostic flush failed', error),
-});
-
-function refreshDiagSetting(): void {
-  void loadSettings().then((settings) => diagObserver.setEnabled(settings.diagEnabled));
-}
-refreshDiagSetting();
-chrome.storage.onChanged.addListener((changes, area) => {
-  if (area === 'local' && 'settings' in changes) refreshDiagSetting();
 });
 
 // The worker's own uncaught failures. Everything else in this file reports through
@@ -154,7 +145,7 @@ workerScope.addEventListener?.('unhandledrejection', (e: PromiseRejectionEvent) 
     await diagObserver.flush();
     const events = await getDiagEvents();
     const text = events.slice(-Math.max(1, limit)).map(formatDiagEvent).join('\n');
-    console.log(text || '(empty — turn Diagnostics on in Settings)');
+    console.log(text || '(nothing recorded yet)');
     return text;
   },
   /** The same bundle the panel's export button writes, as an object. */
@@ -162,6 +153,9 @@ workerScope.addEventListener?.('unhandledrejection', (e: PromiseRejectionEvent) 
     await diagObserver.flush();
     return { counters: await getDiagCounters(), events: await getDiagEvents() };
   },
+  /** Clear both stores. Settings has no reset button any more — the log records
+   *  permanently, so a clean slate before reproducing a bug is a maintenance action
+   *  rather than a preference, and this is where maintenance actions live. */
   reset: async (): Promise<void> => {
     await resetDiagCounters();
     await resetDiagLog();

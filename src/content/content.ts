@@ -69,7 +69,6 @@ if (startContentInstance) {
   setupPageHookIngress(runtime, {
     relay: media.relay,
     reportDiag: diag.report,
-    announceDiag: diag.announce,
     onNavigation: playing.detect,
   });
 

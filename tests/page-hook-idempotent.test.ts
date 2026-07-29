@@ -43,6 +43,8 @@ interface FakePage {
   listeners: Array<{ type: string; fn: Handler }>;
   /** Everything posted onto the page's own message channel. */
   posted: unknown[];
+  /** Fire every timer the hook armed, so a deferred flush becomes observable. */
+  runScheduled(): void;
   attributes: Map<string, string>;
   fetchCalls: unknown[][];
   openCalls: unknown[][];
@@ -100,6 +102,12 @@ function createFakePage(): FakePage {
     location: { href: 'https://www.facebook.com/reel/1', pathname: '/reel/1', search: '' },
     listeners,
     posted,
+    runScheduled: (): void => {
+      // Drained once, and cleared first: a callback that arms another timer must not
+      // spin this forever.
+      const due = scheduled.splice(0, scheduled.length);
+      for (const fn of due) fn();
+    },
     attributes,
     fetchCalls,
     openCalls,
@@ -158,7 +166,7 @@ test('a redundant evaluation leaves nothing behind: no second wrapper, no second
   assert.notEqual(installed.pushState, page.native.pushState, 'the first evaluation must patch history.pushState');
   assert.deepEqual(
     [...installed.listeners].sort(),
-    ['error', 'load', 'message', 'pagehide', 'popstate', 'unhandledrejection'],
+    ['error', 'load', 'pagehide', 'popstate', 'unhandledrejection'],
     'the listeners the hook needs are the ones a redundant evaluation must not duplicate',
   );
   assert.equal(page.attributes.get(HOOK_ALIVE_ATTR), '1', 'the stamp is the only thing a second evaluation reads');
@@ -185,10 +193,16 @@ test('a redundant evaluation leaves nothing behind: no second wrapper, no second
     installed.listeners,
     'a redundant evaluation registered window listeners that will outlive it',
   );
+  // Nothing is posted synchronously any more — the trace leaves on a deferred flush — so
+  // count what the three evaluations actually left ARMED. Draining is what makes this
+  // real: a redundant evaluation that scheduled its own flush would post a second
+  // __vpData onto facebook.com's window here, and only here would it show.
+  page.runScheduled();
+  const announced = page.posted.filter((message) => (message as { __vpData?: unknown })?.__vpData === true);
   assert.equal(
-    page.posted.length,
-    installed.posted,
-    'a redundant evaluation announced itself on the page\'s own message channel',
+    announced.length,
+    1,
+    'each evaluation announced itself on the page\'s own message channel — one flush per document, not per evaluation',
   );
   assert.equal(page.attributes.size, 1, 'and it stamped nothing new on <html>');
 });

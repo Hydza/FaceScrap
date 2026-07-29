@@ -356,30 +356,6 @@ test('opens Now Playing on the same grid as the other views', () => {
   assert.match(html, /<span class="head-note" data-i18n="settingsAutosave"/);
 });
 
-// The Reset button sat flush against the counters box — measured 0px between them
-// in Chromium 148, where the UA wraps everything after <summary> in a
-// ::details-content box, so .set-row.col's column `gap` lands between the summary
-// and that box and never between its children.
-// The buttons now sit in their own .diag-actions row (Export joined Reset), so the
-// margin that does this spacing moved from #diag-reset onto that row. What is being
-// pinned is unchanged: the separation comes from a margin, never from the gap.
-test('spaces the diagnostics counters from the actions without relying on the details gap', () => {
-  assert.match(css, /\.diagnostics details\.set-row\.col \{[^}]*gap:\s*0/);
-  assert.match(block('.diagnostics #diag-counters'), /margin:\s*8px 0 0/);
-  const actions = block('.diagnostics .diag-actions');
-  // Equal margins are the point, not one of them: with the UA box the gap is
-  // skipped, and on the Chrome 116 floor the children ARE flex siblings. Margins
-  // give 8px in both worlds; keeping the gap as well would give 16px in one.
-  assert.match(actions, /margin-top:\s*8px/);
-  // In the flex-sibling case align-items: stretch would blow the row to full
-  // width, so the two versions would not even agree on its shape.
-  assert.match(actions, /align-self:\s*flex-start/);
-  // The two buttons share one row rather than stacking, and wrap at 300px instead
-  // of overflowing it.
-  assert.match(actions, /display:\s*flex/);
-  assert.match(actions, /flex-wrap:\s*wrap/);
-});
-
 // The note beside the Settings heading is a lowercase aside in the design — "saved as
 // you go" — sharing a baseline with a 19px title, not a sentence. What broke before was
 // the two languages disagreeing about which it was: English a full sentence, Spanish a

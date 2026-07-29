@@ -1,5 +1,5 @@
 // The Settings surface: four pages, a search over all of them, their controls, and the
-// diagnostics block.
+// diagnostics export.
 //
 // Every write goes back out through the `apply` callback handed in at setup — this module
 // reads the settings but never owns or persists them. The custom background is the one
@@ -12,7 +12,7 @@
 
 import { fmt, getLang, t, type Lang, type MsgKey } from '../shared/i18n';
 import { diagLogDrain, formatDiagEvent } from '../shared/diag-log';
-import { addDiagEvents, getDiagCounters, getDiagEvents, resetDiagCounters, resetDiagLog } from '../shared/diag-store';
+import { addDiagEvents, getDiagCounters, getDiagEvents } from '../shared/diag-store';
 import { ACCENTS, PANEL_TINTS, type AccentGroup, type AccentId, type PanelTintId } from '../shared/appearance';
 import { downloadFilename } from '../shared/download-naming';
 import { makeItem } from '../shared/media';
@@ -446,7 +446,6 @@ export function reflectSettings(settings: Settings): void {
   byId<HTMLInputElement>('set-confirmclear').checked = settings.confirmClear;
   byId<HTMLInputElement>('set-videosonly').checked = settings.videosOnly;
   reflectField('set-maxitems', String(settings.maxItems));
-  byId<HTMLInputElement>('set-diag').checked = settings.diagEnabled;
   byId<HTMLInputElement>('set-keysenabled').checked = settings.keysEnabled;
   for (const [name, spec] of Object.entries(SEGMENTS)) reflectSegment(name, spec.read(settings));
   // Auto/EN/ES: one control over two stored facts. getLang() IS the manual choice exactly
@@ -534,33 +533,11 @@ export function toggleSettingsSheet(): void {
 }
 
 // ── Diagnostics ───────────────────────────────────────────────────────────────
-
-/** Counter names are printed RAW (jsonLineTooLarge, …) rather than translated: they are
- *  maintenance terms whose whole value is grepping straight to the discard site, and a
- *  localized label would break that link. */
-export async function renderDiag(): Promise<void> {
-  const [counters, events] = await Promise.all([getDiagCounters(), getDiagEvents()]);
-  const rows = Object.entries(counters).filter(([, n]) => n > 0);
-  const pre = byId('diag-counters');
-  if (rows.length === 0) {
-    pre.textContent = t('diagEmpty');
-  } else {
-    const width = Math.max(...rows.map(([reason]) => reason.length));
-    pre.textContent = rows
-      .sort((a, b) => b[1] - a[1])
-      .map(([reason, n]) => `${reason.padEnd(width)}  ${n}`)
-      .join('\n');
-  }
-  // The trace itself is not rendered: it runs to thousands of lines, and the
-  // panel is 340 px wide. The count is what tells you there is something to
-  // export; the export is where it gets read.
-  byId('diag-events').textContent =
-    events.length === 1 ? t('diagEventCountOne') : fmt('diagEventCount', { n: events.length });
-}
-
-export function isDiagOpen(): boolean {
-  return byId<HTMLDetailsElement>('diag-details').open;
-}
+//
+// One action, and it is the file. The counters box, its disclosure and the reset
+// button are gone with the switch that made them a live readout: nothing on this
+// screen has to be watched any more, because nothing has to be turned on first. The
+// counters themselves are unchanged and ride inside the export below.
 
 /** Everything a maintainer needs to read a bug report, in one file.
  *
@@ -664,7 +641,6 @@ export function setupSettingsSheet(inputs: SheetInputs): void {
   onCheck('set-inpage', 'inPageButton');
   onCheck('set-confirmclear', 'confirmClear');
   onCheck('set-videosonly', 'videosOnly');
-  onCheck('set-diag', 'diagEnabled');
   onCheck('set-keysenabled', 'keysEnabled');
 
   byId('lang').addEventListener('click', (e) => {
@@ -736,13 +712,10 @@ export function setupSettingsSheet(inputs: SheetInputs): void {
     apply({ keymap: { ...DEFAULT_KEYMAP } });
   });
 
-  byId('diag-reset').addEventListener('click', () => {
-    void Promise.all([resetDiagCounters(), resetDiagLog()]).then(renderDiag);
-  });
   const exportButton = byId<HTMLButtonElement>('diag-export');
   exportButton.addEventListener('click', () => {
     // Disabled across the await: the report is one storage read plus a JSON
-    // serialization of up to 2 000 events, and a double click would write the
+    // serialization of up to 1 500 events, and a double click would write the
     // same file twice.
     exportButton.disabled = true;
     void buildDiagReport(settings())
@@ -751,11 +724,6 @@ export function setupSettingsSheet(inputs: SheetInputs): void {
       .finally(() => {
         exportButton.disabled = false;
       });
-  });
-  // Only when opened: the counters are a maintenance detail, not worth a storage read on
-  // every settings render.
-  byId('diag-details').addEventListener('toggle', () => {
-    if (isDiagOpen()) void renderDiag();
   });
 
   showPage('general');

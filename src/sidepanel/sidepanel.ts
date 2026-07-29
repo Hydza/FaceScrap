@@ -35,7 +35,7 @@ import {
 import { itemCardId, savedEntryForItem, videoCardId } from '../shared/download-naming';
 import { belowMinResolution, defaultTarget, isDownloadable, videoOptions, willHaveAudio } from '../shared/video-options';
 import { fmt, getLang, LANG_KEY, resolveLang, saveLang, setLang, t, type Lang, type MsgKey } from '../shared/i18n';
-import { diagError, diagLogDrain, setDiagContext, setDiagLogEnabled } from '../shared/diag-log';
+import { diagError, diagLogDrain, setDiagContext } from '../shared/diag-log';
 import { addDiagEvents } from '../shared/diag-store';
 import { getCaps, getMedia } from '../shared/storage';
 import { getSaved, type SavedEntry } from '../shared/saved';
@@ -67,11 +67,9 @@ import {
   applySearch,
   closeSettingsSheet,
   focusSettingsSearch,
-  isDiagOpen,
   isSettingsOpen,
   reflectPanelBackground,
   reflectSettings,
-  renderDiag,
   repaintTintSwatches,
   setupSettingsSheet,
   toggleSettingsSheet,
@@ -1090,7 +1088,6 @@ async function init(): Promise<void> {
     // fall into a read/listener gap.
     setupPanelTheme({ theme: () => settings.theme, trackedTab: () => tabId });
     settings = await loadSettings();
-    setDiagLogEnabled(settings.diagEnabled);
     await applyEffectiveTheme();
     setLang(await resolveLang(settings.followBrowserLang));
     localize();
@@ -1265,9 +1262,6 @@ async function init(): Promise<void> {
     // Keep language and settings in sync if another view (a second panel in another
     // window, or the popup) changes them.
     chrome.storage.local.onChanged.addListener((changes) => {
-      // Live-update the counters while the section is open, so a scroll session in
-      // the Facebook tab shows discards accumulating without reopening settings.
-      if (('diag_counters' in changes || 'diag_log' in changes) && isDiagOpen()) void renderDiag();
       const next = changes[LANG_KEY]?.newValue;
       if ((next === 'en' || next === 'es') && next !== getLang()) {
         setLang(next);
@@ -1283,7 +1277,6 @@ async function init(): Promise<void> {
         if (echo != null && JSON.stringify(normalizeSettings(echo)) === JSON.stringify(settings)) return;
         void (async () => {
           settings = await loadSettings();
-          setDiagLogEnabled(settings.diagEnabled);
           await applyEffectiveTheme();
           reflectSettings(settings);
           applyAppearance();

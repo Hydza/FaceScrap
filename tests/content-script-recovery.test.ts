@@ -76,10 +76,10 @@ test('the hook goes in after the detector, never before it', async () => {
 
   await coordinator.recover();
 
-  // The detector registers its window-message listener as it evaluates; the hook posts
-  // its one startup query — never retried — the moment it loads. Reversed, that query
-  // lands with nobody listening and the hook never learns the diagnostics flag. Both tabs
-  // are hookless here, so the pairing has to hold twice over.
+  // The detector registers its window-message listener as it evaluates; the hook starts
+  // posting captures — never retried — the moment it loads. Reversed, the first response
+  // it harvests lands with nobody listening and is lost outright. Both tabs are hookless
+  // here, so the pairing has to hold twice over.
   assert.deepEqual(order, ['content.js', 'page-hook.js', 'content.js', 'page-hook.js']);
 });
 

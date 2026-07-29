@@ -11,7 +11,7 @@
 // ARCHITECTURE.md's remux invariant).
 
 import { createChainLock } from '../shared/async';
-import { diagLog, diagLogDrain, errorText, redactUrl, setDiagContext, setDiagLogEnabled } from '../shared/diag-log';
+import { diagLog, diagLogDrain, errorText, redactUrl, setDiagContext } from '../shared/diag-log';
 import { MUX_PORT, MUX_PROGRESS_MS, type MuxProgress, type MuxResponse, type RuntimeMessage } from '../shared/messages';
 import { remux } from '../shared/mp4-remux';
 import { fetchDashTracks, MAX_DASH_OUTPUT_BYTES } from '../shared/track-fetch';
@@ -22,9 +22,8 @@ import { fetchDashTracks, MAX_DASH_OUTPUT_BYTES } from '../shared/track-fetch';
 //
 // AN OFFSCREEN DOCUMENT HAS chrome.runtime AND ESSENTIALLY NOTHING ELSE.
 // `chrome.storage` is undefined here (measured on Edge 150; see
-// tests/fix-offscreen-apis.test.ts). It cannot read the diagnostics setting and
-// cannot persist what it records, so it does neither: the worker sends the flag on
-// the mux request, and this document hands its trace back in the mux answer.
+// tests/fix-offscreen-apis.test.ts). It cannot persist what it records, so it does not
+// try: this document hands its trace back in the mux answer instead.
 //
 // This is not a style preference. Touching chrome.storage at module scope here
 // throws while this script is still evaluating, which means the mux listener at the
@@ -158,10 +157,10 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (sender.tab) return undefined;
   const m = msg as RuntimeMessage | undefined;
   if (m?.type === 'FACESCRAP_MUX') {
-    // The flag arrives with the job, since this context cannot read settings. Set
-    // before the job starts so the whole job is traced, and cleared by the drain
-    // below so one job's events can never be reported twice.
-    setDiagLogEnabled(m.diag === true);
+    // A job's events leave with its answer, so anything still in the ring belongs to a
+    // job whose answer never landed. Dropped rather than attributed to this one — which
+    // is what setting the flag used to do here, as a side effect of clearing.
+    diagLogDrain();
     (async () => {
       try {
         const blobUrl = await enqueueMux(m.videoUrl, m.audioUrl);

@@ -1,12 +1,12 @@
-// Diagnostic counters, opt-in at both trust boundaries (see diag.ts).
+// Diagnostic counters and trace on their way to the worker (see diag.ts).
 //
-// This script is the only capture context that can both read settings and talk to the
-// worker, so it owns the flag for the MAIN-world hook as well as for its own DOM scan.
+// This script is the only capture context that both outlives a single response and can
+// reach the worker, so it carries the MAIN-world hook's reports as well as its own DOM
+// scan's. It no longer carries a flag for either: the log records always.
 
 import {
   createCounterCoalescer,
   sanitizeDiagCounters,
-  setDiagEnabled,
   type DiagReason,
 } from '../shared/diag';
 import {
@@ -16,12 +16,16 @@ import {
   diagLogDrain,
   sanitizeDiagEvents,
   setDiagContext,
-  setDiagLogEnabled,
 } from '../shared/diag-log';
-import { loadSettings } from '../shared/settings';
 import type { ContentRuntime } from './content-runtime';
 
-const DIAG_REPORT_INTERVAL_MS = 1_000;
+/** How long this context coalesces before messaging the worker. Raised from 1 s when
+ *  the log became permanent: this is not a storage write, but every message resets the
+ *  worker's ~30 s idle timer, and the detector produces one on roughly every accepted
+ *  boundary. At 1 s an active feed would keep the worker awake for the whole session —
+ *  the opposite of what an ephemeral worker is for. Still well inside that idle window,
+ *  so a report is never left to a worker that has already been reaped. */
+const DIAG_REPORT_INTERVAL_MS = 5_000;
 /** Events held between reports. Bounds one flush interval of a page-hook burst;
  *  the worker's observer applies its own, larger bound behind this one. */
 const DIAG_EVENT_QUEUE_MAX = 300;
@@ -36,22 +40,18 @@ export type NoteFn = (
 ) => void;
 
 interface DiagChannel {
-  /** Accumulate counts and trace from the page hook or this script. Dropped while
-   *  disabled. */
+  /** Accumulate counts and trace from the page hook or this script. */
   report: (counters: unknown, events?: unknown) => void;
   /** Record one event from THIS script and make sure it gets reported. The bands
    *  cannot just call diagLog: the report timer is armed here, so an event logged
    *  by a band that never reports counters would sit in the ring unsent. */
   note: NoteFn;
-  /** Tell the MAIN-world hook the current flag, from cache — never a storage read. */
-  announce: () => void;
 }
 
 export function setupDiagChannel(runtime: ContentRuntime): DiagChannel {
   setDiagContext('content');
   const reports = createCounterCoalescer<DiagReason>();
   const queued = createEventRing(DIAG_EVENT_QUEUE_MAX);
-  let enabled = false;
   let flushTimer: number | undefined;
 
   const clearPending = (): void => {
@@ -66,7 +66,7 @@ export function setupDiagChannel(runtime: ContentRuntime): DiagChannel {
 
   const flush = (): void => {
     flushTimer = undefined;
-    if (!enabled || runtime.isDisposed()) {
+    if (runtime.isDisposed()) {
       clearPending();
       return;
     }
@@ -84,67 +84,23 @@ export function setupDiagChannel(runtime: ContentRuntime): DiagChannel {
     if (flushTimer === undefined) flushTimer = window.setTimeout(flush, DIAG_REPORT_INTERVAL_MS);
   };
 
-  const announce = (): void => {
-    if (!runtime.alive()) return;
-    window.postMessage({ __vpCtl: true, diag: enabled }, '*');
-  };
-
-  const publish = (): void => {
-    if (!runtime.alive()) return;
-    void loadSettings()
-      .then((s) => {
-        if (runtime.isDisposed()) return;
-        enabled = s.diagEnabled;
-        setDiagEnabled(s.diagEnabled);
-        setDiagLogEnabled(s.diagEnabled);
-        if (!s.diagEnabled) clearPending();
-        else {
-          diagLog('contentReady', { url: location.pathname });
-          // Armed, not just logged. This is the first event of every session and
-          // nothing else is guaranteed to report afterwards on an idle tab, so a
-          // bare diagLog here leaves the trace looking as if the content script
-          // never started.
-          armFlush();
-        }
-        window.postMessage({ __vpCtl: true, diag: s.diagEnabled }, '*');
-      })
-      .catch(() => {
-        enabled = false;
-        setDiagEnabled(false);
-        setDiagLogEnabled(false);
-        clearPending();
-      });
-  };
-
-  publish();
+  diagLog('contentReady', { url: location.pathname });
+  // Armed, not just logged. This is the first event of every session and nothing else
+  // is guaranteed to report afterwards on an idle tab, so a bare diagLog here leaves
+  // the trace looking as if the content script never started.
+  armFlush();
   // A page being unloaded is exactly when the last events matter (the navigation
   // that lost the capture), and the report timer would not fire again.
   window.addEventListener('pagehide', flush, { signal: runtime.signal });
-  // Named, not anonymous, so teardown can take it back. A torn-down channel that
-  // stays subscribed keeps calling publish() on every settings write, and a
-  // re-injected instance then has two of them racing on the same flag.
-  const onSettingsChanged = (changes: Record<string, chrome.storage.StorageChange>, area: string): void => {
-    if (area === 'local' && 'settings' in changes) publish();
-  };
-  try {
-    chrome.storage.onChanged.addListener(onSettingsChanged);
-  } catch {
-    /* context gone — the flag stays off */
-  }
-  runtime.onTeardown(() => {
-    clearPending();
-    try {
-      chrome.storage.onChanged.removeListener(onSettingsChanged);
-    } catch {
-      /* extension context already invalidated */
-    }
-  });
+  runtime.onTeardown(clearPending);
 
   return {
     report: (counters, events) => {
-      // window.postMessage is shared with the page. Never let a co-resident page script
-      // turn this opt-in maintenance channel on by forging hook messages.
-      if (!enabled) return;
+      // Everything here arrives on a window the page shares. With no switch left to
+      // forge, what a co-resident script can still do is post junk counters and events:
+      // bounded by the sanitizer's shape rules, then by this queue's ring, then by the
+      // worker observer's, then by the stored trace's caps — and it buys nothing outside
+      // diagnostics. Every one of those rings reports the gap it made.
       const clean = sanitizeDiagCounters(counters);
       // Sanitized HERE as well as in the worker: this is the boundary with the
       // page's own process, and the queue below must be bounded by shape before
@@ -162,10 +118,8 @@ export function setupDiagChannel(runtime: ContentRuntime): DiagChannel {
       armFlush();
     },
     note: (ev, data, lvl) => {
-      if (!enabled) return;
       diagLog(ev, data, lvl);
       armFlush();
     },
-    announce,
   };
 }

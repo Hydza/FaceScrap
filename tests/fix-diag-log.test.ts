@@ -18,13 +18,11 @@ import {
   DIAG_EVENT_MAX,
   diagLog,
   diagLogDrain,
-  diagLogEnabled,
   errorText,
   formatDiagEvent,
   redactUrl,
   sanitizeDiagEvents,
   setDiagContext,
-  setDiagLogEnabled,
   type DiagEvent,
 } from '../src/shared/diag-log';
 import {
@@ -73,18 +71,8 @@ test('falls back to the head of an unparseable URL, without its query', () => {
   assert.equal(redactUrl(42), '');
 });
 
-test('records nothing while diagnostics are off', () => {
-  setDiagLogEnabled(false);
-  setDiagContext('worker');
-
-  diagLog('graphql', { q: 'ReelsFeed' });
-
-  assert.equal(diagLogEnabled(), false);
-  assert.deepEqual(diagLogDrain(), []);
-});
-
 test('drains each event exactly once, stamped with its context', () => {
-  setDiagLogEnabled(true);
+  diagLogDrain();
   setDiagContext('hook');
 
   diagLog('graphql', { q: 'ReelsFeed', items: 12 });
@@ -98,7 +86,7 @@ test('drains each event exactly once, stamped with its context', () => {
 });
 
 test('reports the gap when the ring overflows instead of quietly narrowing the window', () => {
-  setDiagLogEnabled(true);
+  diagLogDrain();
   setDiagContext('worker');
 
   for (let i = 0; i < DIAG_EVENT_MAX + 5; i += 1) diagLog('net', { i });
@@ -110,16 +98,6 @@ test('reports the gap when the ring overflows instead of quietly narrowing the w
   // The SURVIVORS are the newest: an overflowing log is being read for what just
   // happened, not for what happened first.
   assert.deepEqual(events[1]!.data, { i: 5 });
-});
-
-test('turning diagnostics off discards what was recorded under an unknown flag', () => {
-  setDiagLogEnabled(true);
-  setDiagContext('worker');
-  diagLog('net', { url: 'x' });
-
-  setDiagLogEnabled(false);
-
-  assert.deepEqual(diagLogDrain(), []);
 });
 
 test('bounds an untrusted report by shape, context and size', () => {
@@ -167,10 +145,12 @@ test('keeps the newest events when the stored trace is over its count', () => {
 });
 
 test('keeps the stored trace under its byte cap even when the count is legal', () => {
-  // Under the count cap, but each event is near the per-event ceiling: the count
-  // bound alone would let this through and it would land on storage.local at
-  // roughly 900 KB, on a key space shared with the Saved ledger.
-  const fat: DiagEvent[] = Array.from({ length: 1_500 }, (_, i) => ({
+  // Exactly AT the count cap, with each event near the per-event ceiling: the count
+  // bound alone would let all of them through and they would land on storage.local at
+  // well over a megabyte. The byte cap is the only thing standing between that and a
+  // value that is re-read and re-written on every append for the life of the install —
+  // which is what the log now does, permanently, rather than for one debugging session.
+  const fat: DiagEvent[] = Array.from({ length: DIAG_LOG_MAX_EVENTS }, (_, i) => ({
     at: i,
     ctx: 'worker',
     ev: 'net',
@@ -181,7 +161,11 @@ test('keeps the stored trace under its byte cap even when the count is legal', (
 
   assert.ok(trimmed.length < fat.length, 'the byte cap has to bite before the count does');
   assert.ok(JSON.stringify(trimmed).length <= 700 * 1024);
-  assert.equal(trimmed[trimmed.length - 1]!.at, 1_499, 'and it drops the oldest, not the newest');
+  assert.equal(
+    trimmed[trimmed.length - 1]!.at,
+    DIAG_LOG_MAX_EVENTS - 1,
+    'and it drops the oldest, not the newest',
+  );
 });
 
 test('appends each context report to the stored trace instead of replacing it', async () => {
@@ -210,12 +194,10 @@ test('the worker observer coalesces renderer events into one write, stamped with
     },
     workerEvents: {
       drain: () => [{ at: 9, ctx: 'worker', ev: 'downloadFailed' }],
-      setEnabled: () => {},
     },
     schedule: () => 1,
     cancel: () => {},
   });
-  observer.setEnabled(true);
 
   observer.report(7, {}, [{ at: 1, ctx: 'hook', ev: 'graphql' }]);
   observer.report(8, {}, [{ at: 2, ctx: 'content', ev: 'domScan' }]);
@@ -231,23 +213,6 @@ test('the worker observer coalesces renderer events into one write, stamped with
       ['downloadFailed', undefined],
     ],
   );
-});
-
-test('the observer drops renderer events while diagnostics are disabled', async () => {
-  const writes: DiagEvent[][] = [];
-  const observer = createDiagObserver({
-    write: async () => {},
-    writeEvents: async (events) => {
-      writes.push(events);
-    },
-    schedule: () => 1,
-    cancel: () => {},
-  });
-
-  assert.equal(observer.report(1, {}, [{ at: 1, ctx: 'hook', ev: 'graphql' }]), false);
-  await observer.flush();
-
-  assert.deepEqual(writes, []);
 });
 
 test('formats an event as one greppable line', () => {
@@ -276,7 +241,6 @@ test('the observer names its own ring when a burst outruns the pending bound', (
     schedule: () => 1,
     cancel: () => {},
   });
-  observer.setEnabled(true);
 
   for (let i = 1; i <= 4; i += 1) observer.report(7, {}, [{ at: i, ctx: 'hook', ev: `e${i}` }]);
 

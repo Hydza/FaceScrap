@@ -6,7 +6,13 @@ import {
 } from '../shared/diag';
 import { createEventRing, sanitizeDiagEvents, type DiagEvent } from '../shared/diag-log';
 
-const DEFAULT_INTERVAL_MS = 1_500;
+/** How long renderer reports are coalesced before they reach storage. Raised from
+ *  1.5 s when the log became permanent: this interval IS the storage write rate, and
+ *  a read-modify-write of the whole stored trace every 1.5 s for the life of the
+ *  install is the one cost of always-on that no cap bounds. Five seconds still sits
+ *  well inside the ~30 s a service worker stays alive after the activity that produced
+ *  the events, so a flush is never left to a worker that has already been reaped. */
+const DEFAULT_INTERVAL_MS = 5_000;
 const DEFAULT_MAX_TABS = 128;
 const DEFAULT_MAX_COUNT = 1_000_000;
 /** Renderer events held between flushes. Coalescing at all is what keeps a scroll
@@ -22,15 +28,11 @@ interface DiagObserverOptions {
   /** Persist the coalesced event trace. Optional so a test can drive the counter
    *  half on its own; when absent, events are accepted and discarded. */
   writeEvents?: (events: DiagEvent[]) => Promise<void>;
-  /** diag-log.ts's ring for the context this observer runs in — its drain and its
-   *  flag travel together for exactly the reason workerCounters' do below. */
-  workerEvents?: { drain: () => DiagEvent[]; setEnabled: (enabled: boolean) => void };
-  /** diag.ts's counters for the context this observer runs in — drain and flag as ONE
-   *  option, so a caller cannot wire half of it. The two flags are easy to conflate:
-   *  `enabled` below decides whether renderer reports are persisted; `setEnabled` here
-   *  decides whether a diagBump raised in THIS context is counted at all. A drain
-   *  without its flag can only ever return nothing. */
-  workerCounters?: { drain: () => DiagCounters; setEnabled: (enabled: boolean) => void };
+  /** diag-log.ts's ring for the context this observer runs in, so the worker's own
+   *  trace joins the renderer write instead of causing a second one. */
+  workerEvents?: { drain: () => DiagEvent[] };
+  /** diag.ts's counters for the context this observer runs in, for the same reason. */
+  workerCounters?: { drain: () => DiagCounters };
   intervalMs?: number;
   maxTabs?: number;
   maxCountPerReason?: number;
@@ -41,7 +43,6 @@ interface DiagObserverOptions {
 }
 
 interface DiagObserver {
-  setEnabled(enabled: boolean): void;
   report(tabId: number, counters: unknown, events?: unknown): boolean;
   removeTab(tabId: number): void;
   flush(): Promise<void>;
@@ -69,7 +70,6 @@ export function createDiagObserver(options: DiagObserverOptions): DiagObserver {
   const cancel = options.cancel ?? ((handle) => clearTimeout(handle as ReturnType<typeof setTimeout>));
   const pending = new Map<number, DiagCounters>();
   const pendingEvents = createEventRing(maxEvents);
-  let enabled = false;
   let timer: TimerHandle | undefined;
   let flushChain = Promise.resolve();
 
@@ -80,7 +80,7 @@ export function createDiagObserver(options: DiagObserverOptions): DiagObserver {
   };
 
   const scheduleFlush = (): void => {
-    if (!enabled || timer !== undefined) return;
+    if (timer !== undefined) return;
     timer = schedule(() => {
       timer = undefined;
       void api.flush().catch((error) => options.onError?.(error));
@@ -95,13 +95,6 @@ export function createDiagObserver(options: DiagObserverOptions): DiagObserver {
 
   const flushOnce = async (): Promise<void> => {
     clearTimer();
-    if (!enabled) {
-      pending.clear();
-      pendingEvents.clear();
-      options.workerCounters?.drain();
-      options.workerEvents?.drain();
-      return;
-    }
 
     const aggregate: DiagCounters = {};
     for (const counters of pending.values()) addBounded(aggregate, counters, maxCount);
@@ -141,30 +134,17 @@ export function createDiagObserver(options: DiagObserverOptions): DiagObserver {
   };
 
   const api: DiagObserver = {
-    setEnabled(on): void {
-      // Only on a real change: setting the flag CLEARS the counters, and the worker calls
-      // this on every settings write, so re-asserting it would wipe the accumulated counts
-      // whenever an unrelated setting moved.
-      if (enabled !== on) {
-        options.workerCounters?.setEnabled(on);
-        options.workerEvents?.setEnabled(on);
-      }
-      enabled = on;
-      if (on) return;
-      clearTimer();
-      pending.clear();
-      pendingEvents.clear();
-      options.workerCounters?.drain();
-      options.workerEvents?.drain();
-    },
-
     report(tabId, counters, events): boolean {
-      if (!enabled || !Number.isInteger(tabId) || tabId < 0) return false;
+      if (!Number.isInteger(tabId) || tabId < 0) return false;
       const clean = sanitizeDiagCounters(counters);
       // Stamped with the tab they came from: the trace is read across tabs, and a
-      // renderer cannot name its own tab id (it has no way to know it).
-      const cleanEvents = sanitizeDiagEvents(events, maxEvents).map((event) => ({
+      // renderer cannot name its own tab id (it has no way to know it). The origin is
+      // stamped too, and NOT taken from the sender: `ctx` is one of a known set, so a
+      // forged report could otherwise arrive labelled `worker` and be read as ours.
+      // Everything reaching this function came from a renderer by definition.
+      const cleanEvents: DiagEvent[] = sanitizeDiagEvents(events, maxEvents).map((event) => ({
         ...event,
+        ctx: event.ctx === 'hook' ? 'hook' : 'content',
         data: { ...event.data, tab: tabId },
       }));
       if (Object.keys(clean).length === 0 && cleanEvents.length === 0) return false;

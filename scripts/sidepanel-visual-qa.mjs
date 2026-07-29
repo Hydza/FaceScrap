@@ -813,7 +813,6 @@ function buildFixture(now = Date.now()) {
       videosOnly: false,
       minResolution: 0,
       maxItems: 1500,
-      diagEnabled: false,
     },
   };
 }
@@ -2708,13 +2707,12 @@ async function exerciseSettingsControls(page) {
   return { name: 'settings-controls', checks, metrics, passed: Object.values(checks).every(Boolean) };
 }
 
-/** The diagnostics block: the switch, the counters, and the export.
+/** The diagnostics block: one button, and the recording behind it.
  *
- *  Written as a CLICK exercise for the reason the whole of exerciseSettingsControls
- *  exists: this harness seeds settings before startup, so a seeded value only ever
- *  proves the startup path. `diagEnabled` is read again by three other contexts
- *  (worker, content script, MAIN-world hook), which is precisely the kind of setting
- *  that can apply at boot and do nothing when pressed.
+ *  There is no switch to exercise any more. The log records permanently, so what this
+ *  phase has to prove moved: not that a setting applies when pressed, but that the
+ *  recording reaches storage with nobody having asked for it, and that the one control
+ *  left writes a report of it.
  *
  *  The export is intercepted rather than downloaded: the anchor's own click would
  *  write a real file into the machine's Downloads folder on every QA run. Reading
@@ -2726,46 +2724,33 @@ async function exerciseDiagnostics(page, facebookPage) {
   const checks = {};
   const metrics = {};
 
-  // Every assertion below has to cross a value DIFFERENT from the one already
-  // stored. clickAndSettle returns as soon as its expectation holds, so a click
-  // asserted against the value that was ALREADY there passes without waiting for
-  // the click at all — which is how the first draft of this phase "passed" while
-  // leaving the switch in the opposite state. Normalize to off without asserting,
-  // then assert each real transition.
-  if (await evaluate(page, `document.querySelector('#set-diag').checked`)) {
-    await evaluate(page, `document.querySelector('#set-diag').click()`);
-  }
-  await waitForEvaluation(
+  // There is no switch any more, so there is nothing to toggle and nothing to restore.
+  // What replaces those four checks is stronger: the card must offer ONE action and no
+  // control that changes a setting, because the recording is no longer optional.
+  const card = await evaluate(
     page,
-    `(async () => {
-      const stored = (await chrome.storage.local.get('settings')).settings ?? {};
-      return { ready: stored.diagEnabled !== true, stored };
+    `(() => {
+      const el = document.querySelector('#diag-export')?.closest('.set-card');
+      if (!el) return null;
+      return {
+        switches: el.querySelectorAll('input[type="checkbox"], .switch').length,
+        details: el.querySelectorAll('details').length,
+        buttons: [...el.querySelectorAll('button')].map((b) => b.id),
+      };
     })()`,
-    'diagnostics start from off',
   );
+  metrics.card = card;
+  checks['card:oneAction'] = card !== null && card.buttons.length === 1 && card.buttons[0] === 'diag-export';
+  checks['card:noSwitch'] = card !== null && card.switches === 0 && card.details === 0;
 
-  const on = await clickAndSettle(page, '#set-diag', 'stored.diagEnabled === true', 'diagnostics on');
-  checks['switch:on'] = on.stored.diagEnabled === true;
-  // The control has to agree with what was stored, or it is reporting a value that
-  // is not in force. reflectSettings() repaints this box after every settings
-  // write, so this also catches the repaint reverting the value that was just set.
-  checks['switch:onReflected'] = await evaluate(page, `document.querySelector('#set-diag').checked === true`);
-
-  const off = await clickAndSettle(page, '#set-diag', 'stored.diagEnabled === false', 'diagnostics off');
-  checks['switch:off'] = off.stored.diagEnabled === false;
-  checks['switch:offReflected'] = await evaluate(page, `document.querySelector('#set-diag').checked === false`);
-
-  // The whole point of the switch: with it on, the content script living in the
-  // OTHER tab has to start reporting. This is the only check here that crosses
-  // every hop — content script → worker → storage.local — and the only one that
-  // can fail while every UI check above passes.
+  // The only check here that crosses every hop — content script → worker →
+  // storage.local — and the only one that can fail while every UI check passes.
   //
-  // Nothing is seeded and no DOM is touched: turning the flag on is itself what
-  // the content script reports (`contentReady`), so this cannot contaminate the
-  // fixture the later phases still read. The trace is cleared first so what
-  // arrives can only be the result of THIS transition.
-  await evaluate(page, `chrome.storage.local.remove('diag_log')`);
-  await clickAndSettle(page, '#set-diag', 'stored.diagEnabled === true', 'diagnostics on again');
+  // It used to be driven by flipping the switch, which was also its trigger. With the
+  // log always recording there is no transition to make: the content script reports
+  // `contentReady` as it starts, so the evidence is already in the trace. Which is why
+  // nothing is cleared first — clearing would delete the very event being waited for,
+  // and it would never be emitted again for this document.
   const live = await waitForEvaluation(
     page,
     `(async () => {
@@ -2773,16 +2758,19 @@ async function exerciseDiagnostics(page, facebookPage) {
       const fromContent = log.filter((e) => e.ctx === 'content');
       return { ready: fromContent.length > 0, sample: fromContent[0] ?? null, total: log.length };
     })()`,
-    'the content script reports into the trace once diagnostics are switched on',
-    // content-diag batches for 1s, the worker's observer coalesces for another
-    // 1.5s, and both run behind a settings read. This is a real multi-hop wait.
-    20_000,
+    'the content script reports into the trace with no switch to turn on',
+    // content-diag coalesces for 5s and the worker's observer for another 5s. Always-on
+    // removed a settings read from this path but made both windows longer.
+    30_000,
   );
   metrics.liveEvent = live.sample;
   checks['chain:contentReported'] = live.sample?.ev === 'contentReady';
   // The worker stamps the tab: an event that reached storage without one never
   // went through the observer's report path.
   checks['chain:tabStamped'] = Number.isInteger(live.sample?.data?.tab);
+  // And the worker decides the origin rather than believing the sender, so a renderer
+  // event can never arrive labelled as the worker's own.
+  checks['chain:originStamped'] = live.sample?.ctx === 'content';
   // The synthetic Facebook page is the one that must have reported it.
   const facebookAlive = await evaluate(facebookPage, `document.readyState`);
   checks['chain:facebookPageAlive'] = typeof facebookAlive === 'string';
@@ -2802,53 +2790,38 @@ async function exerciseDiagnostics(page, facebookPage) {
     })()`,
   );
 
-  // Opening the section is what triggers its render — the counters are not read on
-  // every settings render.
-  await evaluate(page, `document.querySelector('#diag-details').open = true; document.querySelector('#diag-details').dispatchEvent(new Event('toggle'))`);
-  const rendered = await waitForEvaluation(
-    page,
-    `(() => {
-      const counters = document.querySelector('#diag-counters').textContent ?? '';
-      const events = document.querySelector('#diag-events').textContent ?? '';
-      return { ready: counters.includes('captureGraphql') && /3/.test(events), counters, events };
-    })()`,
-    'the diagnostics section renders its counters and event count',
-  );
-  metrics.counters = rendered.counters;
-  metrics.eventLine = rendered.events;
-  checks['render:counters'] = rendered.counters.includes('captureGraphql');
-  checks['render:eventCount'] = /\b3\b/.test(rendered.events);
-
-  // Two buttons where there was one, inside a 340px panel. Measured rather than
-  // eyeballed, and screenshotted so it CAN be eyeballed: the harness reaches no
-  // other part of this disclosure, so nothing else would catch the row overflowing.
+  // One button on a row it shares with its label, inside a 340px panel. Measured
+  // rather than eyeballed, and screenshotted so it CAN be eyeballed: nothing else in
+  // the harness would catch this row overflowing, and the Spanish label is the wider
+  // of the two.
   const layout = await evaluate(
     page,
     `(() => {
-      const actions = document.querySelector('.diagnostics .diag-actions');
-      const box = actions.getBoundingClientRect();
-      const buttons = [...actions.children].map((b) => Math.round(b.getBoundingClientRect().width));
+      const button = document.querySelector('#diag-export');
+      const row = button.closest('.set-row');
+      const rowBox = row.getBoundingClientRect();
+      const buttonBox = button.getBoundingClientRect();
       return {
-        overflows: actions.scrollWidth > actions.clientWidth + 1,
         documentOverflows: document.documentElement.scrollWidth > document.documentElement.clientWidth + 1,
-        width: Math.round(box.width),
-        buttons,
-        // How many lines they actually took. Language-dependent: the Spanish
-        // labels ("Exportar informe" + "Reiniciar contadores") are wider than the
-        // row, so they wrap — which is what flex-wrap is FOR. Asserting one row
-        // here would be asserting English.
-        rows: new Set([...actions.children].map((b) => Math.round(b.getBoundingClientRect().top))).size,
-        // What actually matters in both languages: no button is clipped.
-        allFit: [...actions.children].every((b) => b.getBoundingClientRect().width <= box.width + 1),
+        rowWidth: Math.round(rowBox.width),
+        buttonWidth: Math.round(buttonBox.width),
+        // Inside its row on both axes: a label long enough to wrap must push the
+        // button down, never clip it.
+        fits:
+          buttonBox.width <= rowBox.width + 1 &&
+          buttonBox.right <= rowBox.right + 1 &&
+          buttonBox.bottom <= rowBox.bottom + 1,
+        // Readable, not a sliver — a flex row can satisfy "fits" by collapsing it.
+        legible: buttonBox.width > 40 && buttonBox.height > 16,
       };
     })()`,
   );
   metrics.actionsLayout = layout;
-  checks['layout:noOverflow'] = layout.overflows === false && layout.documentOverflows === false;
-  checks['layout:allButtonsFit'] = layout.allFit === true;
+  checks['layout:noOverflow'] = layout.documentOverflows === false;
+  checks['layout:buttonFits'] = layout.fits === true && layout.legible === true;
   // The diagnostics card is the last thing on the Advanced page, well below the
   // fold at 340px — an un-scrolled screenshot frames the filename template instead.
-  await evaluate(page, `document.querySelector('.diagnostics')?.scrollIntoView({ block: 'end' })`);
+  await evaluate(page, `document.querySelector('#diag-export')?.closest('.set-card')?.scrollIntoView({ block: 'end' })`);
   await delay(120);
   const shot = await page.command('Page.captureScreenshot', { format: 'png', fromSurface: true, captureBeyondViewport: false });
   await writeFile(join(QA_DIR, 'settings-diagnostics.png'), Buffer.from(shot.data, 'base64'));
@@ -2884,33 +2857,27 @@ async function exerciseDiagnostics(page, facebookPage) {
   checks['export:filename'] = /^facescrap-diagnostics-[\d-]+\.json$/.test(report.name);
   checks['export:identity'] = parsed.report === 'facescrap-diagnostics';
   checks['export:counters'] = parsed.counters?.captureGraphql === 12;
-  checks['export:events'] = parsed.events?.length === 3 && parsed.eventCount === 3;
+  // CONTAINS the seeded three rather than equals: the log records permanently now, so
+  // the fixture tab's own events can land between the seed and the export. An exact
+  // count would turn that into a flake with no cause anyone could find.
+  const seededEvents = (parsed.events ?? []).filter((event) => seeded.some((s) => s.at === event.at));
+  checks['export:events'] =
+    seededEvents.length === seeded.length && parsed.eventCount === parsed.events?.length;
   // Both shapes ship: objects for a script, lines for a person.
-  checks['export:lines'] = Array.isArray(parsed.lines) && parsed.lines[0].includes('graphql');
-  // Settings ride along — half of what looks like a capture bug is a setting.
-  checks['export:settings'] = parsed.settings?.diagEnabled === true;
+  checks['export:lines'] = Array.isArray(parsed.lines) && parsed.lines.some((line) => line.includes('graphql'));
+  // Settings ride along — half of what looks like a capture bug is a setting. Asserted
+  // on a field the fixture sets AWAY from its default, so this cannot pass on a
+  // defaults object that never travelled.
+  checks['export:settings'] = parsed.settings?.confirmClear === true;
   checks['export:extension'] = typeof parsed.extension?.version === 'string';
   // Nothing signed may reach a file the user is about to hand to someone.
   checks['export:noSecrets'] = !/[?&](oh|oe|_nc_sid|_nc_ohc)=/.test(report.text);
 
-  // Reset gets the trace as well as the counters: leaving events behind after a
-  // "Reset counters" that emptied the box would misreport what is still stored.
-  await evaluate(page, `document.querySelector('#diag-reset').click()`);
-  const cleared = await waitForEvaluation(
-    page,
-    `(async () => {
-      const stored = await chrome.storage.local.get(['diag_log', 'diag_counters']);
-      return { ready: stored.diag_log === undefined && stored.diag_counters === undefined, stored };
-    })()`,
-    'reset clears both the counters and the trace',
-  );
-  checks['reset:both'] = cleared.ready;
-
-  // Back to the seeded state, so the settings screenshots taken later are of the
-  // fixture and not of this phase's leftovers: the switch off, and the disclosure
-  // this phase opened closed again.
-  await clickAndSettle(page, '#set-diag', 'stored.diagEnabled === false', 'diagnostics restored to off');
-  await evaluate(page, `document.querySelector('#diag-details').open = false`);
+  // Clear what THIS phase seeded, so the later screenshots are of the fixture rather
+  // than of these leftovers. Done through storage, not a button: the reset control is
+  // gone from Settings — a permanent recording makes a clean slate a maintenance
+  // action, and faceScrapDiag.reset() in the worker console is where it lives now.
+  await evaluate(page, `chrome.storage.local.remove(['diag_log', 'diag_counters'])`);
 
   return { name: 'diagnostics', checks, metrics, passed: Object.values(checks).every(Boolean) };
 }
@@ -5305,10 +5272,10 @@ async function main() {
     await browser.command('Target.activateTarget', { targetId: syntheticFacebook.target.id });
 
     // Before the quiesce below, which navigates the synthetic page to about:blank
-    // and takes its content script with it: this phase asserts that flipping the
-    // diagnostics switch makes that content script report, so it needs one alive.
-    // It restores the switch and the disclosure it opened, so the settings
-    // screenshots taken later see the state they were seeded with.
+    // and takes its content script with it: this phase asserts that the content
+    // script reports into the trace on its own, so it needs one alive. It clears the
+    // events it seeds, so the settings screenshots taken later see the state they
+    // were seeded with.
     await browser.command('Target.activateTarget', { targetId: target.targetId });
     const diagnosticsInteraction = await exerciseDiagnostics(page, facebookPage);
     evidence.interactionCaptures.push(diagnosticsInteraction);

@@ -119,14 +119,9 @@ export type MsgKey =
   | 'settingsClearList'
   | 'settingsClearHint'
   | 'settingsDiagnostics'
-  | 'settingsDiagEnabled'
+  | 'settingsDiagReport'
   | 'settingsDiagHint'
-  | 'diagShow'
-  | 'diagEmpty'
-  | 'diagReset'
   | 'diagExport'
-  | 'diagEventCount'
-  | 'diagEventCountOne'
   | 'clear'
   | 'qualityHighest'
   | 'qualityLowest'
@@ -374,14 +369,9 @@ const MESSAGES: Record<Lang, Record<MsgKey, string>> = {
     settingsClearList: 'Clear capture list',
     settingsClearHint: 'Empties Library only · Saved is not affected',
     settingsDiagnostics: 'Diagnostics',
-    settingsDiagEnabled: 'Record diagnostics',
-    settingsDiagHint: 'Reload Facebook to apply · nothing is uploaded',
-    diagShow: 'Show counters',
-    diagEmpty: 'Nothing recorded yet.',
-    diagReset: 'Reset counters',
+    settingsDiagReport: 'Diagnostic report',
+    settingsDiagHint: 'Always recording · saved locally, never uploaded',
     diagExport: 'Export report',
-    diagEventCount: '{n} events recorded',
-    diagEventCountOne: '1 event recorded',
     clear: 'Clear',
     qualityHighest: 'Highest',
     qualityLowest: 'Lowest',
@@ -616,14 +606,9 @@ const MESSAGES: Record<Lang, Record<MsgKey, string>> = {
     settingsClearList: 'Vaciar la lista de capturas',
     settingsClearHint: 'Vacía solo Biblioteca · Guardados no se modifica',
     settingsDiagnostics: 'Diagnóstico',
-    settingsDiagEnabled: 'Registrar diagnóstico',
-    settingsDiagHint: 'Recarga Facebook para aplicar · no se sube nada',
-    diagShow: 'Ver contadores',
-    diagEmpty: 'Nada registrado aún.',
-    diagReset: 'Reiniciar contadores',
+    settingsDiagReport: 'Informe de diagnóstico',
+    settingsDiagHint: 'Siempre activo · se guarda en local, nunca se sube',
     diagExport: 'Exportar informe',
-    diagEventCount: '{n} eventos registrados',
-    diagEventCountOne: '1 evento registrado',
     clear: 'Vaciar',
     qualityHighest: 'Mayor',
     qualityLowest: 'Menor',

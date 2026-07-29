@@ -78,7 +78,6 @@ test('names every settings control, whatever kind of control it is', () => {
     'set-videosonly',
     'set-maxitems',
     'set-confirmclear',
-    'set-diag',
     'set-keysenabled',
   ];
   for (const id of labelledInputs) {
@@ -138,7 +137,7 @@ test('keeps filter and settings values compatible with the runtime contracts', (
   );
   assert.equal(filterButtons.filter((tag) => attributes(tag).get('aria-pressed') === 'true').length, 1);
 
-  const checkboxes = ['set-subfolder', 'set-direct', 'set-confirmclear', 'set-videosonly', 'set-diag', 'set-keysenabled'];
+  const checkboxes = ['set-subfolder', 'set-direct', 'set-confirmclear', 'set-videosonly', 'set-keysenabled'];
   for (const id of checkboxes) assert.match(html, new RegExp(`<input\\b[^>]*id="${id}"[^>]*type="checkbox"`));
 
   // Same claim as when these were <option value>s: what the markup offers has to be what
@@ -162,6 +161,19 @@ test('keeps filter and settings values compatible with the runtime contracts', (
     const pressed = [...match.matchAll(/aria-pressed="true"/g)];
     assert.equal(pressed.length, 1, `${name} must open with exactly one value pressed`);
   }
+});
+
+// The diagnostics card used to be a switch, a disclosure, a counters box and two
+// buttons. It is one row now: the log records always, because having to turn it on and
+// reload Facebook meant the evidence was already gone by the time anyone did. What is
+// pinned is the consequence — one action on this screen, and no control that implies
+// the recording can be off.
+test('leaves the diagnostics card one action and no switch', () => {
+  const card = html.match(/data-i18n="settingsDiagnostics"[\s\S]*?<\/div>/)?.[0];
+  assert.ok(card, 'missing the diagnostics card');
+  assert.doesNotMatch(card!, /<input/, 'no form control belongs in this card any more');
+  assert.match(card!, /<button\b[^>]*id="diag-export"/);
+  assert.doesNotMatch(html, /id="diag-details"|id="diag-reset"|id="diag-counters"|id="diag-events"/);
 });
 
 test('exposes an accessible bilingual theme preference control', () => {

@@ -7,27 +7,17 @@ import {
   diagDrain,
   diagSnapshot,
   sanitizeDiagCounters,
-  setDiagEnabled,
 } from '../src/shared/diag';
 
 // The module keeps process-wide counters (one instance per bundled context in
-// production), so every test starts from a known-empty state. setDiagEnabled(false)
-// clearing the counters is what makes that possible — see the module for why.
+// production), so every test starts from a known-empty state. Draining is now the only
+// thing that empties them — there is no flag left whose clearing did it as a side effect.
 function reset(): void {
-  setDiagEnabled(false);
+  diagDrain();
 }
 
-test('counts nothing while disabled', () => {
+test('accumulates repeated bumps of the same reason', () => {
   reset();
-
-  diagBump('jsonLineTooLarge');
-
-  assert.deepEqual(diagSnapshot(), {});
-});
-
-test('accumulates repeated bumps of the same reason once enabled', () => {
-  reset();
-  setDiagEnabled(true);
 
   diagBump('jsonLineTooLarge');
   diagBump('jsonLineTooLarge');
@@ -38,21 +28,9 @@ test('accumulates repeated bumps of the same reason once enabled', () => {
 
 test('drains the counters and leaves them empty', () => {
   reset();
-  setDiagEnabled(true);
   diagBump('scanQueueEvicted', 3);
 
   assert.deepEqual(diagDrain(), { scanQueueEvicted: 3 });
-  assert.deepEqual(diagSnapshot(), {});
-});
-
-test('drops counters carried over from before the flag was confirmed', () => {
-  reset();
-  setDiagEnabled(true);
-  diagBump('scanQueueEvicted');
-
-  setDiagEnabled(false);
-  setDiagEnabled(true);
-
   assert.deepEqual(diagSnapshot(), {});
 });
 

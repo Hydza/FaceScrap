@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { DIAG_REASONS, diagBump, diagDrain, sanitizeDiagCounters, setDiagEnabled } from '../src/shared/diag';
+import { DIAG_REASONS, diagBump, diagDrain, sanitizeDiagCounters } from '../src/shared/diag';
 
 // B3 (foundations half): content.ts's mediaIngressBudget.tryTake() rejection
 // used to drop an already-sanitized batch with no matching DiagReason, so the
@@ -13,16 +13,15 @@ import { DIAG_REASONS, diagBump, diagDrain, sanitizeDiagCounters, setDiagEnabled
 // sanitizeDiagCounters's array-driven whitelist; an array-only entry never
 // type-checks at a diagBump call site).
 function reset(): void {
-  setDiagEnabled(false);
+  diagDrain();
 }
 
 test('mediaIngressRejected is a registered diag reason', () => {
   assert.ok(DIAG_REASONS.includes('mediaIngressRejected'));
 });
 
-test('mediaIngressRejected counts like any other reason once enabled', () => {
+test('mediaIngressRejected counts like any other reason', () => {
   reset();
-  setDiagEnabled(true);
 
   diagBump('mediaIngressRejected', 2);
   diagBump('mediaIngressRejected');

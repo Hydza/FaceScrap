@@ -1,4 +1,4 @@
-// Diagnostic counters (opt-in; see diag.ts for why they exist).
+// Diagnostic counters and event trace, persisted (see diag.ts for why they exist).
 //
 // storage.LOCAL, unlike every capture key: these answer "what has this install been
 // dropping?", a question asked across sessions. In storage.session the evidence would
@@ -30,8 +30,8 @@ export function trimDiagLog(events: DiagEvent[]): DiagEvent[] {
   // Serialize each event ONCE and drop from the front by subtraction. JSON.stringify over
   // an array is the sum of its elements plus one comma each and the two brackets, so the
   // running total is exact and the cap still means bytes. The old loop re-serialized the
-  // whole tail — up to 700 KB, and it had to build that string at least once per append
-  // even when there was nothing to trim.
+  // whole tail — the entire byte cap — and it had to build that string at least once per
+  // append even when there was nothing to trim.
   const sizes = out.map((event) => JSON.stringify(event).length);
   let total = 2;
   for (const size of sizes) total += size + 1;

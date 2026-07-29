@@ -250,21 +250,17 @@ export type RequestPlayingDownloadResponse = DownloadAck;
 
 /** service worker → offscreen: fetch and remux one (video, audio) track pair.
  *
- *  `diag` and the events on the way back exist because an offscreen document has
+ *  The events on the way back exist because an offscreen document has
  *  `chrome.runtime` and NOTHING else — `chrome.storage` is undefined in it, so it
- *  can neither read the diagnostics setting nor persist what it recorded. Reading
- *  the flag from the message it was already being sent, and handing its trace back
- *  in the answer it was already returning, keeps the whole thing on the one API
- *  that context actually has. */
+ *  cannot persist what it recorded. Handing its trace back in the answer it was
+ *  already returning keeps the whole thing on the one API that context has. */
 export interface MuxMsg {
   type: 'FACESCRAP_MUX';
   videoUrl: string;
   audioUrl: string;
-  /** Diagnostics are on: record a trace and return it below. */
-  diag?: boolean;
 }
 export type MuxResponse = ({ ok: true; blobUrl: string } | { ok: false; error: string }) & {
-  /** This job's trace. Present only when `diag` was set on the request. */
+  /** This job's trace, absent when it recorded nothing. */
   events?: DiagEvent[];
 };
 

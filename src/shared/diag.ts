@@ -1,12 +1,16 @@
-// Opt-in discard counters. Every capture path in this extension swallows its
+// Discard counters, always on. Every capture path in this extension swallows its
 // failures on purpose — the page hook must never break Facebook, so it is
 // wrapped in silent catches, and the queue/size caps drop whole GraphQL bodies
 // without a trace. That leaves no way to answer "why did this video never reach
 // the panel?", which is exactly the question maintenance keeps asking.
 //
+// They sat behind a switch until it became clear what that cost: turning it on
+// meant reloading Facebook AFTER something had already gone wrong, by which time
+// the evidence was gone. Counting is cheap; being off when it matters is not.
+//
 // No chrome.* here: this file is bundled into the MAIN-world page hook too, and
-// that context has no extension APIs. The flag arrives by message instead (see
-// content-diag.ts), and drained counts ride the same channel back out.
+// that context has no extension APIs. Drained counts ride the hook's own message
+// channel back out (see content-diag.ts).
 
 export type DiagReason =
   // --- discards: page hook (GraphQL capture) ---
@@ -104,24 +108,14 @@ export const DIAG_REASONS: readonly DiagReason[] = Object.keys(REASONS) as DiagR
 
 export type DiagCounters = Partial<Record<DiagReason, number>>;
 
-let enabled = false;
 const counters = new Map<DiagReason, number>();
 
-/** Turning diagnostics OFF also clears the counts. The flag reaches the page
- *  hook asynchronously, so anything counted before it was confirmed belongs to
- *  an unknown window and would silently skew the first report. */
-export function setDiagEnabled(on: boolean): void {
-  enabled = on;
-  counters.clear();
-}
-
-/** The enabled check lives HERE, not at the ~15 call sites, so instrumenting a
- *  new discard is a one-line edit. Call sites sit inside branches that are
- *  already rare (a catch, a size cap, an unparseable codec) — never in
- *  harvest()'s success path, which walks hundreds of thousands of nodes per
- *  reels-feed response. Disabled cost is one boolean compare. */
+/** What bounds this is the reason whitelist, not a flag: the map holds at most one
+ *  entry per DiagReason, so counting for the life of a context costs what counting
+ *  for a minute did. Call sites sit inside branches that are already rare (a catch,
+ *  a size cap, an unparseable codec) — never in harvest()'s success path, which
+ *  walks hundreds of thousands of nodes per reels-feed response. */
 export function diagBump(reason: DiagReason, n = 1): void {
-  if (!enabled) return;
   counters.set(reason, (counters.get(reason) ?? 0) + n);
 }
 

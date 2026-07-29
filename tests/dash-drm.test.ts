@@ -8,7 +8,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { fromMpdXml } from '../src/shared/dash';
-import { diagDrain, setDiagEnabled } from '../src/shared/diag';
+import { diagDrain } from '../src/shared/diag';
 
 const ENTITIES: Record<string, string> = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'" };
 const decode = (value: string): string =>
@@ -120,8 +120,6 @@ const AUDIO_SET = `<AdaptationSet mimeType="audio/mp4">${rep('codecs="mp4a.40.2"
 
 const mpd = (periodInner: string): string =>
   `<?xml version="1.0" encoding="UTF-8"?>\n<MPD mediaPresentationDuration="PT1M23S"><Period>${periodInner}</Period></MPD>`;
-
-setDiagEnabled(true);
 
 test('a clean MPD yields one pair per video representation, highest first', () => {
   diagDrain();

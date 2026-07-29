@@ -2,21 +2,19 @@
 //
 // The hook posts on the shared window, so `e.source === window` cannot prove the sender
 // is ours: a co-resident page script can forge every message below. Nothing here is
-// believed — items are sanitized and charged against an ingress budget, the diag flag is
-// answered from cache rather than re-read from storage, and the only side effect a
-// forged message can buy is work the page could already do to itself.
+// believed — items are sanitized and charged against an ingress budget, diagnostics are
+// re-sanitized and bounded by rings that report their own gaps, and the only side effect
+// a forged message can buy is work the page could already do to itself.
 
 import { diagBump } from '../shared/diag';
 import { MAX_ITEMS_PER_MESSAGE, mediaItemWeight, sanitizeIncomingItems, type MediaItem } from '../shared/media';
-import { createMediaIngressBudget, createNavIngressBudget } from './content-ingress-limits';
+import { createDiagIngressBudget, createMediaIngressBudget, createNavIngressBudget } from './content-ingress-limits';
 import { MEDIA_QUEUE_MAX_BYTES } from './content-media-relay';
 import type { ContentRuntime } from './content-runtime';
 
 interface PageHookDeps {
   relay: (items: MediaItem[]) => void;
   reportDiag: (counters: unknown, events?: unknown) => void;
-  /** Answer the hook's startup query from the cached flag. */
-  announceDiag: () => void;
   /** An SPA navigation: re-detect now instead of waiting for a poller tick. */
   onNavigation: () => void;
 }
@@ -24,21 +22,19 @@ interface PageHookDeps {
 export function setupPageHookIngress(runtime: ContentRuntime, deps: PageHookDeps): void {
   const mediaBudget = createMediaIngressBudget(performance.now());
   const navBudget = createNavIngressBudget(performance.now());
+  const diagBudget = createDiagIngressBudget(performance.now());
 
   window.addEventListener(
     'message',
     (e) => {
       if (e.source !== window) return;
       const data = e.data;
-      // Only `query` is honoured: `diag` on this channel is the hook reading its own
-      // announcement back, not a request.
-      if (data && data.__vpCtl === true && data.query === true) {
-        deps.announceDiag();
-        return;
-      }
       if (!data || data.__vpData !== true) return;
       if (data.diag !== undefined || data.log !== undefined) {
-        deps.reportDiag(data.diag, data.log);
+        // Charged like every other branch. Unbudgeted this was the one way in that a
+        // co-resident script could write to a store that now keeps its contents for
+        // good, so a forger could hold the ring full of its own events forever.
+        if (diagBudget.tryTake(1, 1, performance.now())) deps.reportDiag(data.diag, data.log);
         return;
       }
       if (data.nav === true) {

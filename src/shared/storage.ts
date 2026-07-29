@@ -9,16 +9,13 @@
 // panel reads back (last section of this file).
 //
 // Importing this module has effects. It reads Settings at evaluation and again on every
-// change, caching maxItems and setting this context's diag flag from diagEnabled — so
-// there is no inert import of this file. That is deliberate: every context that imports
-// storage.ts is one that can discard a capture, and the flag has to reach it without each
-// context remembering to ask for it.
+// change, caching maxItems — so there is no inert import of this file.
 //
 // Order here is dependency order: keys and readers first, then the retention rules that
 // classify against them, then the writers that hold the lanes, then media and bindings.
 
 import { createChainLock, keyedSerialQueue } from './async';
-import { diagBump, setDiagEnabled } from './diag';
+import { diagBump } from './diag';
 import {
   activeMediaIds,
   fbAssetKeys,
@@ -62,13 +59,10 @@ let maxItemsCache: number = DEFAULT_SETTINGS.maxItems;
 // partitionMediaForRetention's storage reads and O(n) scan. Never applied to the batch
 // that crosses the cap for the first time — that one still trims to exactly the cap.
 const MAX_ITEMS_HYSTERESIS = 50;
-// Rides the same settings read: this context's diag flag has to come from
-// somewhere, and every context that imports storage.ts is one that can discard.
 function refreshFromSettings(): void {
   loadSettings()
     .then((s) => {
       maxItemsCache = s.maxItems > 0 ? s.maxItems : Infinity;
-      setDiagEnabled(s.diagEnabled);
     })
     .catch(() => {});
 }

@@ -7,7 +7,6 @@
 
 import { createChainLock, withHeartbeat } from '../shared/async';
 import { hasOffscreen } from '../shared/capabilities';
-import { diagLogEnabled } from '../shared/diag-log';
 import { addDiagEvents } from '../shared/diag-store';
 import {
   MUX_HARD_CAP_MS,
@@ -283,13 +282,10 @@ async function runDownloadDash(
     let res: MuxResponse | undefined;
     try {
       const guarded = withHeartbeat(
-        // The flag rides along: the offscreen document cannot read settings for
-        // itself (no chrome.storage there — see offscreen.ts).
         chrome.runtime.sendMessage({
           type: 'FACESCRAP_MUX',
           videoUrl,
           audioUrl,
-          diag: diagLogEnabled(),
         } satisfies MuxMsg),
         MUX_IDLE_MS,
         MUX_HARD_CAP_MS,
@@ -303,7 +299,7 @@ async function runDownloadDash(
       }
       // Persisted here rather than by the sender, on BOTH outcomes: the trace of a
       // failed merge is the whole reason it is collected. addDiagEvents sanitizes
-      // and bounds; a no-op when the array is empty or diagnostics are off.
+      // and bounds; a no-op when the array is empty.
       if (res?.events != null) void addDiagEvents(res.events).catch(() => {});
     } catch (e) {
       // A timed-out mux may still be RUNNING over there: the guard only stops

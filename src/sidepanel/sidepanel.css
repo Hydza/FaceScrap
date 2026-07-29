@@ -1745,39 +1745,6 @@ p { margin: 0; }
 .key-cap.is-armed { color: var(--ach); border-color: var(--ac); }
 .key-cap.is-unbound { color: var(--ft); }
 
-.diagnostics summary { cursor: pointer; }
-/* Chromium wraps everything after <summary> in a UA ::details-content box, so this
-   row's column `gap` lands between the summary and that box and never between the
-   counters and the Reset button — measured 8px then 0px, which is the two of them
-   touching. The margins below space them instead: identical with or without that box,
-   so it holds on the Chrome 116 floor (where they ARE flex siblings) and on current
-   Chromium alike. Keeping the gap as well would give 16px in one of the two. */
-.diagnostics details.set-row.col { gap: 0; }
-.diagnostics #diag-counters {
-  width: 100%;
-  height: auto;
-  min-height: 44px;
-  margin: 8px 0 0;
-  padding: 8px;
-  color: var(--tx);
-  background: var(--fld);
-  border: 1px solid var(--ln);
-  border-radius: var(--r2);
-  font-family: var(--mono);
-  font-size: 11px;
-  line-height: 1.5;
-  white-space: pre-wrap;
-}
-.diagnostics #diag-events { margin: 6px 0 0; }
-/* align-self pins the row's width in the flex-sibling case too, where the outer row's
-   align-items: stretch would otherwise blow it to full width. */
-.diagnostics .diag-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  margin-top: 8px;
-  align-self: flex-start;
-}
 .settings-footer {
   margin-top: auto;
   padding: 18px 2px 14px;
