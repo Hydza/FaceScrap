@@ -3,7 +3,7 @@
 [English](README.md) · **Español (México)**
 
 <p align="center">
-  <img src="docs/banner.png" width="100%" alt="FaceScrap — guarda con un clic los reels, historias y destacadas de Facebook que puedes ver">
+  <img src="docs/banner-es.png" width="100%" alt="FaceScrap — guarda con un clic los reels, historias y destacadas de Facebook que puedes ver">
 </p>
 
 [![CI](https://github.com/Hydza/FaceScrap/actions/workflows/ci.yaml/badge.svg)](https://github.com/Hydza/FaceScrap/actions/workflows/ci.yaml)
@@ -13,22 +13,20 @@
 [![TypeScript](https://img.shields.io/badge/TypeScript-3178C6?logo=typescript&logoColor=white)](package.json)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-Guarda con un clic los **reels, historias y destacadas** de Facebook que puedes
-ver. Extensión de Chrome (Manifest V3, TypeScript). **Autoalojada** — la compilas
-o descomprimes y la cargas sin empaquetar; no está en la Chrome Web Store.
+FaceScrap es una extensión Manifest V3 de instalación manual para guardar reels,
+historias, destacadas y otros medios ya disponibles en tu sesión de Facebook.
+No incluye analítica ni un servicio propio; el procesamiento y las descargas
+permanecen en tu dispositivo.
 
-> ⚠️ Descarga solo contenido sobre el que tengas derechos (el tuyo, o con
-> permiso). Los Términos de Meta prohíben la descarga automatizada, por eso esto
-> **no puede publicarse** en la Chrome Web Store, y depende de detalles internos
-> de Facebook que cambian seguido (espera mantenimiento más o menos mensual —
-> vigila la página de [Releases](https://github.com/Hydza/FaceScrap/releases)
-> para las actualizaciones).
+> Usa FaceScrap únicamente con contenido propio o que tengas autorización para
+> descargar. FaceScrap es un proyecto independiente y no está afiliado ni
+> respaldado por Meta o Facebook. Los cambios de la plataforma pueden afectar la
+> captura; consulta la [versión más reciente](https://github.com/Hydza/FaceScrap/releases/latest)
+> antes de reportar un problema.
 
-> **Qué puede acceder.** Cargar FaceScrap le concede un content script en cada
-> página de `facebook.com` (`document_start`) y acceso de red a `facebook.com` y
-> `fbcdn.net`. Solo lee lo que esas páginas ya cargan, guarda las capturas en el
-> almacenamiento de sesión por pestaña, y no envía nada a ningún servidor propio.
-> Revisa [el código](src/) antes de instalar — de eso se trata autoalojar.
+**[Inicio rápido](#inicio-rápido) · [Privacidad](PRIVACY.es.md) ·
+[Arquitectura](ARCHITECTURE.md) · [Contribuir](CONTRIBUTING.es.md) ·
+[Seguridad](SECURITY.md) · [Cambios](CHANGELOG.md)**
 
 <p align="center">
   <img src="docs/now-es.png" width="190" alt="Vista Ahora de FaceScrap con un reel activo, sus chips de tipo y duración, la línea de formato sobre el medio y el selector de resolución">
@@ -38,15 +36,57 @@ o descomprimes y la cargas sin empaquetar; no está en la Chrome Web Store.
 </p>
 <p align="center"><i>Ahora · Biblioteca · Guardados · Ajustes</i></p>
 
+## Inicio rápido
+
+1. Descarga y extrae el ZIP de la
+   [versión más reciente](https://github.com/Hydza/FaceScrap/releases/latest), o
+   compílalo desde el código con `npm ci && npm run build`.
+2. Abre `chrome://extensions`, activa el **Modo de desarrollador** y elige
+   **Cargar sin empaquetar**.
+3. Selecciona la carpeta extraída o `dist/`, abre una pestaña de `facebook.com`
+   y pulsa el icono de FaceScrap en la barra.
+
+Las extensiones sin empaquetar no se actualizan automáticamente. Repite estos
+pasos cuando haya una versión nueva.
+
+## Funciones
+
+- Sigue el reel, historia, destacada, video o imagen visible en la pestaña activa.
+- Guarda medios progresivos directamente y combina pistas DASH compatibles de
+  video y audio sin recodificar.
+- Incluye las vistas Ahora, Biblioteca, Guardados y Ajustes con buscador en un
+  panel lateral persistente.
+- Ofrece interfaz en inglés y español, atajos, plantillas de nombre, selector de
+  calidad, diseños adaptables y temas claro/oscuro.
+- Mantiene las capturas, preferencias y diagnósticos dentro del perfil local del
+  navegador.
+
+## Privacidad y permisos
+
+| Acceso | Por qué lo necesita FaceScrap |
+|--------|--------------------------------|
+| `facebook.com` | Detectar medios visibles y leer respuestas que la página ya solicitó |
+| `fbcdn.net` | Identificar y descargar archivos y pistas DASH compatibles |
+| `storage` | Conservar capturas por pestaña, ajustes, estado guardado y diagnósticos limitados |
+| `downloads` | Guardar medios e informes de diagnóstico exportados |
+| `webRequest`, `webNavigation`, `scripting` | Observar solicitudes y mantener la captura activa durante la navegación |
+| `declarativeNetRequest` | Fijar el referente requerido en las descargas |
+| `offscreen`, `sidePanel` | Combinar pistas compatibles y mostrar la interfaz persistente |
+
+FaceScrap no opera un servidor ni sube los medios capturados. Los diagnósticos se
+guardan en `chrome.storage.local`, tienen límites y solo se exportan manualmente
+desde Ajustes → Avanzado. Consulta [Privacidad](PRIVACY.es.md) para conocer el
+tratamiento completo de datos.
+
 ## Cómo funciona
 
 1. Un **service worker** observa el tráfico de red hacia `*.fbcdn.net`
    (webRequest no bloqueante) y registra el contenido por pestaña en
    `chrome.storage.session`.
 2. Un **hook del mundo MAIN** (`page-hook.js`) lee de forma pasiva las respuestas
-   GraphQL que el propio Facebook pide (nunca reenvía las consultas `doc_id`, que
-   Meta rota cada 2–4 semanas) y extrae `playable_url` (video con audio) e
-   `image.uri`.
+   GraphQL que el propio Facebook solicita. Nunca reenvía consultas `doc_id`;
+   solo extrae campos como `playable_url` e `image.uri` de respuestas ya presentes
+   en la página.
 3. Un **content script** aislado escanea el DOM (`<video>`, `<img>`, poster) como
    respaldo y retransmite todo al service worker.
 4. El **panel lateral** presenta las capturas de la pestaña activa en tres vistas
@@ -103,7 +143,7 @@ solo archivo JSON los contadores y el registro, que están siempre activos
 | Reels/videos con un `playable_url` progresivo | 🟢 alta | MP4 con audio, descarga directa |
 | Videos **HD / solo DASH** (los de `blob:`) | 🟢 alta | Se reconstruyen combinando las pistas de video+audio (remux, **sin recodificar**) |
 | Historias / destacadas (imagen + video) | 🟡 media | Requieren tu sesión; las destacadas son más estables |
-| Videos con **DRM (Widevine)** | ⛔ no | Cifrados — imposible para cualquier extensión |
+| Videos con **DRM (Widevine)** | ⛔ sin soporte | Los medios cifrados quedan fuera del alcance de FaceScrap |
 | Videos muy largos (cientos de MB) | 🟡 media | El remux en memoria puede quedarse sin RAM |
 
 ### Cómo se descargan con audio los videos `blob:`
@@ -119,42 +159,68 @@ FaceScrap:
 3. **Las combina en un solo MP4** con el remuxer del repo (`src/shared/mp4-remux.ts`)
    — **sin recodificar, sin captura de pantalla**; `-shortest` recorta la unión a
    la pista más corta (por lo general milisegundos) para que el archivo nunca
-   termine en video congelado o silencio. El mismo enfoque que usa yt-dlp.
+   termine en video congelado o silencio.
 
 Las entradas `<ContentProtection>` (DRM) se detectan y descartan: no pueden
 descifrarse.
 
 ## Desarrollo
 
-`npm run dev` recompila al guardar, `npm run check` corre la verificación de tipos
-más la suite de pruebas, y `npm run build` produce el `dist/` cargable.
-`npm run package` recompila desde cero y escribe el `FaceScrap-vX.Y.Z.zip` que
-sirve la página de Releases.
+`npm run dev` recompila al guardar, `npm run check` ejecuta lint, verificación de
+tipos, un build limpio y la suite de pruebas, y `npm run build` produce el
+`dist/` cargable. `npm run package` ejecuta ese gate completo, recompila desde
+cero y escribe el `FaceScrap-vX.Y.Z.zip` que sirve la página de Releases.
 
 El QA visual público del panel lateral se ejecuta en un perfil temporal del
 navegador después de compilar:
 
 ```powershell
 npm run build
-npm run qa:sidepanel -- --browser=edge --lang=es --theme=light
+npm run qa:sidepanel -- --browser=cft --lang=es --theme=light
 ```
 
-`--browser` acepta `edge` (predeterminado) o `brave`; `--lang` acepta `en` o
-`es`; y `--theme` acepta `light` (predeterminado), `dark` o `auto`. El flujo
+`--browser` acepta `cft` (Chrome for Testing, predeterminado), `edge` o `brave`;
+`--lang` acepta `en` o `es`; y `--theme` acepta `light` (predeterminado), `dark`
+o `auto`. La versión fijada de Chrome for Testing se instala al primer uso y se
+guarda en caché fuera del repositorio; Edge y Brave usan sus rutas estándar de
+Windows. Chrome con marca se excluye de las pruebas automáticas porque las
+versiones actuales restringen la carga de extensiones sin empaquetar por línea
+de comandos. El flujo
 recorre claro → oscuro → automático mediante una página sintética de Facebook
 sin red, valida los anchos 300, 340 y 500 px, y restaura el tema solicitado y
-el ancho de 340 px antes de escribir las capturas y `artifacts/qa/evidence.json`.
+el ancho de 340 px antes de escribir las capturas y
+`artifacts/qa/<navegador>/<idioma>/<tema>/evidence.json`. `npm run qa:matrix`
+conserva por separado la matriz principal de navegador, idioma y tema.
 La comparación opcional contra un diseño local sigue disponible con
 `--reference ruta\al\archivo.html`.
 
-## Instalación
+Para una sesión autenticada de Facebook, conducida por una persona y con
+telemetría MV3 continua, ejecuta:
+
+```powershell
+npm run build
+npm run qa:live
+```
+
+Esto abre visiblemente la versión fijada de Chrome for Testing con `dist/` y
+un perfil temporal aislado. Inicia sesión, abre FaceScrap desde la barra y usa
+Facebook con normalidad; cerrar el navegador termina la sesión y elimina ese
+perfil. Las excepciones, errores de consola de la extensión, solicitudes
+fallidas de la extensión, ciclos de worker/offscreen/panel, diagnósticos
+internos y finalización de descargas se escriben en tiempo real en
+`artifacts/live-qa/<sesión>/events.jsonl`. Nunca se guardan cabeceras, cookies,
+cuerpos ni parámetros firmados de las URL. Usa `--browser=edge` o
+`--browser=brave` para compatibilidad, y
+`--url=https://www.facebook.com/...` para elegir la superficie inicial.
+
+## Instalación y actualización
 
 Consigue la carpeta de la extensión por cualquiera de las dos vías:
 
 - **Sin herramientas de compilación** — descarga `FaceScrap-vX.Y.Z.zip` desde
   [Releases](https://github.com/Hydza/FaceScrap/releases) y descomprímelo.
-- **Desde el código** — `npm install`, luego `npm run build`; la carpeta es
-  `dist/`.
+- **Desde el código** — instala Node 24.18 o posterior, ejecuta `npm ci` y luego
+  `npm run build`; la carpeta es `dist/`.
 
 Luego cárgala en Chrome:
 
@@ -168,6 +234,10 @@ Luego cárgala en Chrome:
    aparece en vivo. (El panel lateral permanece abierto mientras interactúas con
    la página, a diferencia de una ventana emergente.)
 
+Para actualizar una instalación sin empaquetar, sustituye la carpeta extraída
+por la versión nueva, vuelve a `chrome://extensions` y pulsa **Recargar** en
+FaceScrap.
+
 ## Estructura
 
 <p align="center">
@@ -180,18 +250,16 @@ reproducción, la configuración, i18n y los contratos de mensajes tipados.
 `rules/referer-rules.json` es una regla de declarativeNetRequest que fija el
 Referer en las solicitudes a fbcdn.
 
-> **Tamaño:** ~820 KB sin empaquetar, todo compilado desde `src/` — sin binarios
-> de terceros. La mezcla DASH es `src/shared/mp4-remux.ts`. Normal
-> para uso personal.
+> **Tamaño:** cerca de 820 KB sin empaquetar. La mezcla DASH está implementada
+> en `src/shared/mp4-remux.ts`; no se incluye un ejecutable como ffmpeg.
+> Manrope se distribuye bajo la OFL de `src/sidepanel/fonts/OFL.txt`.
 
 ## Diagnóstico
 
-Los internos de Facebook cambian, y aquí cada camino de captura se traga sus
-propios fallos a propósito: el hook de la página no puede romper la página en la
-que corre. Eso hace que «no se capturó nada» y «la página se rompió» se vean
-igual. El registro que los distingue anota siempre, y no puede ser de otra manera:
-era un interruptor, lo que obligaba a encenderlo y recargar Facebook después de que
-algo ya hubiera fallado, cuando la evidencia ya se había perdido.
+Los internos de Facebook cambian y cada camino de captura aísla sus fallos para
+que el hook no interrumpa la página. Los diagnósticos limitados conservan el
+contexto necesario para distinguir una captura omitida de un error de la página
+o de la extensión.
 
 Cada contexto anota lo que hizo: qué consulta GraphQL
 devolvió cuántos elementos y cuántos pares DASH (y cuál devolvió un error HTTP),
@@ -216,7 +284,7 @@ Lo que deliberadamente NO contiene:
 - **Ninguna subida, nunca.** El archivo se escribe en local y no va a ningún
   lado hasta que tú lo mandes.
 
-El registro está limitado a 1500 eventos y 256 KB, descartando primero los más
+El registro está limitado a 2,000 eventos y 700 KB, descartando primero los más
 viejos, y lo dice en el propio registro cuando descarta algo. Los mismos datos
 están en la consola del worker (`chrome://extensions` → Inspeccionar vistas:
 service worker) con `faceScrapDiag.dump()`, `faceScrapDiag.log()` y
@@ -246,3 +314,23 @@ Requiere Chromium **≥ 116** (`minimum_chrome_version`). En navegadores sin
 `chrome.sidePanel` el icono de la barra abre la misma interfaz como **ventana
 emergente**; sin `chrome.offscreen`, las descargas HD se guardan solo con video y
 se muestra un aviso.
+
+La compatibilidad fuera de Chrome es de mejor esfuerzo porque cada proveedor de
+Chromium expone estas APIs de forma distinta. Usa los comandos de QA anteriores
+cuando hagas cambios para varios navegadores.
+
+## Contribuir y obtener soporte
+
+Lee [CONTRIBUTING.es.md](CONTRIBUTING.es.md) antes de abrir un pull request. Los
+reportes deben incluir la versión del navegador, la superficie afectada de
+Facebook y, cuando exista, un informe de diagnóstico redactado. No adjuntes
+cookies, cuerpos de respuesta, URL firmadas ni medios personales.
+
+Para vulnerabilidades privadas, sigue [SECURITY.md](SECURITY.md). El
+comportamiento general y el tratamiento de datos están descritos en
+[PRIVACY.es.md](PRIVACY.es.md).
+
+## Licencia
+
+FaceScrap se publica bajo la [Licencia MIT](LICENSE). La fuente Manrope incluida
+conserva su [atribución OFL](src/sidepanel/fonts/OFL.txt) separada.

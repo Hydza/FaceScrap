@@ -7,7 +7,7 @@ import { withTimeout } from '../shared/async';
 import { createAckedLatest, type AckedLatestOutcome } from '../shared/acked-latest';
 import type { FacebookThemeAck, FacebookThemeMsg } from '../shared/messages';
 import { inferFacebookTheme } from '../shared/theme';
-import { createFrameCoalescer } from './detection-frame';
+import { createWindowFrameCoalescer } from './detection-frame';
 import type { ContentRuntime } from './content-runtime';
 
 const THEME_ACK_TIMEOUT_MS = 5_000;
@@ -101,14 +101,7 @@ export function setupThemeSignal(runtime: ContentRuntime, usesAnimation: boolean
     void delivery.pump(deliver);
   };
 
-  const frame = createFrameCoalescer(
-    detect,
-    (callback) => (usesAnimation ? window.requestAnimationFrame(callback) : window.setTimeout(callback, 0)),
-    (handle) => {
-      if (usesAnimation && typeof window.cancelAnimationFrame === 'function') window.cancelAnimationFrame(handle);
-      else clearTimeout(handle);
-    },
-  );
+  const frame = createWindowFrameCoalescer(detect, usesAnimation);
 
   const schedule = (): void => {
     if (runtime.isDisposed()) return;
@@ -165,7 +158,7 @@ export function setupThemeSignal(runtime: ContentRuntime, usesAnimation: boolean
           mediaQuery.removeListener(mediaQueryListener);
         }
       } catch {
-        /* legacy or detached MediaQueryList */
+        /* an incompatible or detached MediaQueryList */
       }
     }
   });

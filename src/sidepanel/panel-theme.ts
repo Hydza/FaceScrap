@@ -20,7 +20,7 @@ let systemThemeQuery: MediaQueryList | undefined;
 let revisionCounter = 0;
 
 function getSystemTheme(): EffectiveTheme {
-  // Keep the established dark appearance on stripped/older Chromium forks where
+  // Keep the dark appearance on Chromium forks where
   // matchMedia is unavailable. Manual light/dark still resolves above it.
   return systemThemeQuery == null || systemThemeQuery.matches ? 'dark' : 'light';
 }

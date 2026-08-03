@@ -31,3 +31,14 @@ export function createFrameCoalescer(
     },
   };
 }
+
+export function createWindowFrameCoalescer(run: () => void, usesAnimation: boolean): FrameCoalescer {
+  return createFrameCoalescer(
+    run,
+    (callback) => (usesAnimation ? window.requestAnimationFrame(callback) : window.setTimeout(callback, 0)),
+    (handle) => {
+      if (usesAnimation && typeof window.cancelAnimationFrame === 'function') window.cancelAnimationFrame(handle);
+      else clearTimeout(handle);
+    },
+  );
+}

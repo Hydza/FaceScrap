@@ -1,6 +1,4 @@
-// Regression tests for the UI/design audit pass. One test per fix, all of them
-// static assertions over the source: these are CSS/HTML/token invariants and
-// copy contracts, which the DOM-less unit suite can pin without a browser.
+// Pin CSS, HTML, token, and copy invariants that do not require a browser.
 
 import assert from 'node:assert/strict';
 import { readdirSync, readFileSync, statSync } from 'node:fs';
@@ -9,8 +7,7 @@ import test from 'node:test';
 
 import { panelSource } from './panel-source';
 
-/** Every .ts/.html under a directory. Used instead of a hand-listed set of paths so a new
- *  module that renders copy is covered the day it is written. */
+/** Collect every .ts/.html file so new copy-rendering modules are covered automatically. */
 function sourceFiles(dir: string, out: string[] = []): string[] {
   for (const entry of readdirSync(dir)) {
     const full = join(dir, entry);
@@ -74,9 +71,7 @@ function token(selector: string, name: string): string {
   return value;
 }
 
-// Every surface used to style its scrollbar differently: .grid and .now painted a
-// visible 10px thumb while .settings-body hid its own, so the bar appeared on two
-// tabs out of four. Scrollbars are now invisible everywhere.
+// Apply one hidden-scrollbar rule to every scrolling container.
 test('hides the scrollbar on every container that scrolls, with one rule', () => {
   const scrollers = [...css.matchAll(/^(\.[\w-]+)[^{]*\{[^}]*overflow:[^;]*auto[^;]*;/gms)].map((m) => m[1]!);
   assert.deepEqual(
@@ -98,9 +93,7 @@ test('hides the scrollbar on every container that scrolls, with one rule', () =>
   assert.doesNotMatch(css, /--scroll-thumb/, 'the thumb tokens are dead once nothing paints a thumb');
 });
 
-// The resolution control used to go DISABLED with a single representation, and forced
-// --media-text (pinned white for overlay chips) over a light field — white on white.
-// The trigger it became still goes inert, so it still has to read with panel tokens.
+// Keep disabled resolution text readable with panel theme tokens.
 test('paints the inert resolution trigger with a theme-aware colour', () => {
   const trigger = block('.picker-trigger');
   assert.match(trigger, /color:\s*var\(--tx\)/);
@@ -115,19 +108,13 @@ test('paints the inert resolution trigger with a theme-aware colour', () => {
   }
 });
 
-// play.svg already centres its own triangle (box at x 9-17 of a 24 viewBox) and
-// both call sites centre the file again, so an extra margin only pushed Now
-// Playing's play glyph off-centre relative to the grid thumbnails'.
+// Do not offset the centered play glyph at either call site.
 test('centres the play glyph identically in Now Playing and the grid', () => {
   assert.doesNotMatch(block('.preview-play::before'), /margin/, 'no nudge margin on an already-centred mask');
   assert.match(block('.tile-thumb.is-video::after'), /background-position:\s*center/);
 });
 
-// The handoff draws the corner controls at 22px and the text buttons at 3px of padding
-// around an 11px/1.4 line box — 22px and 21.4px, both a little under the 24px WCAG 2.5.8
-// target minimum. Both are shipped as drawn, so the numbers are pinned HERE rather than
-// silently accepted: a regression that shrinks them further fails, and the tile itself
-// remains the real target for the one gesture the grid has.
+// Enforce the intended control and tile target sizes.
 test('pins the handoff’s target sizes, and what the grid actually aims at', () => {
   assert.doesNotMatch(css, /\.pick::after/, 'no hit outset — the design draws a flat 22px dot');
   for (const selector of ['.pick', '.tile-reveal']) {
@@ -149,23 +136,20 @@ test('pins the handoff’s target sizes, and what the grid actually aims at', ()
   assert.match(css, /\.tile\s*\{[^}]*cursor:\s*pointer/s);
 });
 
-// The grid has ONE verb. Selecting raises the tray, and the tray is what downloads —
-// so a per-tile download button was removed with the redesign rather than kept beside
-// a dot it would compete with. The keyboard binding is unchanged and still per-tile.
+// The grid selects items and the tray handles pointer downloads; keyboard download
+// remains available per tile.
 test('the grid tile does one thing, and the tray does the other', () => {
   assert.doesNotMatch(css, /\.tile-dl/, 'the per-tile download button is gone');
   assert.doesNotMatch(panel, /tile-dl/);
-  // Nothing lost: the cursor binding downloads the tile under it without the tray.
+  // The cursor binding downloads the focused tile without the tray.
   assert.match(panel, /case 'downloadCard':/);
   assert.match(panel, /void downloadCard\(cursorCard\.id, cursorCard\.target\)/);
-  // And the tray's own button is the mouse route.
+  // The tray button is the pointer route.
   assert.match(html, /id="bulk-dl" class="btn-accent"/);
 });
 
-// The 3-up metrics card is gone: it spent 66px of chrome restating facts the screen
-// already carried. Each fact now appears exactly once — the duration on its chip, the
-// container on the overlay line, the resolution in the picker — which is the rule that
-// replaced it and the one worth pinning.
+// Keep each media fact in one location: duration chip, container overlay, and
+// resolution picker.
 test('states each media fact exactly once across the Now Playing screen', () => {
   assert.doesNotMatch(html, /id="metrics"/, 'the metrics card is gone');
   assert.doesNotMatch(css, /\.metrics\b/);
@@ -181,8 +165,8 @@ test('states each media fact exactly once across the Now Playing screen', () => 
   assert.match(panel, /quality\.hidden = now\.kind !== 'video'/);
 });
 
-// A container that gets replaced wholesale is the wrong live region: every render
-// re-read the whole grid, including the two renders one download triggers.
+// Keep live status outside the grid that is rerendered wholesale to avoid
+// re-announcing every render.
 test('announces the grid through the count, not by re-reading every tile', () => {
   assert.match(html, /<main id="list" class="grid"><\/main>/, '#list must not be a live region');
   assert.match(html, /id="grid-count"[^>]*role="status"/);
@@ -200,7 +184,7 @@ test('keeps the audited field-text pairs at WCAG AA', () => {
       assert.ok(ratio >= 4.5, `${selector} ${name}/fld is ${ratio.toFixed(2)}`);
     }
   }
-  // The version line must not re-dim --ft back below the threshold.
+  // Keep the version line above the contrast threshold.
   assert.doesNotMatch(block('.settings-version'), /opacity/);
 });
 
@@ -246,14 +230,10 @@ test('localises every download failure reason and the startup failure', () => {
   assert.doesNotMatch(panel, /FaceScrap couldn't start/, 'the fatal message must come from i18n');
 });
 
-// nowLive shipped in both dictionaries and was never read.
 test('carries no unused message keys', () => {
   const declared = [...i18n.matchAll(/^\s+\| '(\w+)'/gm)].map((m) => m[1]!);
   assert.ok(declared.length > 100, 'MsgKey parse looks wrong');
-  // Every file under src/, not a hand-listed subset. The list this replaced named three
-  // paths and went stale the moment a fourth module started holding message keys — the
-  // accent palette, whose swatches have no text and carry their label as data. A key used
-  // only there read as dead, which is the opposite of what this test is for.
+  // Scan every source file so keys used outside the panel are retained.
   const sources = sourceFiles(join(process.cwd(), 'src'))
     .filter((file) => !file.endsWith(`shared${sep}i18n.ts`))
     .map((file) => readFileSync(file, 'utf8'))
@@ -262,14 +242,8 @@ test('carries no unused message keys', () => {
   assert.deepEqual(unused, [], `unused message keys: ${unused.join(', ')}`);
 });
 
-// The stylesheet was written in two layers — a base section and a redesign section
-// that overrode it — leaving 45 declarations permanently dead. They rendered
-// correctly (identical selector, so the later one wins) and read wrong: .now
-// declared its padding twice, 4px apart, and reading the first block is how a stale
-// 12px went unnoticed through a whole design audit. Flattened, and now pinned.
-//
-// Grouped blocks (`a, b { }`) are excluded on purpose: a declaration there can be
-// dead for one selector and load-bearing for the other.
+// Reject duplicate properties per selector outside media queries.
+// Exclude grouped selectors because their declarations may apply unevenly.
 test('declares each property once per selector, outside media queries', () => {
   const base = withoutMediaQueries(css);
   const blocks = new Map<string, Array<Map<string, string>>>();
@@ -303,10 +277,7 @@ test('declares each property once per selector, outside media queries', () => {
   assert.deepEqual(collisions, [], `dead declarations:\n${collisions.join('\n')}`);
 });
 
-// The audit that removed --scroll-thumb named that token by hand and left three
-// more behind (--accent-wash, --media-overlay, --media-line; the last survived
-// because --media-overlay-soft IS used and the two read alike). Check the property
-// mechanically instead, so the next one cannot hide.
+// Detect unused CSS custom properties mechanically, including similarly named tokens.
 test('defines no custom property that nothing reads', () => {
   const defined = new Set([...css.matchAll(/^\s*(--[\w-]+):/gm)].map((m) => m[1]!));
   const read = new Set([...css.matchAll(/var\((--[\w-]+)/g)].map((m) => m[1]!));
@@ -314,10 +285,7 @@ test('defines no custom property that nothing reads', () => {
   assert.deepEqual(unused, [], `unused custom properties: ${unused.join(', ')}`);
 });
 
-// Now Playing sat tight against the app header and its count hung off the right
-// edge, so it read as a different screen from Library and Saved. Four measured
-// differences, all of them between VIEWS — nothing but a cross-view comparison can
-// see them, which is why they are pinned here rather than left to a screenshot.
+// Pin shared baseline geometry across Now Playing, Library, and Saved.
 test('opens Now Playing on the same grid as the other views', () => {
   // Responsive overrides are stripped first — they retune every view together and are
   // not the baseline.
@@ -328,8 +296,7 @@ test('opens Now Playing on the same grid as the other views', () => {
       .map((m) => m[1]!.match(pattern)?.[1])
       .filter((value): value is string => value != null);
     assert.ok(declared.length > 0, `${selector} must declare a horizontal padding`);
-    // The CASCADE winner, not the first block: reading the wrong one is how a stale
-    // value once sat there unnoticed through a whole design audit.
+    // Read the cascade winner rather than the first matching block.
     return declared[declared.length - 1]!;
   };
   // 1. One horizontal inset for every view, so the heading, the media frame, the tiles
@@ -356,10 +323,7 @@ test('opens Now Playing on the same grid as the other views', () => {
   assert.match(html, /<span class="head-note" data-i18n="settingsAutosave"/);
 });
 
-// The note beside the Settings heading is a lowercase aside in the design — "saved as
-// you go" — sharing a baseline with a 19px title, not a sentence. What broke before was
-// the two languages disagreeing about which it was: English a full sentence, Spanish a
-// fragment. So what is pinned is that they MATCH in register, not which one they pick.
+// Keep the Settings aside short, lowercase, and consistent in register across locales.
 test('writes the settings autosave note in the same register in both languages', () => {
   const notes = [...i18n.matchAll(/^\s+settingsAutosave: '([^']+)'/gm)].map((m) => m[1]!);
   assert.equal(notes.length, 2);

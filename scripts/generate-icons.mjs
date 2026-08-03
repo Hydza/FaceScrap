@@ -1,36 +1,13 @@
-// Generates real PNG icon files (16/48/128px) with zero dependencies.
-// A hand-rolled PNG encoder (RGBA) using Node's built-in zlib.
-//
-// Draws the FaceScrap mark: a rounded tile carrying the brand blue gradient, a
-// warm sun disc, and a white stroked photo frame with its mountain diagonal.
-// Every number and colour is parsed out of the side-panel SVG, which the panel
-// header renders directly — so the toolbar PNGs and the panel brand really do
-// come from one source, and this script fails loudly rather than silently
-// drifting if that SVG's shape changes.
+// Generates toolbar icons from the side-panel logo.
 
 import { deflateSync } from 'node:zlib';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { crc32 } from './crc32.mjs';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const OUT_DIR = join(ROOT, 'icons');
-
-const CRC_TABLE = (() => {
-  const t = new Uint32Array(256);
-  for (let n = 0; n < 256; n++) {
-    let c = n;
-    for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
-    t[n] = c >>> 0;
-  }
-  return t;
-})();
-
-function crc32(buf) {
-  let c = 0xffffffff;
-  for (let i = 0; i < buf.length; i++) c = CRC_TABLE[(c ^ buf[i]) & 0xff] ^ (c >>> 8);
-  return (c ^ 0xffffffff) >>> 0;
-}
 
 function chunk(type, data) {
   const typeBuf = Buffer.from(type, 'ascii');
@@ -63,15 +40,12 @@ function encodePNG(size, pixel) {
   return Buffer.concat([
     sig,
     chunk('IHDR', ihdr),
-    // Level pinned: this writes into the TRACKED icons/ directory from inside
-    // `npm run build`, so the byte output has to be a function of the input
-    // alone. zlib's default level is a runtime choice, not a promise.
+    // Pin compression so tracked icon bytes remain deterministic.
     chunk('IDAT', deflateSync(raw, { level: 9 })),
     chunk('IEND', Buffer.alloc(0)),
   ]);
 }
 
-// ── Parse the external 32×32 mark shipped with the side panel ───────────────
 const svg = readFileSync(join(ROOT, 'src', 'sidepanel', 'icons', 'logo.svg'), 'utf8');
 
 function fail(what) {
@@ -84,8 +58,7 @@ function hexToRgb(hex) {
   return [(n >> 16) & 0xff, (n >> 8) & 0xff, n & 0xff];
 }
 
-// The tile's gradient axis. y1 is negative (the CSS gradient line overhangs the
-// box), so the number pattern has to accept a leading minus.
+// Accept a negative gradient origin.
 const gradTag =
   svg.match(/<linearGradient id="tile" x1="(-?[\d.]+)" y1="(-?[\d.]+)" x2="(-?[\d.]+)" y2="(-?[\d.]+)"/) ??
   fail('tile gradient axis');
@@ -100,8 +73,7 @@ const tileTag =
 const [tileW, tileH, tileR] = tileTag.slice(1, 4).map(Number);
 const TILE = { cx: tileW / 2, cy: tileH / 2, hx: tileW / 2, hy: tileH / 2, r: tileR };
 
-// The sun is a filled disc, not a stroked ring: at 16px a ring's hole closes up
-// and the glyph reads as a smudge.
+// Keep the sun filled so it remains legible at 16px.
 const sunTag =
   svg.match(/<circle cx="([\d.]+)" cy="([\d.]+)" r="([\d.]+)" fill="(#[0-9A-Fa-f]{6})"\s*\/>/) ?? fail('sun disc');
 const SUN = { cx: Number(sunTag[1]), cy: Number(sunTag[2]), r: Number(sunTag[3]), rgb: hexToRgb(sunTag[4]) };
@@ -117,7 +89,7 @@ const frameTag =
 const [fx, fy, fw, fh, fr] = frameTag.slice(1, 6).map(Number);
 const FRAME = { cx: fx + fw / 2, cy: fy + fh / 2, hx: fw / 2, hy: fh / 2, r: fr };
 
-// Absolute "M x y L x y L x y" only — a relative `l` would silently parse wrong.
+// Accept only the absolute path syntax used by the logo.
 const pathTag =
   svg.match(/<path d="M([\d.]+) ([\d.]+) L([\d.]+) ([\d.]+) L([\d.]+) ([\d.]+)"\s*\/>/) ?? fail('mountain polyline');
 const POLY = [
@@ -142,10 +114,7 @@ function segmentDistance(px, py, ax, ay, bx, by) {
   return Math.hypot(px - (ax + t * abx), py - (ay + t * aby));
 }
 
-// Distance to the polyline. This is all the SVG's stroke-linecap/linejoin="round"
-// needs: clamping t to [0,1] rounds each segment's ends, so thresholding the
-// distance yields round caps, and taking the MINIMUM across segments rounds the
-// joint between them. No mitre geometry required.
+// Clamped segment distances reproduce round caps and joins.
 function polylineDistance(px, py, pts) {
   let d = Infinity;
   for (let i = 0; i < pts.length - 1; i++) {
@@ -154,9 +123,7 @@ function polylineDistance(px, py, pts) {
   return d;
 }
 
-// Project onto the gradient axis, clamp, and mix in sRGB — which is what a
-// browser does for a linear-gradient with no interpolation hint, so the PNG
-// matches the panel header rendering the same SVG.
+// Match the browser's default sRGB gradient interpolation.
 function gradientAt(u, v) {
   const dx = GRAD.x2 - GRAD.x1;
   const dy = GRAD.y2 - GRAD.y1;
@@ -182,15 +149,7 @@ function sample(px, py, size) {
   return markColor((px / size) * 32, (py / size) * 32);
 }
 
-// 8×8 supersampling. 4×4 was enough for the old flat-filled mark, but the glyph's
-// stroke is ~1.1 units of 32 — at 16px that is barely half a pixel wide, and the
-// coarser grid left the thin diagonal visibly ragged.
-//
-// Averaging only the samples that landed on the mark, and taking coverage as the
-// alpha, is correct here: alpha is below 255 only along the tile's own rounded
-// edge, and every sample there is pure tile gradient. The glyph never sits over
-// transparency, so its white is always mixed against tile pixels, never against
-// an undefined background.
+// Use 8×8 supersampling to keep the thin diagonal smooth at 16px.
 function pixel(x, y, size) {
   const SS = 8;
   let r = 0, g = 0, b = 0, hits = 0;

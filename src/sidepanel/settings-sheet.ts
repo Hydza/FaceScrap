@@ -70,8 +70,7 @@ function showPage(name: string): void {
 
 // ── Search ────────────────────────────────────────────────────────────────────
 
-/** Accents folded on BOTH sides: the Spanish copy carries them and a typed query usually
- *  does not, so "resolucion" has to find "Resolución mínima". */
+/** Fold accents in both indexed copy and typed queries for accent-insensitive search. */
 function fold(text: string): string {
   return text.normalize('NFD').replace(/\p{Diacritic}/gu, '').toLowerCase();
 }
@@ -133,10 +132,7 @@ function segment(name: string): HTMLElement | undefined {
   return document.querySelector<HTMLElement>(`.seg[data-seg="${name}"]`) ?? undefined;
 }
 
-/** Press the button that matches the stored value. Nothing is pressed when the stored value
- *  has no button — which cannot happen through the UI, but a hand-edited store can hold a
- *  minResolution of 480 that this group no longer offers, and a lit button claiming
- *  otherwise would be a lie. */
+/** Press the stored option, or leave the group unpressed when no option matches. */
 function reflectSegment(name: string, value: string): void {
   const group = segment(name);
   const button = group?.querySelector<HTMLButtonElement>(`[data-value="${value}"]`);
@@ -170,8 +166,7 @@ let keysPainted = '';
 /** Built from ACCENTS and PANEL_TINTS rather than written out in the markup, so each
  *  palette has one source and a swatch can never paint a colour the schema would reject. */
 function renderSwatches(accent: AccentId, tint: PanelTintId): void {
-  // The language is part of the key: the memoized nodes carry t() text, so a repaint
-  // skipped because the accent did not change would leave 23 aria-labels in the old one.
+  // Include the language because the memoized nodes contain translated labels.
   const accentKey = `${getLang()}|${accent}`;
   if (accentPainted !== accentKey) {
     accentPainted = accentKey;
@@ -534,19 +529,10 @@ export function toggleSettingsSheet(): void {
 
 // ── Diagnostics ───────────────────────────────────────────────────────────────
 //
-// One action, and it is the file. The counters box, its disclosure and the reset
-// button are gone with the switch that made them a live readout: nothing on this
-// screen has to be watched any more, because nothing has to be turned on first. The
-// counters themselves are unchanged and ride inside the export below.
+// The export contains counters, traced events and relevant settings.
 
-/** Everything a maintainer needs to read a bug report, in one file.
- *
- *  Deliberately NOT uploaded anywhere: it is written to the user's Downloads
- *  folder, and they decide who sees it. It carries no fbcdn tokens (redactUrl
- *  strips them where each event is recorded, in diag-log.ts) and no response
- *  bodies — only sizes, query names and outcomes — so it can be read before it is
- *  shared. Settings ride along because half of what looks like a capture bug is a
- *  setting: videosOnly, minResolution, directDownload. */
+/** Build a local diagnostics report. It contains no fbcdn tokens or response bodies,
+ *  and it is never uploaded automatically. Settings provide capture context. */
 async function buildDiagReport(settings: Settings): Promise<string> {
   // The panel's own events have nowhere else to go: it has no flush timer of its
   // own, so drain them into the store first or they die with the export.

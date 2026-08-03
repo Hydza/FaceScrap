@@ -1,5 +1,4 @@
-// Build script: bundles TypeScript with esbuild and copies static assets
-// into dist/. Run `node scripts/build.mjs` or add `--watch` for dev mode.
+// Bundles TypeScript and copies static assets into dist/.
 
 import * as esbuild from 'esbuild';
 import { cp, mkdir, rm } from 'node:fs/promises';
@@ -49,8 +48,7 @@ await copyStatic();
 
 if (watch) {
   await ctx.watch();
-  // esbuild only rebuilds the TS bundles — re-copy static assets (manifest,
-  // HTML/CSS, fonts, rules) ourselves when their sources change.
+  // Re-copy static assets because esbuild watches only TypeScript bundles.
   let copyTimer;
   const requestCopy = () => {
     clearTimeout(copyTimer);

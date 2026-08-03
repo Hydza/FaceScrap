@@ -66,9 +66,8 @@ interface AckedLatest<T> {
   invalidateCommitted(): void;
 }
 
-/** Latest-state delivery with acknowledgement-based deduplication. A new state
- *  supersedes an older in-flight one; the older callback cannot commit because
- *  it no longer owns `pending`. */
+/** Deliver the latest state with acknowledgement-based deduplication.
+ * Only the current pending owner can commit. */
 export function createAckedLatest<T>(): AckedLatest<T> {
   let committedKey = '';
   let pending: Pending<T> | undefined;

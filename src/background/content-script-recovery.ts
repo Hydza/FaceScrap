@@ -37,22 +37,17 @@ interface ContentScriptRecoveryResult {
  * ping prevents duplicates on tabs whose current detector is still alive; only
  * a missing receiver receives the packaged content.js again.
  *
- * The hook rides along because this is the ONLY caller that can reach those tabs and the
- * only context that knows their ids. The content script used to install it itself, which
- * meant a <script src="chrome-extension://…"> in facebook.com's DOM; the page could see
- * that node and fetch the hook's source from it.
+ * The worker injects the hook directly into the MAIN world without exposing an
+ * extension URL in the page DOM.
  *
  * Once a step has named a document, every step after it is pinned to that document
  * rather than to frame 0, which follows the FRAME across a navigation. So an install
- * aimed at a document that has since gone REJECTS instead of landing somewhere else —
- * the fail-closed answer the old <script>.onerror gave.
+ * aimed at a document that has since gone rejects instead of landing elsewhere.
  *
  * The pin only covers the span it can see. Where the ping answered there was no
  * injection to name a document, so the probe itself opens on frame 0 and a tab that
- * navigates before it lands is answered for by whatever document is there — including
- * an fbcdn.net one, a host this extension holds permission for and which carries no
- * declarative entry of its own. Resolving the document once per tab up front would
- * close that too; it is not closed today.
+ * navigates before it lands may answer from the new document. Host and frame checks
+ * keep subsequent work scoped to supported pages.
  */
 export function createContentScriptRecoveryCoordinator(
   dependencies: ContentScriptRecoveryDependencies,
@@ -61,15 +56,9 @@ export function createContentScriptRecoveryCoordinator(
    * Give one document a hook, and only where none is alive. Never rejects: the sweep
    * below runs it per tab and must not stop at the first unreachable one.
    *
-   * The probe never saves a round trip — it IS one, and a redundant install would have
-   * cost the same. What it buys is the document id on the path where the ping answered
-   * and nothing else named one, plus the parse of the hook bundle on a tab that already
-   * carries it. It is no longer a correctness rule: page-hook.js installs nothing at all
-   * once its own <html> stamp is there (tests/page-hook-idempotent.test.ts), so being
-   * wrong here costs a wasted injection rather than a second wrapper on the page's fetch
-   * and a second set of window listeners that never come off. That stamp lives in the
-   * page's DOM and the page may delete it, which is exactly why the answer is allowed to
-   * be wrong.
+   * The probe supplies a document id and avoids parsing the hook bundle when the
+   * document stamp is present. Redundant injection is safe because the hook installs
+   * nothing when it finds that stamp.
    */
   async function ensurePageHook(tabId: number, documentId?: string): Promise<void> {
     // Its own catch, answering "no hook": a probe that could not run has told us nothing,
@@ -118,22 +107,9 @@ export function createContentScriptRecoveryCoordinator(
           dependencies.onError?.(tabId, error);
           continue;
         }
-        // Detector first, hook second — as far as this can enforce it. The await above
-        // returns when the injected file's TOP-LEVEL evaluation ends, which for content.js
-        // is after the detector's window-message listener exists; content-recovery.js only
-        // sets a flag and starts a FLOATING import('./content') that nothing can await
-        // (esbuild refuses top-level await in an iife bundle). What orders THAT one is the
-        // import being inlined, so the detector runs on a microtask that drains before the
-        // next injection arrives — a build property, anchored in
-        // tests/detection-migration-guardrails.test.ts. Reversed, the cost is the hook's
-        // one startup query: its diagnostics window then opens only when the content
-        // script announces the flag itself, a storage read later. Captures are never in
-        // that window.
-        //
-        // No longer below the ping's early exit: the probe reads the stamp from the
-        // ISOLATED world and needs no detector at all, so a tab whose detector answered
-        // but whose hook is gone — loaded while the extension was off, or an install that
-        // failed — is repairable without reinjecting a detector it already has.
+        // Evaluate the detector before injecting the hook. Recovery starts its inlined
+        // detector import on a microtask, which runs before the next injection.
+        // Probe the hook independently even when the detector ping succeeds.
         await ensurePageHook(tabId, documentId);
       }
       return { checked, injected };

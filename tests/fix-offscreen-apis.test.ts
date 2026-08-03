@@ -1,16 +1,5 @@
-// An offscreen document gets chrome.runtime. It does NOT get chrome.storage.
-//
-// Measured, not assumed: `typeof chrome.storage` inside a live offscreen document
-// on Edge 150 is 'undefined'. That makes any chrome.storage reference at module
-// scope a TypeError while the script is still evaluating — and the mux listener is
-// registered at the BOTTOM of that script, so it never registers at all. The worker
-// then sends FACESCRAP_MUX to a document with no receiver: with a side panel open
-// another context answers nothing, sendMessage resolves undefined in ~1ms, and every
-// HD download fails with the generic "Could not merge audio and video." A whole
-// download path, silently dead, with no counter for it.
-//
-// This test evaluates the real module against a chrome that has exactly what an
-// offscreen document has, and asserts the mux listener survives.
+// Offscreen documents expose chrome.runtime but not chrome.storage. Evaluate the
+// real module against that API surface and verify that it registers the mux listener.
 
 import assert from 'node:assert/strict';
 import test from 'node:test';
@@ -57,9 +46,8 @@ test('the offscreen document registers its mux listener with only chrome.runtime
     },
   );
 
-  // `true` is what keeps the message channel open for the async answer. Without a
-  // registered listener the worker's sendMessage resolves undefined instead, which
-  // is exactly how this failed in production.
+  // `true` keeps the message channel open for the asynchronous response and confirms
+  // that the listener is registered.
   assert.equal(handled, true, 'FACESCRAP_MUX must be claimed by the offscreen listener');
   assert.equal(answered, undefined, 'the answer is asynchronous, so nothing is sent back synchronously');
 });

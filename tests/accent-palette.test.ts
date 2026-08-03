@@ -1,19 +1,4 @@
-// Every accent has to be readable, and the accent is now a user choice.
-//
-// The panel's fixed colours are checked by sidepanel-theme-contrast.test.ts, which reads the
-// tokens straight out of the stylesheet. It does not reach this palette: the accent and the
-// tint are one attribute-selected rule per entry, and it measures none of them. Two of these
-// entries (the reaction yellow, the signup green) are light enough that white text on them
-// lands near 2:1 — a single hardcoded white would have shipped two unreadable buttons.
-//
-// So the ratio is COMPUTED here for every entry rather than eyeballed when the hex was
-// picked, and a new accent cannot be added without clearing the same bar.
-//
-// Every ratio below is computed over the table in appearance.ts, and the panel paints the
-// stylesheet's copy of it — of the fields those ratios are made of, only `grad` has a reader
-// in src/ (settings-sheet.ts fills the swatch with it). A guarantee proved on the copy that
-// does not render is worth nothing, so every value of both palettes is also asserted equal to
-// the CSS declaration that does.
+// Verify every selectable accent against its rendered CSS values and contrast threshold.
 
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
@@ -45,12 +30,10 @@ function contrast(foreground: string, background: string): number {
   return (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05);
 }
 
-/** The gradients are declared with a space after each comma and stated here without any, and
- *  a rule may be written on one line or on six. Both sides of every comparison below are
- *  compacted so the parity assertions test colours, not formatting. */
+/** Normalize gradient spacing before comparing colors. */
 const compact = (value: string): string => value.replace(/\s+/g, '').toLowerCase();
 
-/** One rule body out of the stylesheet, by exact selector. */
+/** Return the body of an exact stylesheet rule. */
 function ruleBody(css: string, selector: string): string {
   const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   const body = css.match(new RegExp(`${escaped}\\s*\\{([^}]*)\\}`))?.[1];
@@ -58,7 +41,7 @@ function ruleBody(css: string, selector: string): string {
   return body;
 }
 
-/** One custom property out of that rule. */
+/** Return one custom property from a rule body. */
 function cssValue(css: string, selector: string, property: string): string {
   const value = ruleBody(css, selector).match(new RegExp(`--${property}:\\s*([^;]+);`))?.[1];
   assert.ok(value, `${selector} declares no --${property}`);
@@ -77,9 +60,7 @@ test('every accent carries text that clears WCAG AA on it', () => {
 
 test('the flat entries state one colour twice and the gradients state a real ramp', () => {
   for (const accent of ACCENTS) {
-    // `solid` is what borders, focus rings, 1px outlines and the logo's SVG fill take —
-    // none of those can carry a gradient — so it must always be a plain hex, even on a
-    // gradient entry.
+    // Borders, focus rings, outlines, and SVG fills require a solid color.
     assert.match(accent.solid, /^#[0-9a-f]{6}$/, `${accent.id}: solid must be a flat hex`);
     assert.equal(
       accent.group === 'solid',
@@ -88,11 +69,7 @@ test('the flat entries state one colour twice and the gradients state a real ram
     );
     if (accent.group === 'solid') continue;
     assert.match(accent.grad, /^linear-gradient\(/, `${accent.id}: grad must be a gradient`);
-    // Two real stops at least. How the flat fallback relates to them is a judgement no
-    // cheap metric captures — messenger's is one stop of a four-stop rainbow, dusk's is a
-    // hue midpoint that is darker than either end — so what is asserted is that the ramp
-    // IS a ramp. That the fallback is readable is test one's job, and it covers every
-    // entry either way.
+    // A gradient entry must contain at least two distinct stops.
     const stops = [...accent.grad.matchAll(/#[0-9a-f]{6}/g)];
     assert.ok(stops.length >= 2, `${accent.id}: a ramp needs at least two stops`);
   }
@@ -107,7 +84,7 @@ test('every tint moves all four surfaces, in both themes', () => {
   const i18n = readFileSync(join(process.cwd(), 'src', 'shared', 'i18n.ts'), 'utf8');
   const css = readFileSync(join(process.cwd(), 'src', 'sidepanel', 'sidepanel.css'), 'utf8');
   for (const tint of PANEL_TINTS) {
-    // A swatch has no text, so its label IS its accessible name.
+    // A text-free swatch requires an accessible name.
     const declared = [...i18n.matchAll(new RegExp(`^\\s+${tint.label}: '([^']+)'`, 'gm'))];
     assert.equal(declared.length, 2, `${tint.label} must be translated in both languages`);
 
@@ -116,22 +93,18 @@ test('every tint moves all four surfaces, in both themes', () => {
       for (const colour of [cv, sf, sf2, ln]) {
         assert.match(colour, /^#[0-9a-f]{6}$/, `${tint.id}/${theme}: every surface is a flat hex`);
       }
-      // Four DISTINCT steps. A tint whose canvas and surface collapsed to one colour
-      // would erase the card edges the whole panel is built on.
+      // Distinct tint steps preserve card boundaries.
       assert.equal(new Set([cv, sf, sf2, ln]).size, 4, `${tint.id}/${theme}: four distinct surfaces`);
     }
 
-    // The stylesheet, not applyAppearance, resolves the tint — it depends on the theme,
-    // which arrives from its own async path. Both halves of the pair must exist, or
-    // picking the tint would persist and change nothing in one of the two themes.
+    // Each tint must define both theme variants.
     assert.match(css, new RegExp(`:root\\[data-tint="${tint.id}"\\]`), `no dark rule for ${tint.id}`);
     assert.match(
       css,
       new RegExp(`:root\\[data-theme="light"\\]\\[data-tint="${tint.id}"\\]`),
       `no light rule for ${tint.id}`,
     );
-    // And each half has to state THESE four surfaces. Existence alone would let the rule
-    // drift to colours the contrast assertions above never measured.
+    // Each variant must match the four measured surface colors.
     for (const [selector, surfaces] of [
       [`:root[data-tint="${tint.id}"]`, tint.dark],
       [`:root[data-theme="light"][data-tint="${tint.id}"]`, tint.light],
@@ -154,17 +127,13 @@ test('the stylesheet carries every accent the schema accepts, per theme', () => 
   const css = readFileSync(join(process.cwd(), 'src', 'sidepanel', 'sidepanel.css'), 'utf8');
   for (const accent of ACCENTS) {
     assert.match(css, new RegExp(`:root\\[data-accent="${accent.id}"\\]`), `no rule for ${accent.id}`);
-    // --ach is the ONLY place an accent is allowed to be text, and it needs the darker
-    // step on the light canvas. A missing light rule leaves the dark step there, which is
-    // exactly the pairing that fails AA.
+    // Accent text on the light canvas must use its darker step.
     assert.match(
       css,
       new RegExp(`:root\\[data-theme="light"\\]\\[data-accent="${accent.id}"\\]`),
       `no light --ach for ${accent.id}`,
     );
-    // Every field of the entry, against the rule that renders it. `css.includes(…)` stood
-    // here and passed on a value declared under some OTHER accent — which is exactly how
-    // the two copies drift without anything going red.
+    // Match every palette field to the exact rule that renders it.
     const dark = `:root[data-accent="${accent.id}"]`;
     const light = `:root[data-theme="light"][data-accent="${accent.id}"]`;
     assert.equal(cssValue(css, dark, 'ac'), compact(accent.solid), `${accent.id}: --ac`);
@@ -177,9 +146,7 @@ test('the stylesheet carries every accent the schema accepts, per theme', () => 
 });
 
 test('the accent-as-text step clears WCAG AA on the canvas it is used on', () => {
-  // --ach carries the picker's selected row, the "Save as…" hover, the active nav label
-  // and the filename preview. Each theme gets its own step because no single colour
-  // clears 4.5:1 against both canvases.
+  // Accent text needs a theme-specific step to maintain 4.5:1 contrast.
   for (const accent of ACCENTS) {
     for (const tint of PANEL_TINTS) {
       const dark = contrast(accent.softDark, tint.dark[0]);
@@ -195,8 +162,7 @@ test('ids are unique and every one has its own label', () => {
   assert.equal(new Set(ids).size, ids.length, 'duplicate accent id');
   const labels = ACCENTS.map((a) => a.label);
   assert.equal(new Set(labels).size, labels.length, 'two accents share a label');
-  // A swatch has no text, so its label IS its accessible name. An accent with no entry in
-  // both dictionaries would be a button screen readers cannot name.
+  // Every text-free swatch needs a localized accessible name.
   const i18n = readFileSync(join(process.cwd(), 'src', 'shared', 'i18n.ts'), 'utf8');
   for (const accent of ACCENTS) {
     const declared = [...i18n.matchAll(new RegExp(`^\\s+${accent.label}: '([^']+)'`, 'gm'))];
@@ -205,11 +171,7 @@ test('ids are unique and every one has its own label', () => {
 });
 
 test('an unknown accent falls back rather than reaching CSS', () => {
-  // The stored value is a bare string, so a hand-edited store or a downgrade can hold an id
-  // this build no longer has. What keeps it off the panel is normalizeSettings: applyAppearance
-  // writes `settings.accent` into a root attribute, and an unknown one there selects no rule at
-  // all. accentById has no caller in src/ today; it is asserted alongside so the table's own
-  // fallback cannot drift away from the schema's.
+  // Normalize unknown stored IDs to the same fallback used by the palette table.
   assert.equal(accentById('no-such-accent').id, DEFAULT_ACCENT);
   assert.equal(accentById('').id, DEFAULT_ACCENT);
   for (const bad of ['brand ', 'BRAND', 42, null, {}]) {
@@ -226,15 +188,14 @@ test('the shape and depth choices are coerced to what the stylesheet can render'
     assert.equal(normalizeSettings({ panelCorners: bad }).panelCorners, DEFAULT_SETTINGS.panelCorners);
     assert.equal(normalizeSettings({ panelBackdrop: bad }).panelBackdrop, DEFAULT_SETTINGS.panelBackdrop);
   }
-  // Each non-default choice needs a rule, or picking it would persist and change nothing.
+  // Each non-default choice requires a matching stylesheet rule.
   for (const corners of ['sharp', 'round']) {
     assert.match(css, new RegExp(`#app\\[data-corners="${corners}"\\]`), `no rule for ${corners} corners`);
   }
   for (const backdrop of ['frosted', 'glass']) {
     assert.match(css, new RegExp(`#app\\[data-backdrop="${backdrop}"\\]`), `no rule for ${backdrop}`);
   }
-  // The defaults are the base stylesheet, so they carry no attribute rule of their own —
-  // asserted so a future "sharp is now the default" change has to move both halves.
+  // Default values belong only to the base stylesheet.
   assert.equal(DEFAULT_SETTINGS.panelCorners, 'soft');
   assert.equal(DEFAULT_SETTINGS.panelBackdrop, 'solid');
 });

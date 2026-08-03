@@ -27,10 +27,6 @@ test('shows complete media over a blurred cover background', () => {
 
 test('keeps only Story-like portrait media on the immersive cover fit', () => {
   assert.match(css, /img\.media-fit-cover:not\(\.thumb-bg\)[\s\S]*?object-fit:\s*cover/);
-  // The aspect threshold is a design number, like the rule above it: 0.7 is what
-  // separates a Story-shaped portrait from an ordinary tall photo.
+  // The 0.7 aspect threshold separates Story portraits from ordinary tall photos.
   assert.match(controller, /const PORTRAIT_COVER_MAX_ASPECT = 0\.7/);
-  // Dropped from here: three regexes proving both thumbnail call sites route
-  // through buildThumbPair. They mirrored exact argument lists, and a
-  // wrongly-fitted thumbnail is visible in `npm run qa:sidepanel`'s captures.
 });

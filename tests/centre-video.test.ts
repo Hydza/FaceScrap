@@ -47,9 +47,7 @@ test('ignores a video that is barely on screen', () => {
 });
 
 test('lets a playing video win even when a cover was hit-tested at the centre', () => {
-  // The regression this fixes: a residual blur-up cover still painted over a
-  // reel that is ALREADY playing used to suppress the fallback entirely, so no
-  // video was adopted at all.
+  // A playing video must win even when a residual cover is hit-tested at the center.
   const picked = pickBestVideoIndex([candidate({ paused: false, containsCentre: true })], true);
 
   assert.equal(picked, 0);

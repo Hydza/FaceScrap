@@ -3,15 +3,8 @@ import test from 'node:test';
 
 import { ClosedTabError, createTabLifecycle } from '../src/background/tab-lifecycle';
 
-// E5: the in-memory deadTabs Set starts empty on every worker (re)start and
-// only ever learns of a closure through onRemoved firing on THIS instance —
-// a tab closed before this instance existed leaves no trace in it. An
-// identity-free call (no documentId — the side panel's pin/bindings/clear
-// writes) has nothing else vouching for the tab, so runIfLive must verify
-// against the browser itself rather than trust the Set's silence. These
-// tests install their OWN minimal `chrome.tabs.get` fake (no chrome-fake.ts
-// storage import needed) so they stay independent of every other suite's
-// chrome shape.
+// Identity-free operations must verify tab liveness through the browser.
+// These tests use an isolated `chrome.tabs.get` stub.
 function installTabsFake(openTabIds: Set<number>): { queries: number[] } {
   const calls: number[] = [];
   Object.defineProperty(globalThis, 'chrome', {
@@ -30,7 +23,7 @@ function installTabsFake(openTabIds: Set<number>): { queries: number[] } {
 }
 
 test('E5: an identity-free call for a tab this worker never saw close is rejected, not silently accepted', async () => {
-  const { queries } = installTabsFake(new Set()); // tab 900 does not exist in the browser
+  const { queries } = installTabsFake(new Set()); // Tab 900 does not exist.
   const lifecycle = createTabLifecycle(Promise.resolve());
   let ran = false;
 
@@ -42,8 +35,7 @@ test('E5: an identity-free call for a tab this worker never saw close is rejecte
   );
   assert.equal(ran, false, 'the task must not run for a tab the browser does not have');
   assert.equal(queries.length, 1, 'the browser must actually be asked');
-  // The verified closure self-heals the Set, so a later isDead() pre-check
-  // (binding-handler.ts, service-worker.ts) also short-circuits correctly.
+  // Cache the verified closure for later liveness checks.
   assert.equal(lifecycle.isDead(900), true);
 });
 
@@ -60,13 +52,11 @@ test('E5: an identity-free call for a tab the browser confirms open still runs',
 });
 
 test('E5: a documentId-bearing (hot capture path) call never queries chrome.tabs, even for an unrecorded tab', async () => {
-  const { queries } = installTabsFake(new Set()); // tab 902 "does not exist" per the fake
+  const { queries } = installTabsFake(new Set()); // Tab 902 does not exist.
   const lifecycle = createTabLifecycle(Promise.resolve());
   let ran = false;
 
-  // The content-script capture path always supplies a documentId; per E5's
-  // fix that must stay exempt from the new browser round-trip regardless of
-  // what the Set would otherwise conclude.
+  // A document identity makes the browser round trip unnecessary.
   await lifecycle.runIfLive(
     902,
     () => {

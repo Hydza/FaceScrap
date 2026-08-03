@@ -66,7 +66,7 @@ test('reset invalidates an old acknowledgement and allows the same track in the 
 
   oldAck.resolve(true);
   assert.equal(await oldWork, true);
-  // The old success did not commit into the new epoch while its replacement is pending.
+  // The stale success must not commit into the new epoch.
   assert.equal(observer.bump(5, TRACK), undefined);
   newAck.resolve(true);
   assert.equal(await newWork, true);
@@ -146,8 +146,8 @@ test('A pending then B pending then A is a new transition and stale ACKs cannot 
   assert.equal(urls.length, 3);
   assert.equal(urls[0], urls[2]);
 
-  // Latest A succeeds before both old writes. B then lands stale and schedules
-  // one A compensation. The even older A must not schedule a duplicate while
+  // Latest A succeeds before both stale writes. B then schedules
+  // one A compensation. The earliest A must not schedule a duplicate while
   // that compensation remains active.
   gates[2].resolve(true);
   assert.equal(await latestA, true);

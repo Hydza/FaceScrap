@@ -61,13 +61,11 @@ test('the packaged update-recovery path pings before scripting injection', () =>
   };
   const worker = readFileSync(join(ROOT, 'src', 'background', 'service-worker.ts'), 'utf8');
   const content = readFileSync(join(ROOT, 'src', 'content', 'content.ts'), 'utf8');
-  // The instance and its liveness ping live in content-runtime.ts; content.ts decides
-  // whether to create one at all.
+  // `content.ts` controls creation of the runtime instance and liveness ping.
   const contentRuntime = readFileSync(join(ROOT, 'src', 'content', 'content-runtime.ts'), 'utf8');
   const recovery = readFileSync(join(ROOT, 'src', 'content', 'content-recovery.ts'), 'utf8');
   const build = readFileSync(join(ROOT, 'scripts', 'build.mjs'), 'utf8');
-  // The worker must be able to tell a live detector from an invalidated one, so the
-  // instance has to be published BEFORE the ping listener exists to answer for it.
+  // Publish the instance before registering its liveness listener.
   const instanceClaim = contentRuntime.indexOf('publish(instance)');
   const pingListenerRegistration = contentRuntime.indexOf('onMessage.addListener(handlePing)');
 
@@ -84,18 +82,10 @@ test('the packaged update-recovery path pings before scripting injection', () =>
   assert.match(content, /if \(startContentInstance\)/);
   assert.match(contentRuntime, /removeListener\(handlePing\)/);
   assert.ok(instanceClaim >= 0 && instanceClaim < pingListenerRegistration);
-  // One flag is all content-recovery.js hands over now: replace the detector this update
-  // invalidated. The MAIN-world hook belongs to the worker (tests/page-hook-injection.test.ts),
-  // and content.js must never build a script node for it again — that node is what put an
-  // extension-origin URL inside facebook.com's DOM.
+  // Recovery replaces the detector while the worker owns MAIN-world hook injection.
   assert.match(recovery, /__facescrapForceContentRecovery\s*=\s*true/);
   assert.match(build, /'content-recovery'/);
-  // content-recovery.js sets its flag and starts a FLOATING import('./content') — esbuild
-  // refuses top-level await in an iife bundle, so nothing can await it. What puts the
-  // detector ahead of the hook the worker injects next is the import being INLINED into
-  // the same bundle, which drains as a microtask before the next injection arrives. Code
-  // splitting would emit a real chunk and a real network round trip in its place — and
-  // esbuild only offers splitting for the esm format, so this one assertion covers both.
+  // Keep the recovery import inline so detector setup completes before hook injection.
   assert.match(build, /format: 'iife'/);
 });
 

@@ -42,12 +42,7 @@ test('get returns independent copies, not live references into the store', async
   assert.deepEqual(second, { k: { tracks: [1] } });
 });
 
-// Real chrome.storage.onChanged fires for every area through one shared event,
-// tagged with the areaName that changed — src/shared/storage.ts and
-// src/background/service-worker.ts both register a listener on exactly this
-// event and rely on it firing to pick up a settings change. A fake whose
-// addListener silently drops the callback lets that wiring go untested while
-// looking exercised.
+// Verify that all storage areas emit through one area-tagged event.
 test('storage.onChanged fires with the areaName and the new value for an added key', async () => {
   await resetChromeStorage();
   const seen: Array<{ changes: Record<string, chrome.storage.StorageChange>; area: chrome.storage.AreaName }> = [];
@@ -74,8 +69,7 @@ test('storage.onChanged reports oldValue on a real change and on remove, and ski
   const listener = (changes: Record<string, chrome.storage.StorageChange>) => seen.push(changes);
   chrome.storage.onChanged.addListener(listener);
 
-  // 'keep' is written again with the identical value alongside a real change
-  // to 'settings' — only 'settings' should be reported.
+  // Report only the key whose value changed.
   await chrome.storage.local.set({ settings: { a: 2 }, keep: 'same' });
   await chrome.storage.local.remove('settings');
   chrome.storage.onChanged.removeListener(listener);

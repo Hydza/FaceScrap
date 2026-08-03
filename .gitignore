@@ -20,4 +20,7 @@ Thumbs.db
 
 # Editor / tool state, machine-local
 .codegraph
+.fallow/
+.omx/
+.serena/
 *.tmp

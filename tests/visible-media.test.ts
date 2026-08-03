@@ -73,7 +73,7 @@ test('rejects static UI assets and invalid natural dimensions', () => {
 });
 
 test('rejects an over-length URL before parsing it', () => {
-  const suffix = 'a'.repeat(9000); // pushes the URL past MAX_MEDIA_URL_LEN (8192)
+  const suffix = 'a'.repeat(9000); // Exceed MAX_MEDIA_URL_LEN.
   assert.equal(
     visibleMediaCandidate({ hasVideo: true, videoUrl: `${VIDEO}&pad=${suffix}` }, 'story', NOW),
     undefined,
@@ -83,7 +83,3 @@ test('rejects an over-length URL before parsing it', () => {
     undefined,
   );
 });
-
-// Dropped: a check that content.ts passes `hasVideo: videoEl != null` at the call
-// site. The rule it protects — an unrelated playing video must not suppress the
-// centred photo — is what the five tests above exercise on the real function.

@@ -45,15 +45,10 @@ export function setupDomScan(runtime: ContentRuntime, deps: DomScanDeps): void {
   // naturalWidth only clears the minimum once decoded, changes with no childList
   // mutation of its own for the observer to scope a rescan to.
   //
-  // Left unfiltered that re-relayed every still-qualifying item on every pass —
-  // AckedBatch's key dedupe only merges items still WAITING in its queue, so one
-  // already acknowledged is simply re-added as new. Track the last-relayed observable
-  // state per id and relay again only when it actually differs. FIFO-bounded at the
-  // same scale as the outgoing queue so an hours-long scroll cannot grow it forever.
+  // Track the last-relayed state per id because AckedBatch deduplicates only pending
+  // items. Relay observable changes and bound the cache to the outgoing queue scale.
   const signatures = new Map<string, string>();
-  // Images that finished loading since the last sweep. Buffered rather than relayed one by
-  // one: a scroll burst fires a load event per image, and each was a message of its own
-  // that skipped changedOnly, so the sweep then relayed the very same item again.
+  // Buffer completed images so a scroll burst is filtered and relayed as one sweep.
   const loadedBuffer: MediaItem[] = [];
   let scanTimer: number | undefined;
   let initialScanTimer: number | undefined;

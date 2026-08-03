@@ -20,9 +20,8 @@
 // size, their query name and what was extracted from them. The point of this log
 // is that a user can read it before handing it to anyone.
 
-/** Which extension context recorded the event. Not exported: every caller passes
- *  a literal, so nothing outside this file needs to name the type — and an export
- *  with no importer is what fix-surplus-exports.test.ts exists to reject. */
+/** Extension context that recorded the event. Callers pass literals, so the type
+ *  remains private to this module. */
 type DiagContext = 'hook' | 'content' | 'worker' | 'panel' | 'offscreen';
 
 // Keyed off a Record for the same reason DIAG_REASONS is (see diag.ts): the
@@ -207,10 +206,7 @@ export function diagLog(ev: string, data?: Record<string, DiagValue>, lvl?: 'war
  *  URLs, and the log is meant to be handed to someone. */
 const EMBEDDED_URL = /https?:\/\/[^\s"'<>)\]]+/g;
 
-/** One line of text for an unknown throwable, bounded and with any URL in it reduced
- *  to host + trimmed path. The text itself is page-controlled on the hook's error
- *  path, and the log now records for the life of the install rather than for one
- *  session someone opted into. */
+/** Bound throwable text and reduce embedded URLs to host plus trimmed path. */
 export function errorText(error: unknown): string {
   const redactEmbedded = (text: string): string =>
     clampString(text.replace(EMBEDDED_URL, (url) => redactUrl(url)), MAX_STRING);

@@ -3,29 +3,8 @@ import test from 'node:test';
 
 import { mediaId, mergeMedia, sanitizeIncomingItems } from '../src/shared/media';
 
-// --- C6 repair: genericEndpointId's `path` must be bounded in EVERY branch,
-// not only guarded by a check on the query string ------------------------
-//
-// The earlier C6 fix added GENERIC_ENDPOINT_ID_MAX_LEN (256) and bounded the
-// "unknown generic endpoint" fallback with:
-//
-//   return whole.length <= GENERIC_ENDPOINT_ID_MAX_LEN || serialized === ''
-//     ? whole
-//     : `asset:${path}?q=${identityHash(serialized)}`;
-//
-// An adversarial review found this incomplete: `|| serialized === ''`
-// unconditionally exempts every query-LESS URL, even though
-// `whole = asset:${path}` in that branch is bounded only by the outer
-// MAX_MEDIA_URL_LEN (8192), not by the 256-char id contract. Worse, the
-// SAME unbounded `path` is embedded raw in the other two genericEndpointId
-// branches (the efg-asset-key branch and the nested-`url`-resource branch),
-// which only ever bounded their own discriminator/hash suffix — never `path`
-// itself — so all three branches could overflow the shared bound.
-//
-// Why the bound matters: an id past 256 chars makes sanitizeDownloadReceipt
-// reject the download outright ("Invalid download request."), and PlayingRef
-// ids are truncated at 256 by playing-handler.ts while the panel compares
-// UNtruncated — so a long id also silently breaks now-playing matching.
+// Bound the complete genericEndpointId result in every branch, including
+// queryless paths. The 256-character contract keeps receipt and playing IDs aligned.
 const GENERIC_ID_BOUND = 256;
 
 function base64url(json: unknown): string {
@@ -36,9 +15,7 @@ function base64url(json: unknown): string {
 }
 
 test('C6 repair: mediaId bounds the query-less unknown-generic-endpoint fallback (reviewer repro)', () => {
-  // The reviewer's exact end-to-end reproduction: a graphql unknown-endpoint
-  // URL with a ~7000-char path and NO query string, run through the real
-  // untrusted page-message entry point.
+  // Exercise a queryless ~7000-character path through the untrusted page-message entry point.
   const now = 1_800_000_000_000;
   const url = 'https://api.xx.fbcdn.net/graphql/unknown_endpoint/' + 'a'.repeat(7000);
 
@@ -61,14 +38,12 @@ test('C6 repair: mediaId bounds the query-less unknown-generic-endpoint fallback
   assert.equal(merged[0].id, sanitized[0].id, 're-merging must not change the bounded id');
   assert.ok(merged[0].id.length <= GENERIC_ID_BOUND);
 
-  // The bare mediaId() call the reviewer used directly.
+  // Verify the direct mediaId path as well.
   assert.ok(mediaId(url).length <= GENERIC_ID_BOUND);
 });
 
 test('C6 repair: a short query-less generic-endpoint URL keeps its exact prior id (stability half)', () => {
-  // A URL that already produces a short id must keep producing THE SAME id —
-  // persisted rows and Saved receipts key off it. This is the half a careless
-  // overflow-only fix (e.g. bounding by hashing `path` unconditionally) breaks.
+  // Preserve short IDs because persisted rows and Saved receipts use them as keys.
   assert.equal(
     mediaId('https://api.xx.fbcdn.net/graphql/unknown_endpoint/'),
     'asset:/graphql/unknown_endpoint/',
@@ -88,11 +63,7 @@ test('C6 repair: two different overlong query-less paths never collide into the 
   );
 });
 
-// --- Same escape, other branches --------------------------------------
-// The reviewer's report named the query-less fallback branch specifically,
-// but `path` is embedded just as unconditionally in genericEndpointId's other
-// two branches. Each is reachable from the same untrusted channel and must be
-// bounded too, or the "same escape" simply reopens one branch over.
+// Apply the same complete-candidate bound to every genericEndpointId branch.
 
 test('C6 repair: the efg-asset-key branch also bounds an over-long path', () => {
   const efg = base64url({ xpv_asset_id: '12345678901234567' });
@@ -119,9 +90,7 @@ test('C6 repair: the nested-url resource branch also bounds an over-long path', 
 });
 
 test('C6 repair: an over-long path WITH a query still bounds (hashing the query alone is not enough)', () => {
-  // Proves the fix bounds the whole candidate rather than special-casing
-  // "hash the query when whole.length overflows": hashing only the query
-  // cannot help when `path` alone already exceeds the shared bound.
+  // Bound the complete candidate even when its path alone exceeds the limit.
   const url = 'https://api.xx.fbcdn.net/graphql/unknown_endpoint/' + 'e'.repeat(7000) + '?a=1&b=2';
   assert.ok(mediaId(url).length <= GENERIC_ID_BOUND);
 });

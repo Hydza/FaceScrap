@@ -55,9 +55,7 @@ function readAsDataUrl(blob: Blob): Promise<string> {
   });
 }
 
-/** Decode → downscale → re-encode → store. Returns the reason to show the user rather
- *  than throwing: every failure here is something they can act on (pick a smaller image,
- *  pick a real image), not a bug to swallow into the console. */
+/** Decode, downscale, re-encode and store. Returns a user-actionable failure reason. */
 export async function storePanelBackground(file: File): Promise<StoreResult> {
   const mine = ++generation;
   /** Did a Remove — or a second Choose — happen while this one was encoding? */
@@ -104,10 +102,8 @@ export async function storePanelBackground(file: File): Promise<StoreResult> {
 export async function loadPanelBackground(): Promise<string | undefined> {
   try {
     const stored = (await chrome.storage.local.get(BACKGROUND_KEY))[BACKGROUND_KEY];
-    // Only ever the exact thing storePanelBackground writes, which is always WebP. An http(s)
-    // value would be a remote fetch from an extension page — the CSP blocks that today, but a
-    // guard resting on the CSP staying as it is is not a guard. Naming the format rather than
-    // the `data:image/` family also keeps SVG out, the one raster-shaped format carrying markup.
+    // Accept only the WebP data URL written by storePanelBackground. This also excludes
+    // remote URLs and SVG markup independently of the extension CSP.
     return typeof stored === 'string' && stored.startsWith('data:image/webp;base64,') ? stored : undefined;
   } catch {
     return undefined;

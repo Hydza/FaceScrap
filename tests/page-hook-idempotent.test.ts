@@ -1,22 +1,5 @@
-// page-hook.js can be evaluated more than once in one document: manifest.json's
-// declarative MAIN-world entry runs on every fresh navigation, and the worker injects the
-// same file into tabs that were already open when the extension updated
-// (background/content-script-recovery.ts). A MAIN-world hook is plain page JS, so it
-// outlives the update that invalidates every chrome.* context around it — and the worker's
-// probe can only ask the DOM whether one is alive, which is a question the page itself can
-// answer wrong by deleting the stamp.
-//
-// So the file has to be genuinely idempotent rather than merely defensive. It used to be
-// half of that: the guard covered the history patch and the document scan, but the
-// assignments to window.fetch and XMLHttpRequest.prototype.open ran unconditionally (each
-// wrapper checked the guard from INSIDE and passed through), and four window listeners sat
-// outside it altogether. Every redundant evaluation left one more frame on the page's fetch
-// and one more set of listeners, for the life of the tab — an unpacked reload loop stacks
-// dozens.
-//
-// This runs the REAL bundle three times over one stand-in page: a source-text check would
-// pass the moment someone re-spelled the guard, and the whole failure was that installed
-// code sat outside a guard that looked right.
+// Repeated hook evaluation must preserve one fetch/XHR wrapper and one listener set.
+// Run the real bundle three times to verify runtime idempotence.
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 import { join } from 'node:path';
@@ -27,7 +10,7 @@ import { HOOK_ALIVE_ATTR } from '../src/shared/hook-attr';
 
 const ROOT = process.cwd();
 
-/** The globals the hook reads, handed in by name — nothing here touches the real ones. */
+/** Provide isolated globals for the hook bundle. */
 const PAGE_GLOBALS = ['window', 'document', 'XMLHttpRequest', 'history', 'location', 'setTimeout', 'clearTimeout'];
 
 type AnyFn = (...args: unknown[]) => unknown;
@@ -39,16 +22,16 @@ interface FakePage {
   xhr: { prototype: { open: AnyFn } };
   history: { pushState: AnyFn; replaceState: AnyFn };
   location: unknown;
-  /** Every window listener registered, in order, so an extra one is visible as an extra entry. */
+  /** Record registered window listeners in order. */
   listeners: Array<{ type: string; fn: Handler }>;
-  /** Everything posted onto the page's own message channel. */
+  /** Record messages posted to the page channel. */
   posted: unknown[];
-  /** Fire every timer the hook armed, so a deferred flush becomes observable. */
+  /** Run every timer armed by the hook. */
   runScheduled(): void;
   attributes: Map<string, string>;
   fetchCalls: unknown[][];
   openCalls: unknown[][];
-  /** The page's own implementations, to tell "wrapped" from "untouched". */
+  /** Preserve the page's original implementations for identity checks. */
   native: { fetch: AnyFn; open: AnyFn; pushState: AnyFn };
 }
 
@@ -79,8 +62,7 @@ function createFakePage(): FakePage {
     postMessage(message: unknown): void {
       posted.push(message);
     },
-    // Recorded, never fired: a timer that actually ran would let a scan drain after the
-    // test that started it had finished.
+    // Record timers without running them automatically.
     setTimeout: (fn: () => void): number => scheduled.push(fn),
     clearTimeout: (): void => {},
   };
@@ -94,7 +76,7 @@ function createFakePage(): FakePage {
           attributes.set(name, value);
         },
       },
-      // No <script> mentions fbcdn, so the document scan collects nothing and queues nothing.
+      // The fixture contains no script with a media host.
       querySelectorAll: (): unknown[] => [],
     },
     xhr: { prototype: { open: nativeOpen } },
@@ -103,8 +85,7 @@ function createFakePage(): FakePage {
     listeners,
     posted,
     runScheduled: (): void => {
-      // Drained once, and cleared first: a callback that arms another timer must not
-      // spin this forever.
+      // Clear pending timers before running callbacks to prevent recursive draining.
       const due = scheduled.splice(0, scheduled.length);
       for (const fn of due) fn();
     },
@@ -115,13 +96,10 @@ function createFakePage(): FakePage {
   };
 }
 
-// esbuild cannot be imported statically here: this file is itself bundled, and esbuild's
-// lib finds its platform binary through require(), which an ESM bundle rewrites into a
-// stub that throws on load (see tests/fix-test-runner-esm.test.ts).
+// Load esbuild at runtime so the bundled test can resolve its platform binary.
 const resolved = createRequire(pathToFileURL(join(ROOT, 'package.json')).href).resolve('esbuild');
 const esbuild = (await import(pathToFileURL(resolved).href)) as typeof import('esbuild');
-// The same shape scripts/build.mjs ships: one self-contained IIFE, evaluated by Chrome as
-// a classic script with no module semantics of its own.
+// Match the self-contained IIFE shipped by the build.
 const built = await esbuild.build({
   absWorkingDir: ROOT,
   entryPoints: [join(ROOT, 'src', 'content', 'page-hook.ts')],
@@ -134,7 +112,7 @@ const built = await esbuild.build({
 const HOOK_BUNDLE = built.outputFiles[0]?.text ?? '';
 const evaluateBundle = new Function(...PAGE_GLOBALS, HOOK_BUNDLE) as (...globals: unknown[]) => void;
 
-/** One `executeScript({ files: ['page-hook.js'] })` into this document. */
+/** Evaluate one hook bundle in the fake document. */
 function evaluateHook(page: FakePage): void {
   evaluateBundle(
     page.window,
@@ -159,8 +137,7 @@ test('a redundant evaluation leaves nothing behind: no second wrapper, no second
     listeners: page.listeners.map((entry) => entry.type),
     posted: page.posted.length,
   };
-  // The first evaluation must really install, or every assertion below would also pass on
-  // a hook that hooks nothing at all — the one way to be idempotent that helps nobody.
+  // Confirm that the first evaluation installs the hook.
   assert.notEqual(installed.fetch, page.native.fetch, 'the first evaluation must wrap the page fetch');
   assert.notEqual(installed.open, page.native.open, 'the first evaluation must wrap XMLHttpRequest.prototype.open');
   assert.notEqual(installed.pushState, page.native.pushState, 'the first evaluation must patch history.pushState');
@@ -171,8 +148,7 @@ test('a redundant evaluation leaves nothing behind: no second wrapper, no second
   );
   assert.equal(page.attributes.get(HOOK_ALIVE_ATTR), '1', 'the stamp is the only thing a second evaluation reads');
 
-  // Twice more, because the case that hurt was a loop: an unpacked reload injects again on
-  // every reload, into the same long-lived tab.
+  // Repeat evaluation to verify idempotence in a long-lived document.
   evaluateHook(page);
   evaluateHook(page);
 
@@ -193,10 +169,7 @@ test('a redundant evaluation leaves nothing behind: no second wrapper, no second
     installed.listeners,
     'a redundant evaluation registered window listeners that will outlive it',
   );
-  // Nothing is posted synchronously any more — the trace leaves on a deferred flush — so
-  // count what the three evaluations actually left ARMED. Draining is what makes this
-  // real: a redundant evaluation that scheduled its own flush would post a second
-  // __vpData onto facebook.com's window here, and only here would it show.
+  // Drain deferred work to expose any duplicate flush scheduled by reevaluation.
   page.runScheduled();
   const announced = page.posted.filter((message) => (message as { __vpData?: unknown })?.__vpData === true);
   assert.equal(
@@ -212,8 +185,7 @@ test('the wrapper that stayed still reaches the page\'s own fetch and XHR', asyn
   evaluateHook(page);
   evaluateHook(page);
 
-  // Not /api/graphql: delegation is the property under test here, and a capture would
-  // queue a scan whose drain this fake's inert timers never run.
+  // Use a non-capture URL to isolate delegation behavior.
   await page.window.fetch('https://www.facebook.com/ajax/bootloader');
   assert.deepEqual(page.fetchCalls, [['https://www.facebook.com/ajax/bootloader']]);
 

@@ -14,7 +14,7 @@ interface AckedBatchOptions<T, K = never> {
   maxBatchWeight?: number;
   /** Optional hard bound for the combined weight of all queued items. */
   maxPendingWeight?: number;
-  /** Optional logical identity used to deduplicate pending items. */
+  /** Optional identity for deduplicating pending items. */
   key?: (item: T) => K;
   /** Combines a queued item with a newer item of the same key. */
   merge?: (queued: T, incoming: T) => T;
@@ -127,9 +127,7 @@ export function createAckedBatch<T, K = never>(options: AckedBatchOptions<T, K>)
       const incomingKey = options.key?.(incoming);
       if (options.key != null) {
         let match = -1;
-        // Compare the key CACHED on each entry instead of recomputing key() per candidate:
-        // this scan runs for every incoming item over a queue of up to maxPending (2,000
-        // for media), so key() was being called once per queued entry per item.
+        // Compare cached keys to keep each queue scan independent of key() cost.
         for (let index = inFlightCount; index < queue.length; index++) {
           if (Object.is(queue[index].key, incomingKey)) {
             match = index;
@@ -165,10 +163,8 @@ export function createAckedBatch<T, K = never>(options: AckedBatchOptions<T, K>)
             removeAt(evictionIndexes[index]);
             result.dropped++;
           }
-          // Mutated in place instead of re-inserted: the evictions above may have shifted
-          // the match's index, and finding it again was a second linear pass. Nothing
-          // outside this array holds the entry — a batch in flight copies items, not
-          // entries — and the merged item answers to the same key, so `key` still holds.
+          // Mutate the matched entry after evictions because its index may have shifted.
+          // No external code holds the entry, and the merged item retains the same key.
           totalWeight += delta;
           matchedEntry.item = merged;
           matchedEntry.weight = mergedWeight;

@@ -50,10 +50,9 @@ interface GraphqlImageCandidate {
 }
 
 /**
- * Read Facebook's common {uri|url,width,height} image node without reopening the
- * old avatar/tray-preview flood. Outside an exact Story media branch, at least
- * one supplied dimension must prove a >=200 px rendition; an exact Story branch
- * may carry no dimensions because the visible DOM image will verify them later.
+ * Read Facebook's common {uri|url,width,height} image node. Outside an exact Story
+ * media branch, require a dimension of at least 200 px to reject avatars and tray
+ * previews. Story images may defer dimension verification to the visible DOM.
  */
 export function graphqlImageCandidate(
   value: unknown,

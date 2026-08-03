@@ -6,12 +6,8 @@ import {
 } from '../shared/diag';
 import { createEventRing, sanitizeDiagEvents, type DiagEvent } from '../shared/diag-log';
 
-/** How long renderer reports are coalesced before they reach storage. Raised from
- *  1.5 s when the log became permanent: this interval IS the storage write rate, and
- *  a read-modify-write of the whole stored trace every 1.5 s for the life of the
- *  install is the one cost of always-on that no cap bounds. Five seconds still sits
- *  well inside the ~30 s a service worker stays alive after the activity that produced
- *  the events, so a flush is never left to a worker that has already been reaped. */
+/** Coalesce renderer reports to bound persistent writes while remaining inside
+ *  the service worker's activity window. */
 const DEFAULT_INTERVAL_MS = 5_000;
 const DEFAULT_MAX_TABS = 128;
 const DEFAULT_MAX_COUNT = 1_000_000;

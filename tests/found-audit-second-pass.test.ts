@@ -1,4 +1,4 @@
-// Defects found by the line-by-line audit pass. Each test fails without its fix.
+// Validate parser bounds, retention reservations, and per-track sanitization.
 
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
@@ -11,17 +11,12 @@ import { addMedia, getMedia, setPlaying } from '../src/shared/storage';
 import { makeItem, sanitizeIncomingItems, type MediaItem } from '../src/shared/media';
 import { parseTracks } from '../src/shared/mp4-remux';
 
-// ── mp4-remux: a fragmented trun count is a wire value like any other ─────────
-//
-// The progressive reader bounds every table against MAX_SAMPLES_PER_TRACK. The
-// fragmented path did not, and a trun whose flags request no per-sample fields
-// advances the cursor zero bytes per iteration — so a declared count of four
-// billion is an unbounded loop in a box small enough to arrive in one packet.
+// ── mp4-remux: bound fragmented trun counts from untrusted media ──────────────
+// A trun with no per-sample fields advances zero bytes per declared sample, so
+// its count must be bounded independently of the box cursor.
 
 test('a fragmented trun declaring four billion samples terminates instead of expanding', async () => {
-  // The real fixture, corrupted at exactly one field — a truncated or garbled
-  // fbcdn response is what this parser is hardened against, and the file is
-  // otherwise valid so the reader reaches the fragment loop at all.
+  // Corrupt only the trun count so the parser reaches the fragment loop.
   const bytes = new Uint8Array(readFileSync(join(process.cwd(), 'tests', 'fixtures', 'track-video.mp4')));
   const at = findBoxBody(bytes, 'trun');
   assert.ok(at > 0, 'the fixture must be fragmented for this test to mean anything');
@@ -32,8 +27,7 @@ test('a fragmented trun declaring four billion samples terminates instead of exp
   view.setUint32(at + 4, 0xffffffff); // sample_count
 
   const started = Date.now();
-  // Either outcome is acceptable — refusing it, or reading a bounded table. What
-  // is NOT acceptable is taking four billion iterations to decide.
+  // Either rejection or a bounded table is acceptable, but parsing must terminate.
   await parseTracks(new Blob([bytes])).catch(() => undefined);
   assert.ok(Date.now() - started < 10_000, 'the declared count must be bounded, not expanded');
 });
@@ -49,12 +43,7 @@ function findBoxBody(bytes: Uint8Array, type: string): number {
 
 // ── storage: retention must not evict what the partition reserved ────────────
 
-// The eviction splice cut from the front of [ordinary, ...reserved] by a count
-// derived from the whole array, so it only stayed inside `ordinary` while
-// `ordinary` happened to be longer than the overshoot. Make the reserved set
-// LARGER than the cap — a low maxItems plus one slide's worth of representations
-// — and the same splice runs straight through into the rows the partition exists
-// to protect, evicting the video being watched.
+// Reserved rows may outnumber the cap; eviction must remove only ordinary rows.
 test('the per-tab cap never evicts rows the retention partition reserved', async () => {
   await resetChromeStorage();
   const tabId = 41;
@@ -66,8 +55,8 @@ test('the per-tab cap never evicts rows the retention partition reserved', async
       makeItem(`https://scontent.xx.fbcdn.net/v/t42/playing${i}_n.mp4`, 'video', 'reel', 'graphql', 1000 + i, true),
     );
   }
-  // BEFORE the capture: retention can only reserve what it already knows is
-  // playing, so a ref written afterwards would arrive past the first trim.
+  // Register playing rows before capture so retention can reserve them during
+  // the first trim.
   await setPlaying(tabId, { ids: playing.map((item) => item.id), hasVideo: true, at: 2000 }, 2000);
   await addMedia(tabId, playing);
 
@@ -102,4 +91,3 @@ test('a malformed track id drops itself, not the whole list', () => {
 
   assert.deepEqual(item?.trackIds, ['keep-me', 'keep-me-too']);
 });
-

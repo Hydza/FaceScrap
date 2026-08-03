@@ -92,8 +92,7 @@ async function showVideo(item: MediaItem, mark: string): Promise<MediaItem[]> {
   return selected;
 }
 
-// Let a flushed binding write land in the fake storage before reading it back.
-// (It used to name a setBind helper that no longer exists anywhere in the tree.)
+// Let a flushed binding write land in fake storage before reading it back.
 async function flushWrites(): Promise<void> {
   await new Promise<void>((resolve) => setImmediate(resolve));
 }
@@ -137,8 +136,7 @@ test('read-time canonical migration restores Now Playing for a legacy row with z
   const migrated = await getMedia(tabId);
   assert.equal(migrated[0]?.id, mediaId(url));
   assert.deepEqual(await selectPlaying(tabId, migrated), migrated);
-  // The alias check also protects callers that still hold a pre-migration row
-  // in memory while the serialized storage repair is landing.
+  // Alias matching covers rows while their serialized repair is pending.
   assert.deepEqual(await selectPlaying(tabId, [legacy]), [legacy]);
 });
 
@@ -520,9 +518,7 @@ test('does not select one post-ref request without an exact Story id', async () 
   now += 100;
   await setRecent(tabId, track(current), now);
 
-  // The ordinary recent-track tail used to hold only 24 entries. A capture
-  // burst from unrelated profiles filled it after the active Story's only
-  // post-slide request.
+  // Fill the recent-track tail with unrelated captures after the active Story request.
   for (let i = 0; i < 24; i++) {
     now += 10;
     const unrelated = video(`noise-${i}`, String(900000000000100 + i));
@@ -725,8 +721,8 @@ test('collapses a cooled burst without reserving the previous Story after the ac
     await setRecent(tabId, track(unrelated), now);
   }
 
-  // A later Story gets its own PlayingRef after the burst cools. The prior
-  // Story's group is no longer a boundary candidate and must not stay reserved.
+  // A later Story gets its own PlayingRef after the burst cools.
+  // Release the prior Story's group once it leaves the boundary candidates.
   now = slideAt + 12_500;
   await setPlaying(tabId, {
     ids: [],
@@ -1504,7 +1500,7 @@ test('does not pin a remembered video across video, photo, dead-card, and video 
   assert.deepEqual(await selectPlaying(tabId, [item, image]), [item]);
 });
 
-// --- Reels: the surface that actually fails, and had no coverage at all ---
+// Reels
 
 test('follows the reel named by the page URL without any cover or mark', async () => {
   const reel = video('asset-r1', '900000000000001');
@@ -1521,8 +1517,7 @@ test('does not follow a reel whose id the URL does not name', async () => {
 });
 
 test('swaps reels on the URL id even when the slide mark never advances', async () => {
-  // The videoMark failure mode: Facebook reuses the MediaSourceHandle, so the
-  // mark is identical across two different reels. The URL id must still move.
+  // The URL ID must distinguish reels that share one MediaSource marker.
   const first = video('asset-r1', '900000000000001');
   const second = video('asset-r2', '900000000000002');
   const stuck = 'vm:reused';
@@ -1535,16 +1530,9 @@ test('swaps reels on the URL id even when the slide mark never advances', async 
   assert.deepEqual(await selectPlaying(tabId, [first, second]), [second]);
 });
 
-// --- coverBind poisoning ---
-// endorse() writes coverBind, domMatch reads it as DOM-grade, and DOM-grade wins
-// the cascade unconditionally — so a binding learned from a wrong guess confirms
-// itself forever. The code comments record this being observed in the wild.
+// Cover binding correction
 
-/** Seed coverBind[cover] = group(item) the way endorse() does: the cover is the
- *  centered id while `item` is the anchored stream, so the binding is learned
- *  from association alone. Deliberately NO thumbUrl link — with one the item
- *  would keep matching on this tick's own evidence, which is never poisoned and
- *  is not what this guards. */
+/** Seed an association-only cover binding without thumbnail evidence. */
 async function poison(item: MediaItem, coverUrl: string): Promise<void> {
   const playingAt = now;
   await setRecent(tabId, track(item), playingAt - 100);
@@ -1577,8 +1565,7 @@ test('drops a poisoned cover binding once another video keeps streaming under it
 });
 
 test('keeps a cover binding through a single contradicting burst', async () => {
-  // One tick cannot tell the watched video from a deep bucket's prefetch — the
-  // ambiguity endorse() already documents. Only a sustained contradiction counts.
+  // Require sustained evidence before replacing an ambiguous binding.
   const cover = photo('cover-2');
   const bound = video('asset-b', '900000000000020');
   const blip = video('asset-p', '900000000000021');
@@ -1593,8 +1580,7 @@ test('keeps a cover binding through a single contradicting burst', async () => {
 
   assert.deepEqual(await selectPlaying(tabId, [bound, blip]), [bound]);
 
-  // Re-reading the same recent-track snapshot is still one burst, not a second
-  // contradiction. Poll frequency must never evict a valid binding by itself.
+  // Re-reading one snapshot must not count as another contradiction.
   now += 2_000;
   assert.deepEqual(await selectPlaying(tabId, [bound, blip]), [bound]);
 });

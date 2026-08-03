@@ -153,9 +153,7 @@ workerScope.addEventListener?.('unhandledrejection', (e: PromiseRejectionEvent) 
     await diagObserver.flush();
     return { counters: await getDiagCounters(), events: await getDiagEvents() };
   },
-  /** Clear both stores. Settings has no reset button any more — the log records
-   *  permanently, so a clean slate before reproducing a bug is a maintenance action
-   *  rather than a preference, and this is where maintenance actions live. */
+  /** Clear persisted diagnostics for a fresh troubleshooting run. */
   reset: async (): Promise<void> => {
     await resetDiagCounters();
     await resetDiagLog();
@@ -220,14 +218,8 @@ const contentScriptRecovery = createContentScriptRecoveryCoordinator({
     });
     return { hooked: frame?.result === true, documentId: frame?.documentId };
   },
-  // The hook itself, read straight out of the extension package. content.js used to
-  // insert it as <script src=chrome.runtime.getURL('page-hook.js')>, which put an
-  // extension-origin URL into facebook.com's own head: a node any page script can watch
-  // for, and a URL it can fetch to read this hook's entire source. Nothing here is
-  // reachable from the page, and no web_accessible_resources entry is needed at all.
-  // Aimed at the probed document, so a navigation between the two cannot land this on a
-  // page that already hooked itself declaratively. A document that has gone makes this
-  // REJECT, which is the fail-closed behaviour the old <script>.onerror gave.
+  // Inject the packaged hook directly into the probed document's MAIN world. This
+  // keeps extension URLs out of the page DOM and rejects if the document navigates.
   installPageHook: async (tabId, documentId) => {
     await chrome.scripting.executeScript({
       target: hookTarget(tabId, documentId),
@@ -245,9 +237,8 @@ const contentScriptRecovery = createContentScriptRecoveryCoordinator({
 // the chrome.* context of detectors already living in open Facebook tabs. Ping
 // first, then restore only tabs whose receiver is gone.
 chrome.runtime.onInstalled.addListener((details) => {
-  // A first install has no old MAIN-world page hook, so use the normal entry.
-  // Updates retain that hook in the page and use the recovery entry to avoid
-  // stacking another pair of fetch/XHR wrappers around it.
+  // Installs use the normal entry. Updates use recovery to replace invalidated
+  // detectors without duplicating an existing MAIN-world hook.
   const file = details.reason === 'update' ? 'content-recovery.js' : 'content.js';
   void contentScriptRecovery.recover(file).catch((error) => {
     console.warn('[FaceScrap] content recovery failed', error);
@@ -344,14 +335,8 @@ function chromeDocumentIdentity(raw: unknown): string | undefined {
 
 function contentDocumentIdentity(sender: chrome.runtime.MessageSender, token: unknown): string | undefined {
   if (sender.frameId != null && sender.frameId !== 0) return undefined;
-  // 'prerender' is a legitimate, stable document: Chrome prerenders omnibox
-  // navigations to facebook.com before the user commits, and the document's
-  // id does not change when it later activates. Rejecting it here used to
-  // make every handler's early-return answer retryable:false, which the
-  // content script treats as permanent and tears itself down over, leaving
-  // the tab capture-dead once the prerendered page went live. Only a document
-  // that is truly gone (bfcache eviction / pending deletion) still must be
-  // rejected.
+  // A prerendered document keeps its identity when activated. Accept active and
+  // prerender lifecycles; reject documents being evicted or deleted.
   if (
     sender.documentLifecycle != null &&
     sender.documentLifecycle !== 'active' &&
@@ -454,7 +439,7 @@ chrome.webRequest.onBeforeRequest.addListener(
 );
 
 // 2. Bind every capture to a committed top-level document. The begin/commit
-//    barrier rejects old-document IPC even when it arrives after clearTab, and
+//    barrier rejects replaced-document IPC even when it arrives after clearTab, and
 //    also orders startup-delayed writes against that clear. Viewer continuations
 //    retain Library rows and already-accepted prefetch work, but later messages
 //    from their replaced document are still rejected.

@@ -1,8 +1,7 @@
 // Diagnostic counters and trace on their way to the worker (see diag.ts).
 //
-// This script is the only capture context that both outlives a single response and can
-// reach the worker, so it carries the MAIN-world hook's reports as well as its own DOM
-// scan's. It no longer carries a flag for either: the log records always.
+// This context forwards both MAIN-world hook reports and its own DOM-scan reports
+// to the worker. Diagnostics are always enabled.
 
 import {
   createCounterCoalescer,
@@ -19,20 +18,14 @@ import {
 } from '../shared/diag-log';
 import type { ContentRuntime } from './content-runtime';
 
-/** How long this context coalesces before messaging the worker. Raised from 1 s when
- *  the log became permanent: this is not a storage write, but every message resets the
- *  worker's ~30 s idle timer, and the detector produces one on roughly every accepted
- *  boundary. At 1 s an active feed would keep the worker awake for the whole session —
- *  the opposite of what an ephemeral worker is for. Still well inside that idle window,
- *  so a report is never left to a worker that has already been reaped. */
+/** Coalesce reports long enough to avoid keeping the service worker awake on an
+ *  active feed while remaining inside its idle window. */
 const DIAG_REPORT_INTERVAL_MS = 5_000;
 /** Events held between reports. Bounds one flush interval of a page-hook burst;
  *  the worker's observer applies its own, larger bound behind this one. */
 const DIAG_EVENT_QUEUE_MAX = 300;
 
-/** Record one traced event from a detector band. Exported so the bands reference
- *  this type instead of re-declaring it — two hand-copied duplicates had already
- *  drifted, both missing `lvl`. */
+/** Record one traced event. Detector bands share this type and field contract. */
 export type NoteFn = (
   ev: string,
   data?: Record<string, string | number | boolean>,

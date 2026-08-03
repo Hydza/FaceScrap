@@ -25,8 +25,7 @@ function harness(options: { maxTabs?: number; maxCountPerReason?: number } = {})
 }
 
 test('refuses a report that names no real tab', async () => {
-  // The only sender check left now that there is no enabled flag: a report has to name
-  // a tab the worker can stamp it with, or the trace cannot be read across tabs at all.
+  // Reject reports that cannot be associated with a tab.
   const { observer, scheduled, writes } = harness();
 
   assert.equal(observer.report(-1, { captureGraphql: 5 }), false);
@@ -87,9 +86,7 @@ test('retains the aggregate when a storage write fails transiently', async () =>
 });
 
 test('a counter the worker raises itself joins the renderer write', async () => {
-  // The observer persists two sources in ONE write: whatever the renderers reported, and
-  // whatever a diagBump raised in the WORKER. The second reached the panel as zero for a
-  // long time, so it stays pinned on its own.
+  // Persist renderer reports and worker counters in one write.
   const { diagBump, diagDrain } = await import('../src/shared/diag');
   const writes: DiagCounters[] = [];
   const observer = createDiagObserver({
@@ -100,7 +97,7 @@ test('a counter the worker raises itself joins the renderer write', async () => 
     schedule: () => 1,
     cancel: () => {},
   });
-  diagDrain(); // diag.ts's counters are module-level and shared with the tests above
+  diagDrain(); // Reset module-level counters shared by this suite.
 
   diagBump('captureNetwork');
   diagBump('buttonHidden', 3);

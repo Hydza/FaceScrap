@@ -45,8 +45,7 @@ const CONTROL_MAX_PX = 56;
 /** How far up from the media to look for the viewer card. A story's controls are
  *  a handful of levels above its image; ten is generous and bounded. */
 const ANCESTOR_LIMIT = 10;
-/** An ancestor wider than this multiple of the media is no longer the viewer card
- *  but the page around it, whose own top bar is also a row of icon buttons. */
+/** Wider ancestors belong to the page, whose top bar also contains icon buttons. */
 const CARD_WIDTH_SLACK = 1.8;
 /** How long the result glyph stays up before the button returns to idle. */
 const RESULT_HOLD_MS = 2_500;
@@ -157,9 +156,7 @@ type Glyph = 'idle' | 'done' | 'failed';
  *  carries weight at 20px, not extent: a taller, thinner glyph reads SMALLER beside
  *  them.
  *
- *  Built with <path> elements, not innerHTML: an isolated world is exempt from the
- *  page's Trusted Types policy today, but a TypeError there costs the button its icon
- *  silently. */
+ *  Build with <path> elements so page Trusted Types policies cannot affect the icon. */
 const GLYPHS: Record<Glyph, string[]> = {
   // Arrow (stem 4.0 wide, head 11.6) over its tray. 16.3% ink, 15.5 tall.
   idle: [
@@ -220,17 +217,8 @@ export function pickAnchorElement(doc: Document, win: Window): Element | undefin
   }
   if (best) return best;
 
-  // Facebook paints some photo stories as a <div> with a CSS background-image
-  // rather than an <img> — the exact case fbcdnCoverUrl in content-playing.ts was
-  // written to cover. Those reach the worker (the detector reads the same cover URL
-  // either way) and come back offered for download, so a button that can only anchor
-  // to <img> is not intermittently missing on them, it is permanently missing.
-  //
-  // elementsFromPoint, not a tree walk: "a div with a background-image" has no tag
-  // selector, so the alternative is querySelectorAll('*') plus a style recalc per
-  // node, over Facebook's tree, on every scroll frame. This reads the handful of
-  // elements stacked over one point — the technique centreMedia already uses for
-  // this same problem, and the reason its comment calls itself cheap.
+  // Photo stories may use a background-image div instead of an img. Inspect the
+  // elements at the viewport center to find that surface without scanning the tree.
   if (typeof doc.elementsFromPoint !== 'function') return undefined;
   for (const el of doc.elementsFromPoint(cx, cy)) {
     const r = el.getBoundingClientRect();
@@ -274,10 +262,7 @@ button {
   justify-content: center;
 }
 .trigger svg {
-  /* Was 62%, derived from Facebook's documented 20px-glyph-in-a-32px-control. Their
-     real play glyph renders larger than that, so this is set from the ask instead:
-     level with play, a touch over. 80% of the measured control with the glyph
-     filling 15.5 of its 24 units puts our ink at ~16.5px in a 32px control. */
+  /* Match the visual weight of the surrounding viewer controls. */
   width: 80%;
   height: 80%;
   fill: #fff;
@@ -582,11 +567,7 @@ export function createDownloadOverlay(ports: DownloadOverlayPorts): DownloadOver
    *  offset is unchanged by scrolling. refresh() re-scans on its own 750ms tick, which is when a
    *  row can have moved. */
   function trackGeometry(): void {
-    // Only a button that is UP can be re-placed. This runs from the scroll listener, so
-    // while the overlay is hidden — nothing downloadable on screen, or the setting off —
-    // every scroll frame was paying a full anchor search (a querySelectorAll over every
-    // video and img, plus an elementsFromPoint walk) to reposition nothing. It cannot show
-    // the button either: only refresh() ever does that.
+    // Reposition only a visible button. refresh() owns showing it.
     if (!wrap || wrap.getAttribute('data-show') !== '1') return;
     if (frame !== undefined) return;
     frame = win.requestAnimationFrame(() => {

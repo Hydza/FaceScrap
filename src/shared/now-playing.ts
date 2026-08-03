@@ -116,10 +116,8 @@ const groupCover = new Map<string, string>();
 const markBind = new Map<string, string>();
 const BIND_MAX = 300;
 // Distinct fresh bursts that contradict a coverBind with anchored evidence for a
-// DIFFERENT group. A learned binding is read as DOM-grade, and DOM-grade wins the
-// cascade unconditionally — so a binding learned from a wrong guess re-proves
-// itself on every later tick and never expires (only FIFO eviction or a real
-// navigation clears it). endorse()'s comments record this being observed.
+// different group. Learned bindings are DOM-grade and persist until navigation or
+// FIFO eviction, so contradictory evidence must invalidate them explicitly.
 //
 // Two ticks, not one: a single tick cannot separate the watched video from a deep
 // bucket's burst prefetch anchoring in the same transition instant — the exact
@@ -155,9 +153,7 @@ export function getGroupCover(tid: number, groupKey: string): string | undefined
   return groupCover.get(`${tid}:${groupKey}`);
 }
 
-/** Forget a closed tab's last-live memory. Not on any production path: a strict
- *  subset of purgeTabBindings, kept because two tests reset state between cases
- *  with it. */
+/** Clear a tab's ephemeral live-selection state. */
 export function forgetLastLive(tid: number): void {
   lastLive.delete(tid);
   emptiedUnder.delete(tid);
@@ -210,14 +206,8 @@ async function persistPlayingPin(tid: number, identity: string, groups: Set<stri
 // in-flight snapshot, so tab switches and concurrent retries cannot cross-wire.
 // lastLive is intentionally NOT persisted (see storage.ts).
 //
-// Transport, not decision — but not a module of its own either. Its only WRITERS
-// into the maps above are three functions, and all three carry DECISION
-// invariants rather than transport ones: dropBindingMemory also clears
-// bindDisagree, which is never persisted; restoreBindingState re-applies both
-// remember()'s BIND_MAX FIFO and the markBind provenance filter that endorse()
-// and selectPlaying mirror; and purgeTabBindings has to reset the outbox and
-// that memory in ONE call or the F5 race below reopens. (bindingState only
-// READS the maps into a snapshot; it carries no invariant of its own.)
+// Binding transport preserves the same FIFO and provenance constraints as the
+// in-memory maps. Purging a tab resets its memory and outbox atomically.
 const BIND_ACK_TIMEOUT_MS = 5_000;
 const BIND_RETRY_MIN_MS = 250;
 const BIND_RETRY_MAX_MS = 8_000;
@@ -382,15 +372,9 @@ export async function loadBindings(tid: number): Promise<void> {
   outbox.revision = record.revision;
   outbox.dirty = false;
   outbox.retry = 0;
-  // Provenance invariant (markBind never holds `p:` keys), restore layer: the
-  // write gate in endorse() already refuses provisional marks, so a clean
-  // write path can't persist one — this filter only guards corrupt or
-  // hand-written storage, and the read guard in selectPlaying backstops both.
+  // Reject provisional marks even if persisted storage is malformed.
 }
-// A nav/close reset (clearTab) fired for this tab: drop its in-memory learned
-// bindings + last-live and cancel any pending flush, so a debounced write can't
-// resurrect bind_ after storage was wiped (the F5 race) and the panel stops
-// showing the pre-reload video from stale in-memory state.
+// Clear learned state and cancel pending writes for a reset tab.
 export function purgeTabBindings(tid: number): void {
   dropBindingMemory(tid);
   lastLive.delete(tid);
@@ -410,29 +394,16 @@ export function purgeTabBindings(tid: number): void {
   outbox.revision = 0;
 }
 
-// efg decode is the per-item hot cost; selectPlaying reruns on every storage
-// burst + the ~500ms panel tick, and an item's url/audioUrl are normally
-// UNCHANGED between calls — but fbAssetKeys' own one-slot memo (media.ts) is
-// keyed by the single most-recently-decoded url, so iterating several items
-// per tick (and calling it twice per item: url, then audioUrl) thrashes that
-// slot on every step and never hits across calls. Cache the fully-decoded
-// result here instead, keyed by tab+item so two tabs' items can't collide; a
-// hit requires BOTH source urls to still match, so a DASH url/audioUrl/next-
-// url swap is decoded again rather than returning stale keys. FIFO-capped
-// like the other per-tab maps below.
+// Cache decoded asset keys by tab and item. A hit requires both source URLs to
+// match, so representation changes are decoded again. The cache is FIFO-bounded.
 interface ItemKeys {
   keys: string[];
   audioKeys: string[];
   audioMid: string | null;
 }
 const NO_KEYS: ItemKeys = { keys: [], audioKeys: [], audioMid: null };
-// Sized ABOVE the retention cap on purpose. selectPlaying walks up to settings.maxItems
-// items per tick, so a cache smaller than one walk evicts each entry a step before the
-// next tick reaches it and the hit rate is exactly 0 — which is what 600 was against a
-// default cap of 1500. Twice the default also leaves room for a second tab's working set
-// (the key is tab+item). A user who raises maxItems past this is back to a cold cache,
-// which is slow, not wrong. Coupled by comment, like ALT_CONFIRM_REFRESH_MS in
-// recent-observer.ts: re-check it if DEFAULT_SETTINGS.maxItems changes.
+// Hold two default retention windows so one full walk and a second tab can coexist.
+// Re-evaluate this multiplier when DEFAULT_SETTINGS.maxItems changes.
 const ITEM_KEYS_CACHE_MAX = DEFAULT_SETTINGS.maxItems * 2;
 const itemKeysCache = new Map<string, { url: string; audioUrl: string | undefined; keys: ItemKeys }>();
 function keysOf(tid: number, i: MediaItem): ItemKeys {
@@ -450,27 +421,9 @@ function keysOf(tid: number, i: MediaItem): ItemKeys {
   return keys;
 }
 
-/**
- * Everything the detector can conclude about a tab from stored evidence alone,
- * with NO writes and no clock of its own.
- *
- * Split out of selectPlaying by pure code motion, because two callers need this
- * reasoning and only one of them may do the rest of it. selectPlaying goes on to
- * endorse, learn bindings and write the pin — correct for exactly one caller on
- * one cadence. The in-page download button polls, so it must never do any of
- * that; what it needs is only the part above, which is why that part is now a
- * function instead of the first half of a 540-line one.
- *
- * The anti-prefetch scoring below is the whole reason this could not simply be
- * reimplemented for the button: fbcdn prefetches the NEXT reel, so "the most
- * recently fetched track" routinely names a video the user is not watching. A
- * button wired to that would download the wrong video, which is worse than a
- * button that stays hidden.
- *
- * The bind maps are PARAMETERS, not the module globals of the same name: the
- * service worker holds none of the panel's in-memory state and passes what it
- * read out of storage. The names match so the moved body needed no edits.
- */
+/** Derive read-only playing evidence from stored state. This function never
+ *  endorses, learns bindings or writes a pin. Its anti-prefetch scoring prevents
+ *  recently fetched neighbouring reels from being treated as active. */
 function playingEvidence(
   tid: number,
   items: MediaItem[],
@@ -481,17 +434,14 @@ function playingEvidence(
   markBind: Map<string, string>,
 ) {
   const active = activeMediaIds(ref?.ids);
-  // A previous release stored generic endpoints as path-only ids. Accept that
-  // alias only when it names exactly one current canonical resource; if several
-  // safe_image.php rows exist, honest-empty is safer than selecting all of them
-  // or guessing which photo the old ambiguous id meant. Shared with storage.ts's
-  // retention matcher (isExactPlayingItem) so the two can't drift back apart.
+  // Accept a persisted path-only alias only when it names one canonical resource.
+  // Share this ownership map with retention matching.
   const historicalOwners = historicalAliasOwners(items);
 
   // Fetched-track fallback: every fbcdn track streamed within the match window —
   // only trusted while a <video> is actually centered, so a photo story doesn't
   // surface a stale video. Precompute each track's match keys: efg asset ids
-  // (canonical), mediaId (legacy numeric), trackKey (filename).
+  // (canonical), mediaId (numeric fallback), trackKey (filename).
   const tracks =
     ref?.hasVideo && recent
       ? recent.tracks.filter(
@@ -514,7 +464,7 @@ function playingEvidence(
       if (k.keys.some((x) => s.assets.includes(x))) return true;
       if (k.audioKeys.some((x) => s.assets.includes(x))) return true;
     }
-    // Legacy: exact numeric-id or audio-track match (older fbcdn URLs).
+    // Fallback: exact numeric id or audio-track match.
     if (i.id === s.mid || (k.audioMid != null && k.audioMid === s.mid)) return true;
     // Fallback: the fetched track's filename is one of this video's DASH reps.
     if (i.trackIds != null && i.trackIds.includes(s.tk)) return true;
@@ -539,7 +489,7 @@ function playingEvidence(
     }
     return false;
   };
-  // Learned binding: a centered cover we previously saw over this exact video.
+  // Learned binding between this cover and the active video.
   const coverBindMatch = (g: string): boolean => {
     for (const id of active) {
       if (coverBind.get(`${tid}:${id}`) === g) return true;
@@ -662,37 +612,16 @@ function playingEvidence(
       now - newest < FETCH_FRESH_MS;
     return crossedBoundary || hasSustainedAfterBoundary(g);
   };
-  // Same-blob revisit rescue: a learned mark→group binding is dom-grade evidence
-  // (a prefetch never has a mark), added BEFORE any relay can look at window
-  // residue. The FULL mark carries the per-load `vm:` id, so it is card+load
-  // specific for a video. But a PHOTO story card carries no `vm:` (centreMedia
-  // adopts no video), so its full mark equals the durable portion learned while
-  // the previous VIDEO card played — honouring it would pin that stale video onto
-  // the photo. Gate on hasVideo: a slide with no video can't be a buffered video
-  // revisit, so it must never resurrect a video group.
-  // The provisional check is the read layer of the markBind provenance
-  // invariant (endorse()'s write gate and loadBindings' restore filter are the
-  // other two): markBind can't contain `p:` keys, so this only defends against
-  // one of those layers being relaxed in isolation.
+  // Treat a learned full mark as DOM-grade evidence only for video slides. Full
+  // marks include the per-load `vm:` id; provisional marks are never trusted.
   const fullMark = ref?.mark;
   if (ref?.hasVideo === true && fullMark != null && !isProvisionalStoryMark(fullMark)) {
     const mg = markBind.get(`${tid}:${fullMark}`);
     if (mg != null) domLive.add(mg);
   }
-  // The re-attach-durable DOM-card portion (no `vm:`) lets an already-buffered
-  // MSE story video re-match after reopen once its `vm:` id regenerated. Honour
-  // it only when no OTHER group is streaming fresh since this slide began: a
-  // genuine buffered revisit has no competing stream, whereas a transition can
-  // expose stale binding evidence alongside a different fresh group — there,
-  // skip the rescue so the relay/slide-change logic can hand over.
-  // Gate on hasVideo for the same reason as the full-mark rescue above: on a photo
-  // card tracks is forced empty (hasVideo=false ⇒ no fetch evidence), so
-  // otherStreamingFresh is unconditionally false and this would re-pin the
-  // previously learned video every tick. A photo slide is never a video revisit.
-  // Owner-independent key (see story-mark.ts's durableStoryCardKey): the tray
-  // URL's owner segment is pinned to whichever card opened the tray, so the
-  // owner-bearing durableStoryMarkPortion would miss this rescue on a revisit
-  // through a different tray entry point even for the identical DOM card.
+  // Recover a reopened MSE story only when no competing group has fresh stream
+  // evidence. Require video state so photo slides cannot inherit its binding.
+  // The owner-independent card key supports reopening through another tray entry.
   const storyPortion = durableStoryCardKey(ref?.mark);
   const boundGroup =
     ref?.hasVideo === true && storyPortion != null ? markBind.get(`${tid}:${storyPortion}`) : undefined;
@@ -759,26 +688,9 @@ function playingEvidence(
   };
 }
 
-/**
- * The single video group this tab is playing — for a caller that may not write.
- *
- * A story or reel streams under MSE, so its <video> carries a `blob:` src that
- * content.ts refuses to turn into an id: nothing in PlayingRef.ids names the
- * video, only its cover. That is why the in-page button used to be absent on
- * every video while the panel had no trouble — the panel was never matching on
- * ids, it was matching on the tracks fbcdn actually streamed.
- *
- * Refuses rather than guesses, on all three counts: more than one live group is
- * an ambiguity the panel can render and a download button cannot (it offers ONE
- * resolution ladder), an unanchored stream is indistinguishable from the next
- * reel being prefetched, and captureWait means this slide's track is in flight
- * with its item not captured yet — picking now would name the previous slide.
- *
- * Each refusal counts itself (playing* in diag.ts). They are the difference between
- * this function and the panel's selectPlaying, so they are also the whole answer to
- * "the panel shows the piece and the button is not there" — a question the counters
- * settle in one reproduction instead of a reading of both cascades.
- */
+/** Return one read-only active video group. MSE videos are matched through their
+ *  streamed fbcdn tracks because their element src is a `blob:` URL. Refuse
+ *  ambiguous, unanchored or incomplete captures and count each refusal. */
 export function playingVideoGroup(
   tid: number,
   items: MediaItem[],
@@ -823,19 +735,8 @@ export function playingVideoGroup(
   return evidence.bestFetch;
 }
 
-// The in-page button's own memory of what it last identified, per tab.
-//
-// playingVideoGroup reasons over the tracks fbcdn streamed, and those go stale
-// FETCH_FRESH_MS after the last one arrives. A short reel finishes buffering in a
-// couple of seconds and then streams NOTHING while it loops, so the button showed
-// instantly and vanished a few seconds later — and came back gone after a tab
-// switch, where the poller is throttled and the window ages out untouched.
-// selectPlaying never showed that because it keeps lastLive across ticks. Same
-// idea, scoped to this one consumer and kept out of its way.
-//
-// Not a second writer on the detector's state: an in-memory cache belonging to
-// the handler that reads it, keyed by the slide signature so it expires when the
-// user moves to another reel rather than following them onto it.
+// Per-tab memory for the in-page button. Key by slide signature so a buffered
+// video's identity survives stale network evidence but never follows another slide.
 const buttonMemory = new Map<number, { group: string; sig: string; at: number }>();
 
 /** Hold the last identified group for one slide, so evidence ageing out mid-play
@@ -891,10 +792,7 @@ export async function selectPlaying(tid: number, items: MediaItem[]): Promise<Me
     blind,
     relayable,
   } = playingEvidence(tid, items, ref, recent, now, coverBind, markBind);
-  // Second-guess groups that reached domLive on a learned binding ALONE, before
-  // ANY of the cascade's inputs are read — a binding contradicted by anchored
-  // evidence for another group across BIND_DISAGREE_STREAK consecutive ticks is
-  // wrong, and left in place it re-proves itself on every later tick.
+  // Invalidate binding-only groups after sustained contradictory anchored evidence.
   for (const g of bindGroups) {
     const disagreeKey = `${tid}:${g}`;
     if (freshGroups.has(g)) {
@@ -932,35 +830,15 @@ export async function selectPlaying(tid: number, items: MediaItem[]): Promise<Me
     }
     bindDisagree.delete(disagreeKey);
     scheduleBindFlush(tid);
-    // The remembered choice was endorsed off this binding, tick after tick. With
-    // the binding gone it has no evidence left, and leaving it would pin the same
-    // wrong video through the sticky branch — the slide signature never changed,
-    // so no relay would fire to replace it. Dropping it here, BEFORE prev is
-    // read, lets the seed branch pick from what is actually streaming.
+    // Drop any remembered choice that depended on the invalidated binding.
     if (lastLive.get(tid)?.keys.has(g) === true) lastLive.delete(tid);
   }
 
   const prev = lastLive.get(tid);
-  // A relay is only as good as its evidence, and the only evidence that IDs
-  // "the video of THIS slide" is an ANCHORED stream: either a strict post-slide
-  // start or one continuous stream crossing the small detector-skew window.
-  // Everything else is a guess — window residue can't tell tray card N from
-  // N+1 (one prefetch burst, near-identical timestamps), and a mid-watch
-  // prefetch of a DEEPER tray bucket streams fresh and post-slide yet belongs
-  // to a story two profiles down; both guesses were observed painting the
-  // wrong story as playing, and endorse() would durably learn the error into
-  // coverBind. On blind surfaces (no ids, no mark) the signature can't change,
-  // slideAt goes stale, and no anchor can form — there the old freshness-based
-  // takeover is the only relay there is.
-  // Best RELAYABLE candidate OUTSIDE the remembered set — the remembered
-  // video's own residual tracks often outscore a just-started next video, so
-  // the relay decision must exclude them or back-to-back videos never hand
-  // over. Among several ANCHORED candidates (the true video and a deep
-  // bucket's burst prefetch can anchor in the same transition instant),
-  // recency cannot tell them apart: prefer the stream that began CLOSEST to
-  // the slide start, then the more SUSTAINED one — genuine playback keeps
-  // appending tracks while a one-shot prefetch scores 1-2. Blind surfaces
-  // keep the recency order; no anchor exists there to compare.
+  // Relay only anchored streams: a post-slide start or a continuous stream across
+  // the detector-skew window. Exclude the remembered group, then prefer the start
+  // closest to the slide boundary and the most sustained stream. Blind surfaces
+  // have no anchor and retain recency ordering.
   let bestOther: string | undefined;
   if (prev != null) {
     const others = ranked.filter(([g]) => !prev.keys.has(g) && relayable(g));
@@ -983,17 +861,8 @@ export async function selectPlaying(tid: number, items: MediaItem[]): Promise<Me
   const prevNewest = prev != null ? Math.max(0, ...[...prev.keys].map((k) => fetchNewest.get(k) ?? 0)) : 0;
   const prevStreaming = prev != null && now - prevNewest < FETCH_FRESH_MS;
 
-  // Endorse a set of groups as "what's playing" — and, when it's a single video
-  // on a video slide, LEARN the on-screen evidence: bind the centered cover ids
-  // to the group (so returning to this already-buffered video re-matches without
-  // any network traffic) and keep its cover URL as a display thumbnail.
-  //
-  // Learning is gated by PROVENANCE: bindings are durable (persisted, and a
-  // coverBind hit counts as dom-grade evidence on every future visit), so they
-  // may only come from evidence that identifies THIS slide — a dom-grade
-  // endorsement, or a fetch endorsement whose stream anchors to the slide
-  // start. A guessed endorsement may paint once, but must never teach: a wrong
-  // coverBind row misidentifies this exact slide until the FIFO evicts it.
+  // Persist single-video bindings only from DOM-grade evidence or a stream anchored
+  // to this slide. Guessed endorsements may render but never create durable bindings.
   let pinWrite: Promise<void> | undefined;
   const endorse = (keys: Set<string>, domGrade = false): void => {
     lastLive.set(tid, { keys, at: now, seenActive: activeSig });
@@ -1012,13 +881,8 @@ export async function selectPlaying(tid: number, items: MediaItem[]): Promise<Me
     const durableAnchor = anchoredAfterSlide(fetchOldestSince.get(g) ?? Infinity, slideAt);
     if (!domGrade && !durableAnchor) return;
     for (const id of active) remember(coverBind, `${tid}:${id}`, g);
-    // A full per-load marker requires POST-slide fetch evidence whose first
-    // track sits near the slide start. The durable Story portion may also be
-    // learned from direct, fresh DOM evidence; that is what survives a panel
-    // restart when an already-buffered video emits no network traffic and the
-    // later poll exposes no src/poster ids. The provisional check is the WRITE
-    // gate of the markBind provenance invariant — loadBindings' restore filter
-    // and the read guards mirror it as defense in depth.
+    // Learn full per-load marks from post-slide fetch evidence. Direct fresh DOM
+    // evidence may also learn the durable Story portion. Never persist provisional marks.
     if (ref.mark != null && !isProvisionalStoryMark(ref.mark)) {
       const sp = durableStoryMarkPortion(ref.mark);
       // Owner-independent counterpart of `sp` (see story-mark.ts's
@@ -1060,15 +924,8 @@ export async function selectPlaying(tid: number, items: MediaItem[]): Promise<Me
             : a,
         )[0];
       }
-      // The wide match window exists for RELAYS (a prefetched story must stay
-      // matchable when its slide finally arrives); claiming an EMPTY slot is
-      // held to actively-streaming evidence so a cold panel open can't
-      // resurrect an old prefetched neighbour as "playing now". And if the
-      // slot is empty because honest-empty REFUSED to guess on this very
-      // slide, streaming-fresh is not enough — only an anchored candidate may
-      // reseed here, or a deep bucket's 30s-fresh burst wins one tick later
-      // exactly what the relay just declined it. (A cold open has no refusal
-      // recorded, and its stale slideAt could never anchor anything.)
+      // Empty slots require active streaming. After a refusal on this slide, only
+      // anchored evidence may reseed the slot.
       const refusedHere = emptiedUnder.get(tid) === activeSig;
       // Post-refusal escape hatch for late starts on an UNCHANGED slide (a
       // story paused and resumed >12s in): slideAt never re-stamps, so the
@@ -1078,9 +935,7 @@ export async function selectPlaying(tid: number, items: MediaItem[]): Promise<Me
       // for one 12s window at the transition and has long gone quiet.
       const freshNow = (g: string): boolean => now - (fetchNewest.get(g) ?? 0) < FETCH_FRESH_MS;
       const onlyFreshStreaming = freshNow(seed) && ranked.every(([g]) => g === seed || !freshNow(g));
-      // A freshly detected, identifiable slide must use anchored/cross-boundary
-      // evidence even when lastLive is empty. The permissive cold-open escape is
-      // only for an old unchanged ref whose slideAt can no longer form an anchor.
+      // A fresh identifiable slide requires anchored or cross-boundary evidence.
       const freshlyDetectedNonBlind = !blind && now - slideAt < FETCH_FRESH_MS;
       const seedAllowed =
         relayable(seed) || (!freshlyDetectedNonBlind && (!refusedHere || onlyFreshStreaming));
@@ -1098,16 +953,8 @@ export async function selectPlaying(tid: number, items: MediaItem[]): Promise<Me
     (!captureWait || bestOtherProvenBeforeCapture) &&
     (activeSig !== prev.seenActive || (blind && now - prev.at > PLAYING_TAKEOVER_MS))
   ) {
-    // DEFINITE slide change (marker/cover signature differs from the one the
-    // remembered video was endorsed under) → relay to the best ANCHORED
-    // candidate, immediately: the anchor already proves its stream began with
-    // this slide, so the old 1.5s pre-slide-evidence hold is unnecessary — it
-    // existed precisely because unanchored evidence couldn't be trusted, and
-    // unanchored candidates no longer relay at all. Deferring (no anchored
-    // candidate yet) does NOT consume the signature — seenActive is only
-    // written by endorse — so the relay stays armed while the real video's
-    // first track is still in flight. While the user stays on the same slide
-    // the signature never changes and a background prefetch can never win.
+    // On a definite slide change, relay immediately to the best anchored candidate.
+    // Deferring without one leaves the signature unconsumed and the relay armed.
     endorse(new Set([bestOther]));
   } else if (
     activeSig !== prev.seenActive &&
@@ -1140,18 +987,8 @@ export async function selectPlaying(tid: number, items: MediaItem[]): Promise<Me
     !ref.hasVideo &&
     (active.size > 0 || storyPortion != null || activeSig !== prev.seenActive)
   ) {
-    // A non-video slide is centered now and it is NOT the slide the remembered
-    // video was endorsed under: a photo story (centered ids), or a dead
-    // "story no longer available" bucket (no ids, no cover — but its card
-    // marker moved). Either way it supersedes the remembered video — "now
-    // playing" follows what the user is viewing, and keeping the previous
-    // profile's story endorsed over an unavailable card paints the wrong
-    // story. The content script debounces transient empties (1.2s), so a
-    // no-signal emission reaching here is a stable real slide. A mute slide
-    // whose marker cannot advance at all keeps the sticky: with no signal of
-    // change there is nothing honest to act on. A durable Story marker is itself
-    // enough: after content.ts's stable-empty debounce, hasVideo=false means the
-    // card is no longer presenting the remembered video even if its id stayed.
+    // Stable non-video evidence supersedes the pinned video. The content script
+    // already debounces transient empty states.
     lastLive.delete(tid);
   }
 

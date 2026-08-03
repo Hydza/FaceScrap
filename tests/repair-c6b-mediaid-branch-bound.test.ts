@@ -3,34 +3,7 @@ import test from 'node:test';
 
 import { legacyMediaId, mediaId, mergeMedia, sanitizeIncomingItems } from '../src/shared/media';
 
-// --- C6b repair: mediaId's OWN branches must be bounded too, not only
-// genericEndpointId's ------------------------------------------------------
-//
-// repair-c6-generic-endpoint-path-bound.test.ts (round 2) bounded all three
-// branches INSIDE genericEndpointId via what was then boundGenericEndpointId.
-// An adversarial review found mediaId() has TWO MORE return branches that
-// never call into genericEndpointId at all, so round 2's fix never touched
-// them:
-//
-//   - the `simpleVideo` branch (a strict `/v/t42/<name>.mp4`, no extra
-//     slash): `return `video-${simpleVideo[1]}...`` embeds the captured
-//     filename with no length cap of its own.
-//   - the final "real CDN object" fallback — reached either by a `/v/` path
-//     that does NOT match the strict simpleVideo shape, or by ANY path
-//     (inside or outside `/v/`) that matches KNOWN_MEDIA_EXTENSION_RE:
-//     `return `asset:${path}...`` embeds the whole `path` with no cap.
-//
-// Verified end-to-end through sanitizeIncomingItems (the real untrusted
-// page-message channel) against the code as it stood before this repair: a
-// 7506-char id and two ~7520-char ids were all accepted and returned as
-// MediaItem.id — 27x past the 256-char contract documented at media.ts's
-// MEDIA_ID_MAX_LEN (id.length <= ID_BOUND below).
-//
-// The repair does not add a third per-branch call (the pattern that missed a
-// sibling branch twice already). It bounds the WHOLE candidate ONCE, at the
-// single point every id leaves mediaId(): mediaIdCandidate() computes the
-// raw, unbounded value exactly as the old mediaId() body did, and the new
-// public mediaId() wraps it with boundMediaId() before returning.
+// Every mediaId branch must return a bounded identifier without collapsing distinct resources.
 const ID_BOUND = 256;
 
 test('C6b repair: the simpleVideo branch bounds an over-long captured filename (reviewer repro #1)', () => {
@@ -121,12 +94,7 @@ test('C6b repair: two different overlong final-asset: paths never collide into t
   assert.notEqual(idA, idB, 'two distinct overlong resources must not be grouped under one id');
 });
 
-// --- Stability half: every URL shape that already produced a short id keeps
-// producing THE SAME id, byte for byte. These literal expected values were
-// captured directly from mediaId()/legacyMediaId() BEFORE this repair — they
-// are not invented, they are what the pre-repair code actually returned — so
-// a fix that re-hashes an already-short id (rather than only bounding the
-// overflowing ones) fails these. ---------------------------------------
+// Preserve byte-for-byte identifiers for inputs that already fit the bound.
 
 test('C6b repair: short simpleVideo URLs keep their exact prior id (stability)', () => {
   assert.equal(
@@ -160,11 +128,8 @@ test('C6b repair: short final asset: URLs keep their exact prior id (stability)'
   );
 });
 
-// --- legacyMediaId: the same unbounded-URL-input shape, called out
-// explicitly as another id producer in this file that needs the same
-// treatment. Not a MediaItem.id itself, but matchesActiveMediaId and
-// sidepanel.ts's legacy-alias re-linking both key off it, so it shares the
-// same "attacker controls an unbounded pathname/digit run" flaw. -----------
+// Bound attacker-controlled path and numeric segments in legacyMediaId because
+// active matching and legacy-alias relinking use its output.
 
 test('C6b repair: legacyMediaId bounds an over-long numeric run', () => {
   const url = 'https://video.xx.fbcdn.net/v/t1.0-9/' + '9'.repeat(7000) + '_n.jpg';
@@ -198,10 +163,8 @@ test('C6b repair: legacyMediaId keeps its exact prior id for short URLs (stabili
   );
 });
 
-// --- genericEndpointId's nested-url branch recurses into the raw candidate
-// computation (not the public mediaId) precisely so that a pathologically
-// long NESTED url can never change the hash embedded in an already-bounded
-// OUTER id. Locks in that design choice. ------------------------------
+// Recurse through raw candidates so a long nested URL cannot change the hash
+// embedded in a bounded outer ID.
 
 test('C6b repair: a safe_image.php proxy wrapping an ordinary nested fbcdn URL keeps its exact prior id (stability)', () => {
   const nested =

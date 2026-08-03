@@ -10,10 +10,7 @@
     <div id="app" class="app" data-view="now" inert aria-hidden="true" aria-busy="true">
       <header class="brand">
         <span class="brand-logo" aria-hidden="true">
-          <!-- The brand mark lives in ONE file: icons/logo.svg, which the icon
-               generator also reads to build the toolbar PNGs. Do not inline a
-               copy of the glyph here — that duplication is what let the header
-               and the toolbar icon drift into two different logos. -->
+          <!-- Shared source for the panel mark and generated toolbar icons. -->
           <img src="icons/logo.svg" width="26" height="26" alt="" />
         </span>
         <span class="brand-name">FaceScrap</span>
@@ -22,16 +19,14 @@
         </span>
       </header>
 
-      <!-- Both banners change visibility asynchronously, so both are live regions — the
-           degraded notice is informative, the fatal one interrupts. -->
+      <!-- Asynchronous status and interrupting error regions. -->
       <p id="degraded" class="banner" role="status" hidden data-i18n="bannerDegraded">
         This browser can't merge audio and video: HD saves as video only. Use Chrome or Edge to include audio.
       </p>
       <p id="fatal" class="banner banner-error" role="alert" hidden></p>
 
       <section id="view-now" class="view view-now">
-        <!-- An empty view is the best place for the two things a first-run user needs:
-             a way forward, and the passive-capture promise stated plainly. -->
+        <!-- First-run guidance and passive-capture notice. -->
         <div id="now-empty" class="empty">
           <span class="empty-mark" aria-hidden="true"></span>
           <div>
@@ -66,12 +61,9 @@
               <p id="now-format" class="preview-format"></p>
               <span id="now-audio" class="audio-pill"></span>
             </div>
-            <!-- Progress sits ON the media, over a veil: a running save must not
-                 displace the picker and the button under it. -->
+            <!-- Overlay progress without displacing media controls. -->
             <div id="now-progress" class="preview-progress" hidden>
-              <!-- The phase and the byte count are the only announcement a save makes;
-                   the track itself is the (indeterminate) progressbar, named by the
-                   phase label so no new message key is needed. -->
+              <!-- The phase labels both the status and indeterminate progress bar. -->
               <div class="progress-line" role="status">
                 <p id="now-progress-label" class="progress-label"></p>
                 <p id="now-progress-pct" class="progress-pct"></p>
@@ -87,9 +79,7 @@
               <span id="now-quality-label" class="quality-label" data-i18n="videoQuality">Resolution</span>
               <span id="now-qcount" class="quality-count"></span>
             </div>
-            <!-- Flat 38px whatever the option count, listing only the representations
-                 the manifest actually offers, and floating OVER the media so the frame
-                 never resizes when it opens. -->
+            <!-- Fixed-height trigger with a floating list of available representations. -->
             <div class="picker">
               <button
                 id="now-qtrigger"
@@ -146,11 +136,7 @@
           ></button>
         </div>
 
-        <!-- Deliberately NOT a live region: doRender() replaces this container
-             wholesale, so aria-live here made a screen reader re-read every tile
-             on any change — including a single tile going busy and back during
-             one download. The count in #grid-count carries role="status"
-             instead: it changes only when the number of items does. -->
+        <!-- Keep the replaced grid silent; #grid-count announces item-count changes. -->
         <main id="list" class="grid"></main>
         <div id="grid-empty" class="empty" hidden>
           <span class="empty-mark" aria-hidden="true"></span>
@@ -168,8 +154,7 @@
             <p id="tray-count" class="tray-count"></p>
             <p id="tray-meta" class="tray-meta"></p>
           </div>
-          <!-- Only past three picks, the point at which deselecting one at a time
-               becomes tedious. -->
+          <!-- Bulk deselection appears above three picks. -->
           <button id="clear-picks" class="btn-outline" type="button" hidden data-i18n="deselectAll">
             Deselect all
           </button>
@@ -200,13 +185,8 @@
           </div>
         </div>
 
-        <!-- Four pages instead of one long scroll. No fifth: a profile archive would mean
-             ORIGINATING requests for media the user is not watching, which is exactly the
-             thing ARCHITECTURE.md's passive-hook invariant forbids. -->
-        <!-- Toggle buttons, NOT role="tab". A tab must carry aria-selected and point at a
-             role="tabpanel" via aria-controls, and the tablist pattern also owes the user
-             arrow-key navigation between tabs. It is the same shape as #views and
-             #filters, so it is spelled the same way. -->
+        <!-- Four passive settings pages; media archives would violate passive capture. -->
+        <!-- Toggle buttons use the same pressed-state pattern as views and filters. -->
         <nav id="set-tabs" class="seg seg-tabs" data-i18n-aria="ariaSetTabs" aria-label="Settings pages">
           <button type="button" data-tab="general" aria-pressed="true" data-i18n="tabGeneral">General</button>
           <button type="button" data-tab="look" aria-pressed="false" data-i18n="tabLook">Look</button>

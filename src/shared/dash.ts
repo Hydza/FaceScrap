@@ -43,8 +43,7 @@ function extractJsonStrings(text: string, keys: readonly string[]): string[] {
   const alternatives = keys.map(escapeRegExp).join('|');
   const re = new RegExp(`"(?:${alternatives})"\\s*:\\s*"((?:\\\\.|[^"\\\\])*)"`, 'g');
   const out: string[] = [];
-  let match: RegExpExecArray | null;
-  while ((match = re.exec(text))) {
+  for (let match = re.exec(text); match != null; match = re.exec(text)) {
     try {
       const value: unknown = JSON.parse(`"${match[1]}"`);
       if (typeof value === 'string') out.push(value);
@@ -244,8 +243,8 @@ function kindOf(mime: string, codecs: unknown): 'video' | 'audio' | null {
  *  pairs share the ladder's best audio track and the FULL track-URL set (the
  *  now-playing filter matches whichever quality the player streams). A ladder
  *  with no usable audio still yields video-only pairs instead of being dropped.
- *  Emitting highest-first also means that if legacy numeric fbcdn ids collide
- *  across qualities in mergeMedia, the stored item is the best one. */
+ *  Highest-first ordering keeps the best representation when numeric fbcdn ids
+ *  collide across qualities. */
 function ladderPairs(reps: Rep[], durationSec?: number): DashPair[] {
   const videos = reps
     .filter((r) => r.kind === 'video')
@@ -276,8 +275,7 @@ function parseIsoDuration(d: string | null): number | undefined {
 /** all_video_dash_prefetch_representations → pairs (no XML; base_url is the full track). */
 export function fromPrefetchReps(input: unknown): DashPair[] {
   if (!Array.isArray(input)) return [];
-  // Facebook nests the ladder as [{ representations: [ {base_url,…}, … ] }];
-  // older/other payloads are a flat rep array. Flatten both to a rep list.
+  // Accept both nested ladder objects and flat representation arrays.
   const reps: unknown[] = [];
   for (const el of input) {
     const inner = el && typeof el === 'object' ? (el as Record<string, unknown>).representations : undefined;
@@ -370,8 +368,7 @@ export function extractPrefetchPairs(text: string): DashPair[] {
     try {
       out.push(...fromPrefetchReps(JSON.parse(text.slice(start, end))));
     } catch {
-      // A balanced-looking but invalid fragment is no better than today's
-      // skipped oversized line. Continue in case a later occurrence is valid.
+      // Continue in case a later occurrence is valid.
     }
   }
   return out;

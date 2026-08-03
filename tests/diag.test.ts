@@ -9,9 +9,7 @@ import {
   sanitizeDiagCounters,
 } from '../src/shared/diag';
 
-// The module keeps process-wide counters (one instance per bundled context in
-// production), so every test starts from a known-empty state. Draining is now the only
-// thing that empties them — there is no flag left whose clearing did it as a side effect.
+// Drain process-wide counters before each test.
 function reset(): void {
   diagDrain();
 }

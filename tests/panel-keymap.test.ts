@@ -1,10 +1,4 @@
-// The keymap's one hard invariant: no two panel functions may share a key.
-//
-// It is enforced in normalizeKeymap rather than in the Settings UI, because the UI is
-// not the only writer — a keymap arrives from chrome.storage.local, which survives an
-// extension update and can be edited by hand. A duplicate there would make one keypress
-// run two functions (select the card AND start its download), so the coercion has to
-// hold for any input at all, not just for what the capture rows can produce.
+// Normalize every stored keymap so no two panel actions share a key.
 
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
@@ -23,7 +17,7 @@ import {
   normalizeSettings,
 } from '../src/shared/settings';
 
-/** Every bound key in the map, so a duplicate shows up as a length mismatch. */
+/** Return every non-empty key binding. */
 function boundKeys(map: Record<string, string>): string[] {
   return KEY_ACTIONS.map((action) => map[action]!).filter((key) => key !== '');
 }
@@ -42,22 +36,16 @@ test('the shipped defaults bind every function to a distinct key', () => {
 });
 
 test('a stored duplicate never survives normalization', () => {
-  // 'd' is downloadCard's default. Handing it to togglePick, which resolves first,
-  // must not leave both actions answering to it.
+  // Reassigning `d` to togglePick must unbind downloadCard.
   const map = normalizeKeymap({ togglePick: 'd' });
   assertNoDuplicates(map, 'a stored duplicate got through');
   assert.equal(map.togglePick, 'd', 'the earlier action keeps the key it asked for');
-  // Its own default is now taken, so it ends up with NO key rather than sharing one:
-  // a function nobody can reach is recoverable from Settings, two functions on one
-  // press is not.
+  // Leave the conflicting action unbound instead of sharing a key.
   assert.equal(map.downloadCard, '', 'the loser is unbound, not duplicated');
 });
 
 test('an unusable stored key falls back to its default', () => {
-  // Every one of these is something a hand-edited store could hold. The multi-character
-  // names are exactly the keys the panel reserves for itself — arrows move the cursor,
-  // Enter activates, Escape closes — and none is a single character, which is the whole
-  // reason that one rule is enough to keep them out.
+  // Reject values that cannot represent one printable shortcut key.
   const map = normalizeKeymap({
     downloadCard: 'Tab',
     selectAll: 'ArrowUp',
@@ -74,26 +62,23 @@ test('an unusable stored key falls back to its default', () => {
 });
 
 test('an action deliberately left unbound stays unbound', () => {
-  // '' is what the Settings row writes when Backspace clears a binding: a choice, not an absence,
-  // and it has to survive the round trip rather than resolving back to the default. Grouping it
-  // with "missing or unusable" would make unbinding a function impossible to persist.
+  // Preserve an explicit empty binding written by Backspace.
   const map = normalizeKeymap({ ...DEFAULT_KEYMAP, cycleFilter: '', downloadPicks: '' });
   assert.equal(map.cycleFilter, '', 'an explicit unbind must survive the round trip');
   assert.equal(map.downloadPicks, '');
-  // And the freed keys are not silently handed to anything else.
+  // Do not reassign freed keys implicitly.
   assertNoDuplicates(map, 'unbinding created a collision');
   for (const action of KEY_ACTIONS) {
     if (action === 'cycleFilter' || action === 'downloadPicks') continue;
     assert.equal(map[action], DEFAULT_KEYMAP[action], `${action} moved when a neighbour unbound`);
   }
-  // Unbinding EVERYTHING is legitimate — it is how the keyboard is handed back wholesale.
+  // Allow every action to be unbound.
   const silent = normalizeKeymap(Object.fromEntries(KEY_ACTIONS.map((a) => [a, ''])));
   assert.deepEqual(boundKeys(silent), []);
 });
 
 test('a stored key is accepted case-insensitively and kept lowercase', () => {
-  // The capture row lowercases what it stores, but a store written by an older build
-  // (or by hand) may not have; panel-keys compares against a lowercased event key.
+  // Normalize stored key case to match keyboard events.
   const map = normalizeKeymap({ ...DEFAULT_KEYMAP, togglePick: 'Z' });
   assert.equal(map.togglePick, 'z');
   assertNoDuplicates(map, 'case folding created a collision');
@@ -124,18 +109,13 @@ test('the grid density is coerced to a real choice', () => {
       `columns: ${JSON.stringify(bad)} must not reach the grid`,
     );
   }
-  // The select in Settings offers exactly these, so a value outside them can only come
-  // from a hand-edited store.
+  // Reject density values outside the Settings options.
   for (const choice of COLUMN_CHOICES) {
     assert.equal(normalizeSettings({ columns: choice }).columns, choice);
   }
 });
 
-// Three artifacts have to agree on which densities exist: the <select> that offers them,
-// normalizeSettings which accepts them, and the CSS that lays each one out. Adding a
-// fourth option to the markup alone would silently render at two columns — the setting
-// would persist, the select would show it, and nothing would move. Only a cross-artifact
-// read can see that, which is why it is asserted here rather than left to a screenshot.
+// Keep density options aligned across markup, settings normalization, and CSS.
 test('every grid density offered is one the stylesheet can lay out', () => {
   const root = process.cwd();
   const html = readFileSync(join(root, 'src', 'sidepanel', 'sidepanel.html'), 'utf8');
@@ -147,33 +127,25 @@ test('every grid density offered is one the stylesheet can lay out', () => {
   assert.deepEqual(offered, COLUMN_CHOICES, 'the control and the schema must offer the same set');
 
   for (const columns of COLUMN_CHOICES) {
-    // The default needs no attribute rule — it is the base .grid declaration.
+    // The default density uses the base grid declaration.
     if (columns === DEFAULT_SETTINGS.columns) continue;
     const rule = css.match(new RegExp(`#app\\[data-cols="${columns}"\\] \\.grid \\{([^}]*)\\}`));
     assert.ok(rule, `no layout rule for ${columns} columns`);
     assert.match(rule[1]!, /grid-template-columns:/, `${columns} columns sets no template`);
   }
-  // Height used to be a tuned --card-min per density, which every new density had to
-  // restate. The tile carries one aspect ratio instead, so its height follows whatever
-  // width the template gives it — and a source of any shape renders unstretched.
+  // Fix the aspect ratio so tile height follows column width.
   assert.match(css, /\.tile\s*\{[^}]*aspect-ratio:\s*9 \/ 16/s);
   assert.doesNotMatch(css, /--card-min/, 'the per-density height is gone; the aspect ratio replaced it');
-  // And the base rule is the default, so no attribute at all still renders correctly —
-  // which is what the panel shows for the instant before applyGridDensity runs.
+  // Validate the base grid before applying density attributes.
   const base = css.match(/^\.grid \{([^}]*)\}/m)?.[1];
   assert.ok(base?.includes(`repeat(${DEFAULT_SETTINGS.columns},`), 'the base .grid rule must be the default');
 
-  // The other half of the same contract, and the half no CSS read can see: the panel has
-  // to write the attribute those rules select on. Nothing observable distinguishes
-  // `dataset.cols` from `dataset.columns` without a browser, which is the exception this
-  // repo allows a source assertion for.
+  // Confirm that the panel writes the attribute selected by the CSS rules.
   assert.match(panelSource(), /dataset\.cols = String\(settings\.columns\)/);
 });
 
 test('two rebinds resolved from the same snapshot both land', async () => {
-  // A patch names only the actions it rebinds, so the second one does not carry — and therefore
-  // cannot overwrite — the first one's key. Both are built from the same starting map, which is
-  // what happens when a user rebinds two rows faster than the write round trip.
+  // Merge concurrent partial rebinding patches from the same starting map.
   await resetChromeStorage();
   const { createSettingsPatchWriter, normalizeSettings } = await import('../src/shared/settings');
   try {
@@ -183,7 +155,7 @@ test('two rebinds resolved from the same snapshot both land', async () => {
     const stored = normalizeSettings((await chrome.storage.local.get('settings')).settings);
     assert.equal(stored.keymap.togglePick, 'x');
     assert.equal(stored.keymap.downloadCard, 'y');
-    // And the seven untouched actions are still on their defaults, not reset by either write.
+    // Preserve untouched default bindings.
     for (const action of KEY_ACTIONS) {
       if (action === 'togglePick' || action === 'downloadCard') continue;
       assert.equal(stored.keymap[action], DEFAULT_KEYMAP[action], `${action} moved`);
@@ -195,8 +167,7 @@ test('two rebinds resolved from the same snapshot both land', async () => {
 });
 
 test('a keymap patch cannot quietly reset an unrelated setting', async () => {
-  // applyPatch merges the map but replaces scalars, so a rebind must leave every other field as
-  // stored rather than as its default.
+  // A keymap patch must preserve all stored scalar settings.
   await resetChromeStorage();
   const { createSettingsPatchWriter, normalizeSettings } = await import('../src/shared/settings');
   try {
@@ -215,9 +186,7 @@ test('a keymap patch cannot quietly reset an unrelated setting', async () => {
 });
 
 test('a keymap edit cannot rewrite the shipped defaults', () => {
-  // DEFAULT_SETTINGS.keymap is spread shallowly on loadSettings' error path, so sharing
-  // one object with DEFAULT_KEYMAP would let a single panel's edit change what every
-  // later reader falls back to.
+  // Default keymap objects must not share mutable references.
   assert.notEqual(DEFAULT_SETTINGS.keymap, DEFAULT_KEYMAP);
   assert.deepEqual(DEFAULT_SETTINGS.keymap, DEFAULT_KEYMAP);
 });

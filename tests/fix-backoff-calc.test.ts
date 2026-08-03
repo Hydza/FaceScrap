@@ -1,12 +1,5 @@
-// ALT4 — of FaceScrap's five capture/ack retry policies (media, theme,
-// playing, bindings, pin — see acked-latest.ts's header comment for the full
-// map), two are exponential: content-media-relay.ts's pump() retry (500ms base,
-// capped 10s) and now-playing.ts's binding-flush retry (250ms base, capped
-// 8s). Both hand-rolled the identical `Math.min(cap, base * 2 **
-// Math.min(n, 5))` formula independently. Extracted the shared MATH only
-// (exponentialBackoffMs) — the counter bookkeeping and cadence around it stay
-// at each call site on purpose (see async.ts's doc comment); the other three
-// channels' scheduling is documentation-only and not touched here.
+// Media and binding retries share exponentialBackoffMs while keeping
+// channel-specific counters, base delays, caps, and scheduling cadence.
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
@@ -37,8 +30,3 @@ test("ALT4: exponentialBackoffMs matches the bindings channel's 250ms base, 8s c
 test('ALT4: a negative attempt still clamps to the base delay', () => {
   assert.equal(exponentialBackoffMs(-1, 500, 10_000), 500);
 });
-
-// Two tests that asserted each call site's exact source line ("must call the
-// shared helper, the old inline formula must be gone") were dropped: they fail on
-// a rename and cannot fail on a wrong delay. The formula itself is what mattered
-// and it is covered above, at both channels' real base/cap pairs.

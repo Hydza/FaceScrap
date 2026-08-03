@@ -1,12 +1,7 @@
 // Download filename and Saved-receipt construction.
 //
-// Both of these used to be panel-only, which was fine while the panel was the
-// only thing that could start a download. The in-page button routes through the
-// SERVICE WORKER instead (a content script may not hand the downloader a URL —
-// see the FACESCRAP_DOWNLOAD_DASH handler), so the worker has to build the same
-// filename and the same receipt. Sharing them is what keeps the two entry points
-// from writing different names for the same media, or two Saved rows for one
-// download because their card ids disagreed.
+// Shared by the panel and service worker so every download entry point produces
+// the same filename, card id and Saved receipt.
 
 import { fileExtensionFor, resolutionOf, type MediaItem } from './media';
 import { DEFAULT_SETTINGS, type Settings } from './settings';

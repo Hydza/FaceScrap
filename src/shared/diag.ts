@@ -1,12 +1,5 @@
-// Discard counters, always on. Every capture path in this extension swallows its
-// failures on purpose — the page hook must never break Facebook, so it is
-// wrapped in silent catches, and the queue/size caps drop whole GraphQL bodies
-// without a trace. That leaves no way to answer "why did this video never reach
-// the panel?", which is exactly the question maintenance keeps asking.
-//
-// They sat behind a switch until it became clear what that cost: turning it on
-// meant reloading Facebook AFTER something had already gone wrong, by which time
-// the evidence was gone. Counting is cheap; being off when it matters is not.
+// Always-on discard counters explain fail-closed capture paths and bounded drops
+// without allowing the page hook to affect Facebook.
 //
 // No chrome.* here: this file is bundled into the MAIN-world page hook too, and
 // that context has no extension APIs. Drained counts ride the hook's own message
@@ -37,7 +30,7 @@ export type DiagReason =
   | 'unknownCodec'
   /** An MPD failed to parse — the whole quality ladder is lost, not one rung. */
   | 'mpdParseError'
-  /** DRM-protected AdaptationSet/Representation skipped (expected, not a bug). */
+  /** DRM-protected AdaptationSet/Representation intentionally skipped. */
   | 'drmSkipped'
   /** Representation dropped: BaseURL missing or not fbcdn. */
   | 'repNoFbcdnBase'
@@ -139,8 +132,7 @@ export function sanitizeDiagCounters(raw: unknown): DiagCounters {
   if (!raw || typeof raw !== 'object') return {};
   const out: DiagCounters = {};
   const record = raw as Record<string, unknown>;
-  // Read only the fixed whitelist. Object.entries(raw) made work proportional
-  // to every attacker-supplied property even though unknown keys were dropped.
+  // Read only the fixed whitelist to bound work independently of unknown properties.
   for (const key of DIAG_REASONS) {
     const value = record[key];
     if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 0) continue;
@@ -175,10 +167,7 @@ interface CounterCoalescer<K extends string> {
   drain(): Partial<Record<K, number>>;
 }
 
-/** Accumulates already-sanitized counters between reports; scheduling is
- *  deliberately left to the caller. Lives here rather than beside the ingress token
- *  buckets it used to share a file with: this is the counter contract, and the
- *  buckets have nothing to do with diagnostics. */
+/** Accumulate sanitized counters between reports. The caller owns scheduling. */
 export function createCounterCoalescer<K extends string>(): CounterCoalescer<K> {
   let pending: Partial<Record<K, number>> = {};
   return {

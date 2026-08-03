@@ -1,12 +1,4 @@
-// The four defects a real browser found on a reel, a story and a profile highlight played
-// through MediaSource — the shape Facebook actually uses, and the one the unit suite cannot
-// reach because it has no DOM and no network.
-//
-// Each was measured before it was fixed: the button never appeared on any of the three, its
-// quality menu ranked two rungs of one ladder on two different scales, and a ladder whose
-// audio representation misdeclared its container put an audio-only file in the menu while
-// leaving every real rung muted. What is asserted here is the DECISION behind each, which is
-// the part that can be pinned without a browser; the browser proved the wiring.
+// Verify MSE classification and merge decisions that do not require a browser environment.
 
 import assert from 'node:assert/strict';
 import test from 'node:test';
@@ -64,8 +56,7 @@ test('the slide own poster is kept; another card leftover placeholder is not', (
     false,
     'a placeholder from another card must still be discarded',
   );
-  // The whole reason this does not walk UP: `page` is one level above the card and contains
-  // every card on it, so a single extra step would answer "same card" for that placeholder.
+  // Do not walk above the card: `page` contains every card and would create false matches.
   assert.equal(
     coverSharesVideoCard({ parentElement: page }, stalePlaceholder, contains),
     true,
@@ -89,10 +80,8 @@ test('discarding placeholder evidence is a no-op for a cover on the same card', 
 });
 
 test('an audio representation is read from its codecs, not from its container mime', () => {
-  // A ladder that labels its audio track video/mp4 is describing the WRAPPER. Reading the
-  // mime first put that track through as a video representation, which cost twice: it became
-  // a pickable quality that downloads audio only, and it left the ladder with no audio to
-  // link, so every real rung came out silent.
+  // Prefer codecs over the MP4 container MIME so audio-only tracks remain linkable
+  // as audio and never appear as video qualities.
   const pairs = fromPrefetchReps([
     {
       representations: [
@@ -152,8 +141,7 @@ test('an audio track whose only audio signal is its encode tag is not offered as
 });
 
 test('a rung is named by its short edge, so one ladder ranks on one scale', () => {
-  // Every reel and story is portrait. Labelling by height called a 1080x1920 rung "1920p"
-  // and put it beside a 720x1280 sibling that had fallen back to its encode tag as "720p".
+  // Use the portrait short edge so every rung follows the same resolution scale.
   assert.deepEqual(resolutionOf({ url: 'https://video.xx.fbcdn.net/a.mp4', width: 1080, height: 1920 }), {
     label: '1080p',
     rank: 1080,
@@ -167,7 +155,7 @@ test('a rung is named by its short edge, so one ladder ranks on one scale', () =
     label: '1080p',
     rank: 1080,
   });
-  // A width nobody supplied leaves the height in charge, as before.
+  // Without a width, fall back to height.
   assert.deepEqual(resolutionOf({ url: 'https://video.xx.fbcdn.net/a.mp4', height: 720 }), {
     label: '720p',
     rank: 720,
@@ -177,9 +165,7 @@ test('a rung is named by its short edge, so one ladder ranks on one scale', () =
 });
 
 test('a capture with dimensions enriches one that has none', () => {
-  // The network observer sees the streamed URL first and has no dimensions to offer, so the
-  // GraphQL representation arriving second used to lose its width and height for good — which
-  // dropped that rung to naming itself off the URL.
+  // Merge later dimensions into an otherwise identical dimensionless capture.
   const base: MediaItem = {
     id: 'x',
     url: 'https://video.xx.fbcdn.net/v/t2/x.mp4',

@@ -1,9 +1,7 @@
 // The two download requests the panel sends, and the Saved receipt they mint.
 //
-// Split out of service-worker.ts for the reason binding-handler.ts and
-// playing-download.ts already were: the router should read as a list of message
-// types, not carry one message's validation inline. Nothing here touches tab
-// state — the caller injects `isDead`.
+// Keep message validation outside the router. Nothing here owns tab state; the
+// caller injects `isDead`.
 //
 // Both messages carry a URL, so both are refused outright when `sender.tab` is
 // set: a content script shares a process with the page, and a compromised page
@@ -164,10 +162,8 @@ export function createDownloadHandler(deps: DownloadHandlerDeps): DownloadHandle
       });
       downloadDash({ tabId, receiptId: receipt.id, videoUrl, audioUrl, filename, saveAs: saveAs === true })
         .then(async (downloaded) => {
-          // A deduped call wrote no file, so it must not rewrite the Saved
-          // receipt either — that write is what made a no-op indistinguishable
-          // from a real save. The answer still carries the distinction, so the
-          // diagnostics trace shows which of the two happened.
+          // Persist a receipt only when this call writes a file. Preserve the
+          // boolean result so diagnostics distinguish deduplication from a save.
           if (downloaded) await persistCompletedDownload(tabId, receipt);
           return downloaded;
         })

@@ -51,9 +51,7 @@ let cancelPendingOffscreenIdleClose: (() => void) | null = null;
 let offscreenIsOurs = false;
 
 async function ensureOffscreen(): Promise<void> {
-  // Checked here, not only at the call sites: every caller happens to gate on
-  // hasOffscreen() today, but a future one that forgets would get a raw TypeError
-  // on a fork without the API instead of this sentence.
+  // Validate at the boundary so every caller receives the same supported-browser error.
   if (!hasOffscreen()) throw new Error("This browser can't merge audio and video (no offscreen API).");
   const closing = offscreenClosing;
   if (closing) await closing;
@@ -85,8 +83,8 @@ async function ensureOffscreen(): Promise<void> {
   await creatingOffscreen;
 }
 
-// A DASH job can take a while — the two track fetches dominate it now that the
-// merge itself is table surgery — and a service worker that goes idle mid-job is
+// A DASH job can take a while because the two track fetches dominate it. A service
+// worker that goes idle mid-job is
 // killed, orphaning the offscreen reply and hanging the panel's button forever.
 // Pinging a cheap API on an interval resets the idle timer while a job runs.
 // (chrome.downloads is unavailable in offscreen docs, so the SW must stay alive
@@ -105,9 +103,7 @@ function startKeepalive(): () => void {
 // job's other two timing constants; they live there — not here — so
 // DASH_UI_HARD_CAP_MS (the panel's own ceiling) can be derived from them
 // instead of merely asserted to sit above them. See their comments there.
-// Grace before closing the idle offscreen document after a download settles. It no
-// longer has a loaded wasm core to amortize, but recreating the document per
-// download would still serialize a page load in front of every merge.
+// Reuse the offscreen document briefly to avoid a page load before every merge.
 const OFFSCREEN_IDLE_MS = 60_000;
 
 // How long a progressive download may report NO progress before this worker stops
@@ -162,9 +158,8 @@ async function recordDashCompletionAcrossRestart(key: string): Promise<void> {
   try {
     await chrome.storage.session.set({ [DASH_DEDUP_STORAGE_KEY]: next });
   } catch (err) {
-    // Best-effort mirror: losing this write only re-exposes the pre-fix gap
-    // for this one entry (a worker-restarted Retry re-downloads it), never a
-    // new hazard — the file and its Saved receipt are already durable by now.
+    // Best effort: failure only loses cross-restart deduplication for this entry.
+    // The file and Saved receipt are already durable.
     console.error('[FaceScrap] dash dedup mirror write failed', err);
   }
 }
@@ -196,13 +191,8 @@ chrome.runtime.onConnect.addListener((port) => {
 // broadcasts FACESCRAP_DASH_JOB_STARTED — see DASH_UI_HARD_CAP_MS in messages.ts.
 const dashChain = createChainLock();
 
-/** Resolves `true` when this call actually downloaded, `false` when it was
- *  collapsed into a download that already completed inside DEDUP_WINDOW_MS.
- *
- *  The caller has to know the difference. A silent `void` return meant a second
- *  Download on the same card answered `ok: true` and rewrote the Saved receipt
- *  without a byte moving — so a user who deleted the file and asked again was
- *  told it had been saved, for half an hour. */
+/** Resolve `true` when this call writes a file and `false` when a recent completed
+ *  download absorbs it. Callers must not rewrite Saved receipts for `false`. */
 export async function downloadDash(request: DashDownloadIdentity): Promise<boolean> {
   const key = dashDownloadKey(request);
   // Durable check FIRST: dashDeduper's own in-memory hit/miss means nothing
@@ -246,10 +236,7 @@ async function runDownloadDash(
     keepaliveStopped = true;
     stopKeepalive();
   };
-  // Let the document go once idle: it holds the fetched tracks and the published
-  // blob, which is the only memory left in this path now that there is no wasm
-  // heap. Hold the keepalive one grace period longer, then close it if no other
-  // mux is running. The next download simply recreates it.
+  // Release fetched tracks and the published blob after one idle grace period.
   let idleCloseScheduled = false;
   const scheduleIdleClose = (): void => {
     if (idleCloseScheduled) return;
@@ -359,13 +346,8 @@ export async function downloadDirect(url: string, filename: string, saveAs: bool
     // DASH blob this has no wall-clock timeout. The browser's terminal event is
     // the authority; interruption rejects and leaves Retry real.
     //
-    // But slow is not the same as stopped. A download the user pauses from
-    // chrome://downloads stays `in_progress` forever, so this await never
-    // resolved: the keepalive above kept pinging, the service worker never
-    // slept, and the panel's card stayed busy until the panel was closed. Bound
-    // the IDLENESS instead of the duration — the same distinction the mux
-    // budget makes. Giving up does not cancel the download; the browser
-    // finishes it without us.
+    // Bound idle time rather than total duration. Giving up does not cancel the
+    // browser download.
     await waitForDownloadSettlement(chrome.downloads, downloadId, { stallMs: DIRECT_STALL_MS });
   } finally {
     stopKeepalive();

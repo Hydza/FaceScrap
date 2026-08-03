@@ -1,8 +1,4 @@
-// The DRM invariant had no test at all. fromMpdXml is the only place
-// <ContentProtection> is detected, and it runs on `new DOMParser()` — an API
-// `node --test` does not have, so the whole MPD path was unreachable from the
-// suite. This installs a parser covering exactly the surface dash.ts touches,
-// the same way chrome-fake.ts installs globalThis.chrome.
+// Provide the DOMParser surface required to test MPD content protection.
 
 import assert from 'node:assert/strict';
 import test from 'node:test';
@@ -14,9 +10,7 @@ const ENTITIES: Record<string, string> = { amp: '&', lt: '<', gt: '>', quot: '"'
 const decode = (value: string): string =>
   value.replace(/&(amp|lt|gt|quot|apos);/g, (_, name: string) => ENTITIES[name]!);
 
-/** Descendant search, which is what the DOM's getElementsByTagName does — and the
- *  whole reason hasDirectContentProtection has to re-check parentNode. A
- *  children-only fake would make the Representation-level test below vacuous. */
+/** Search descendants with the same scope as `getElementsByTagName`. */
 function collect(nodes: readonly FakeElement[], tagName: string, out: FakeElement[] = []): FakeElement[] {
   for (const node of nodes) {
     if (node.tagName === tagName) out.push(node);
@@ -35,8 +29,7 @@ class FakeElement {
     private readonly attrs: ReadonlyMap<string, string>,
   ) {}
 
-  // Own text before descendants' rather than in document order: every element
-  // these tests read text from (BaseURL) is a leaf, so the two agree.
+  // BaseURL is a leaf in every test fixture.
   get textContent(): string {
     return this.text + this.children.map((child) => child.textContent).join('');
   }
@@ -64,16 +57,13 @@ class FakeDocument {
 
 const TAG = /<(\/?)([A-Za-z_][\w.:-]*)((?:\s+[\w.:-]+\s*=\s*"[^"]*")*)\s*(\/?)>/g;
 
-// Models well-formed XML only — which is all these tests feed it. A real
-// DOMParser reports malformed input as a <parsererror> element; dash.ts checks
-// for that, and nothing here exercises the branch.
+// Model only the well-formed XML used by this suite.
 function parseXml(xml: string): FakeDocument {
   const body = xml.replace(/<\?[\s\S]*?\?>/g, '').replace(/<!--[\s\S]*?-->/g, '');
   const doc = new FakeDocument();
   const stack: (FakeDocument | FakeElement)[] = [doc];
   let last = 0;
-  let match: RegExpExecArray | null;
-  while ((match = TAG.exec(body))) {
+  for (let match = TAG.exec(body); match != null; match = TAG.exec(body)) {
     const parent = stack[stack.length - 1]!;
     const text = body.slice(last, match.index);
     last = TAG.lastIndex;
@@ -100,8 +90,7 @@ class FakeDOMParser {
   }
 }
 
-// Imports are hoisted above this, but dash.ts only reaches for DOMParser inside
-// fromMpdXml, so installing it at module scope is early enough.
+// Install the parser before `fromMpdXml` runs.
 (globalThis as unknown as { DOMParser: unknown }).DOMParser = FakeDOMParser;
 
 const HD = 'https://video.xx.fbcdn.net/v/t2/1080.mp4?efg=a&amp;oh=1';
@@ -133,8 +122,7 @@ test('a clean MPD yields one pair per video representation, highest first', () =
       [854, 480, plain(SD)],
     ],
   );
-  // Every rung links the ladder's one audio track, and every rung carries the
-  // FULL track-URL set (the now-playing filter matches whichever the player streams).
+  // Every video rung must link the audio track and the complete track URL set.
   for (const pair of pairs) {
     assert.equal(pair.audioUrl, plain(AUDIO));
     assert.equal(pair.durationSec, 83);
@@ -154,9 +142,7 @@ test('a ContentProtection directly on the AdaptationSet drops the whole set', ()
 test('a ContentProtection nested in one Representation drops only that rung', () => {
   const xml = mpd(video(rep(HD_REP, HD, DRM) + rep(SD_REP, SD)) + AUDIO_SET);
 
-  // The regression this guards: getElementsByTagName is a DESCENDANT query, so
-  // asked at AdaptationSet level it finds the nested entry too. Reading that as
-  // "this set is DRM" would throw away the clear siblings below.
+  // Nested protection must not mark clear sibling representations as protected.
   const set = parseXml(xml).getElementsByTagName('AdaptationSet')[0]!;
   assert.equal(set.getElementsByTagName('ContentProtection').length, 1);
 

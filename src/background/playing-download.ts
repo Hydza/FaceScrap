@@ -75,9 +75,8 @@ export function createPlayingDownloadHandler(deps: PlayingDownloadDeps) {
         // is a reply it already handles — it hides BEFORE build(), so with the button off
         // no node is injected into the page at all.
         //
-        // Only the OPTIONS query is gated; the download request is shared with the global
-        // shortcut and must keep working. The UI switch was never the security boundary —
-        // the sender checks above are (see this file's header).
+        // Gate only the OPTIONS query. Sender validation remains the security boundary
+        // for download requests shared with the global shortcut.
         const settings = await loadSettings();
         if (!settings.inPageButton && !wantsDownload) {
           sendResponse({ ok: true, media: undefined });

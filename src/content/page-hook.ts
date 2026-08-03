@@ -62,11 +62,8 @@ import { HOOK_ALIVE_ATTR } from '../shared/hook-attr';
 const alreadyHooked = document.documentElement.hasAttribute(HOOK_ALIVE_ATTR);
 
 // --- Diagnostics (see diag.ts) ---
-// This world has no chrome.*, so counts and trace leave on the same window channel the
-// captured items already use. There is no control channel any more: with the log always
-// recording there is no flag to hand over, so the query this hook used to post on every
-// page load — and the content script's answer to it — are both gone. That is one message
-// type FEWER on facebook.com's window than when the switch existed.
+// This world has no chrome.*, so counts and trace use the same window channel as
+// captured items. Diagnostics are always active and need no control channel.
 
 /** Hand this world's counts and trace to the content script, which owns chrome.storage. */
 function flushDiag(): void {
@@ -295,18 +292,9 @@ function harvest(
     }
     if (v && typeof v === 'object') {
       const childStoryId = storyDomIdForGraphqlChild(directStoryId, inheritedStoryId, k);
-      // Image node shape: { uri, width, height }. This branch is promiscuous —
-      // it fires on EVERY image node in EVERY response — so it carries two
-      // noise gates the deliberate capture paths don't: profile-picture crops
-      // (path type `tXX.Y-1`) are UI chrome — the stories tray's Create-story
-      // tile ships the viewer's own face this way, which the panel then showed
-      // as "a story from my profile" that was never posted — and sub-200px
-      // renditions are avatars and tray previews of stories never opened (the
-      // DOM scan applies the same 200px floor). Video posters are unaffected:
-      // they ride THUMB_KEYS, not this branch.
-      // Skip this promiscuous branch when the node was already consumed as a
-      // video url wrapper: graphqlVideoUrl matched its {uri|url|src|base_url}, so
-      // re-deriving it here only yields the same id (deduped away) — wasted work.
+      // Image node shape: { uri, width, height }. Exclude profile crops and
+      // sub-200px avatars/previews. Video posters use THUMB_KEYS instead.
+      // Skip nodes already consumed as video URL wrappers.
       const image = videoUrl == null ? graphqlImageCandidate(v, childStoryId != null) : null;
       if (image != null) {
         const item = tagStory(makeItem(image.url, 'image', source, 'graphql', now), storyId);
@@ -328,15 +316,9 @@ function harvest(
 }
 
 /**
- * Wrap a collector so an item id already added THIS scan is never re-added by
- * a later pass. The regex/manifest raw-text fallbacks below and the
- * structured JSON walk independently rediscover the SAME VIDEO_KEYS urls and
- * MPD ladders whenever a line parses cleanly; BoundedCollector itself has no
- * dedupe (mergeMedia's id dedupe only runs downstream, after this scan's cap
- * has already been spent), so two passes finding the same id used to consume
- * two slots of it instead of one. processScan runs the structured pass FIRST
- * so its richer item (poster, story id) is the one kept; the raw-text passes
- * then only ever add an id the structured walk could not reach.
+ * Deduplicate ids across the structured and raw-text scan passes before they
+ * consume the collector budget. The structured pass runs first so its richer
+ * metadata wins.
  */
 function dedupeCollector(out: BoundedCollector<MediaItem>): BoundedCollector<MediaItem> {
   const seen = new Set<string>();
@@ -543,10 +525,8 @@ async function drainScans(): Promise<void> {
   try {
     await processScan(job.text, job.source, job.label);
   } catch (error) {
-    // Was a bare `/* ignore */`. Still ignored — a parser fault must never
-    // propagate into Facebook's own promise chains — but no longer invisible:
-    // this catch swallowing a TypeError from a shape change is precisely the
-    // failure the panel reports as "nothing captured".
+    // Parser faults must not propagate into Facebook's promise chains. Record the
+    // failure so an empty capture remains diagnosable.
     diagLog('scanFailed', { q: job.label ?? 'unknown', error: errorText(error) }, 'error');
   }
   job.text = ''; // release the body for GC before the next macrotask runs

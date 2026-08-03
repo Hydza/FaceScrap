@@ -1,12 +1,5 @@
-// The panel's fixed colours, checked against every canvas they can actually land on.
-//
-// The panel tint moves --cv/--sf/--sf2/--ln as a set, so "text on the canvas" is no
-// longer one pairing but twelve — six tints in two themes. The text tokens themselves
-// are theme-level and do NOT move with the tint, which is exactly the combination a
-// hand-check misses: a token tuned against slate can fail against sand.
-//
-// The accent side (--ac/--onac/--ach) is computed in accent-palette.test.ts, which owns
-// that palette.
+// Check fixed text colors against every tinted surface in both themes.
+// Accent palette contrast is covered separately.
 
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
@@ -50,17 +43,7 @@ const THEMES = [
   { selector: ':root[data-theme="light"]', surfaces: 'light' },
 ] as const;
 
-/**
- * The pairs the handoff's own values do NOT clear, measured rather than hidden.
- *
- * The design states `--ft: #7c828a` and states that it is for faint STATIC labels. It
- * was measured against ONE neutral surface; the panel tint then introduced five more,
- * and the two lightest cards fall a little short of AA's 4.5:1. Shipping the handoff's
- * hex verbatim is a deliberate call — so the shortfall is recorded here, per pair, with
- * a floor. Every other pair still has to clear 4.5:1, and any of these getting WORSE is
- * a failure. Raising `--ft` by three points to `#7f858d` clears all of them if the
- * decision is ever revisited.
- */
+/** Allow the recorded faint-text shortfall while preventing further degradation. */
 const RECORDED_SHORTFALLS: ReadonlyMap<string, number> = new Map([['ft/graphite/dark/surface', 4.36]]);
 
 test('keeps primary and supporting text at WCAG AA on every tint, in both themes', () => {
@@ -71,10 +54,7 @@ test('keeps primary and supporting text at WCAG AA on every tint, in both themes
     const ft = token(theme.selector, 'ft');
     for (const tint of PANEL_TINTS) {
       const [canvas, surface, surface2] = tint[theme.surfaces];
-      // --ft is not measured against surface-2 on purpose: the design's rule is that it
-      // only labels the canvas and the inside of a card, and anything on a raised chip
-      // uses --md. The one place that rule is bent is the idle status pill, which the
-      // handoff draws in --ft over a 5%-white wash — checked below.
+      // Faint text labels only the canvas and card surface; raised chips use medium text.
       const pairs = [
         ['tx', tx, 'canvas', canvas],
         ['tx', tx, 'surface', surface],
@@ -102,15 +82,12 @@ test('keeps primary and supporting text at WCAG AA on every tint, in both themes
       }
     }
   }
-  // A recorded exception that no longer applies is a stale excuse, not a pass.
+  // Require every recorded exception to match an exercised pair.
   assert.deepEqual([...RECORDED_SHORTFALLS.keys()].filter((key) => !seen.has(key)), []);
 });
 
 test('keeps the idle status pill at AA over its own wash', () => {
-  // The pill's background is a wash, so its label is not measured against a token but
-  // against the COMPOSITE. The design's --ft lands at 3.8–4.1:1 there — under AA for an
-  // 11px label — so the pill takes --md, which is what the handoff's own contrast rule
-  // ("anything interactive uses --md") points at anyway. Pinned so it cannot drift back.
+  // Measure the idle label against its composited wash and require medium text.
   assert.match(css, /\.status-pill\.is-idle\s*\{[^}]*background:\s*rgba\(255,\s*255,\s*255,\s*0\.05\)/s);
   assert.match(css, /\.status-pill\.is-idle\s*\{[^}]*color:\s*var\(--md\)/s);
   const md = token(':root', 'md');
@@ -130,8 +107,7 @@ test('keeps the idle status pill at AA over its own wash', () => {
 });
 
 test('keeps the field interior separable from the surface it sits in', () => {
-  // A field that reads as the card it is drawn on is not a field. --ei gives it depth,
-  // but depth alone disappears at high contrast settings, so the fill has to differ too.
+  // Field fills must differ from their card surfaces independently of inset depth.
   for (const theme of THEMES) {
     const field = token(theme.selector, 'fld');
     for (const tint of PANEL_TINTS) {
@@ -146,9 +122,7 @@ test('keeps the field interior separable from the surface it sits in', () => {
 });
 
 test('states the live and danger colours in both themes', () => {
-  // Both are read as TEXT — the capturing pill in the header, the Clear button and the
-  // refusal lines inside a settings card — so both are measured against the SURFACE
-  // they are drawn on, and each theme needs its own step rather than one shared colour.
+  // Measure warning and danger text against their theme-specific surfaces.
   for (const theme of THEMES) {
     for (const name of ['lvt', 'dg', 'off']) {
       assert.match(block(theme.selector), new RegExp(`--${name}:`), `${theme.selector} missing --${name}`);
@@ -164,25 +138,20 @@ test('states the live and danger colours in both themes', () => {
 });
 
 test('keeps the chrome drawn ON media independent of the panel theme', () => {
-  // The chips, the caption and the play control sit over photographs, so they are the
-  // one place the panel writes literal white and literal black instead of a token: a
-  // theme-following colour there would go invisible on half the thumbnails.
+  // Media overlays use literal black and white instead of theme tokens.
   assert.match(css, /\.media-dur\s*\{[^}]*background:\s*rgba\(0,\s*0,\s*0,\s*0\.55\)/s);
   assert.match(css, /\.media-dur\s*\{[^}]*color:\s*#ffffff/s);
   assert.match(css, /\.tile-title\s*\{[^}]*color:\s*#ffffff/s);
   assert.match(css, /\.tile-meta\s*\{[^}]*color:\s*rgba\(255,\s*255,\s*255,\s*0\.78\)/s);
   assert.match(css, /\.preview-format\s*\{[^}]*color:\s*rgba\(255,\s*255,\s*255,\s*0\.85\)/s);
   assert.match(css, /\.preview-play\s*\{[^}]*background:\s*rgba\(10,\s*12,\s*15,\s*0\.42\)/s);
-  // The two scrims those sit on, without which none of the above is readable.
+  // Require both scrims used beneath media-overlay text.
   assert.match(css, /\.preview-scrim\s*\{[^}]*linear-gradient\(transparent,\s*rgba\(6,\s*8,\s*11,\s*0\.9\)\)/s);
   assert.match(css, /\.tile-scrim\s*\{[^}]*linear-gradient\(transparent,\s*rgba\(6,\s*8,\s*11,\s*0\.92\)\)/s);
 });
 
 test('the tint is resolved by the stylesheet, never written from JS', () => {
-  // applyAppearance writes ONE attribute per palette. If it went back to setting the
-  // four surface properties itself, a theme flip arriving from panel-theme.ts's own
-  // signals would leave the panel painting the other theme's tint until the next
-  // settings write.
+  // Apply appearance through palette attributes so theme changes select matching surfaces.
   const panel = readFileSync(join(process.cwd(), 'src', 'sidepanel', 'sidepanel.ts'), 'utf8');
   assert.match(panel, /root\.dataset\.tint = settings\.panelTint/);
   assert.match(panel, /root\.dataset\.accent = settings\.accent/);

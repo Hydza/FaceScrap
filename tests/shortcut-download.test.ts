@@ -1,8 +1,4 @@
-// The global shortcut's wiring: which tab it acts on, and what it reports back.
-//
-// The handler used to be inline at the worker's module scope, where testing it meant evaluating
-// the whole service worker. Its own logic needs no browser — it picks the active tab, hands it to
-// the already-tested in-page download handler, and tells the tab the outcome.
+// Verify the active tab and feedback used by the global download shortcut.
 
 import assert from 'node:assert/strict';
 import test from 'node:test';
@@ -29,7 +25,7 @@ function harness(answer: unknown, tab?: { id?: number; url?: string }) {
   return { handler, seen };
 }
 
-/** The handler starts an async chain and returns; let it settle. */
+/** Settle the handler's asynchronous work. */
 const settle = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0));
 
 test('runs the download for the active tab and reports success to it', async () => {
@@ -37,16 +33,14 @@ test('runs the download for the active tab and reports success to it', async () 
   handler(DOWNLOAD_PLAYING_COMMAND);
   await settle();
 
-  // The sender is synthesized from the tab, never from the message: that is what makes every
-  // guard in the in-page handler apply to the shortcut too.
+  // Build the sender from the active tab so normal request guards apply.
   assert.deepEqual(seen.senders, [{ tab: { id: 4242, url: 'https://www.facebook.com/reel/1' } }]);
   assert.deepEqual(seen.reports, [{ tabId: 4242, ok: true }]);
   assert.deepEqual(seen.errors, []);
 });
 
 test('reports a failure to the tab as well, and never silently', async () => {
-  // Silence here is indistinguishable from a keypress that never arrived, which is why both the
-  // tab and the console hear about it.
+  // Surface failures to both the active tab and the console.
   const { handler, seen } = harness({ ok: false, error: 'Nothing downloadable is playing.' }, { id: 7 });
   handler(DOWNLOAD_PLAYING_COMMAND);
   await settle();

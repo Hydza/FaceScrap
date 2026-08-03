@@ -38,7 +38,7 @@ import {
   type VideoCandidate,
 } from '../shared/centre-video';
 import { combineVideoMark, createVideoMarkFactory } from '../shared/video-mark';
-import { createFrameCoalescer } from './detection-frame';
+import { createWindowFrameCoalescer } from './detection-frame';
 import { loadSettings } from '../shared/settings';
 import { createDownloadOverlay } from './download-overlay';
 import { currentMediaSource } from './content-dom-scan';
@@ -418,15 +418,8 @@ export function setupPlayingDetection(
       documentToken: runtime.documentToken,
     } satisfies NowPlayingMsg;
     if (!delivery.offer(key, message)) return;
-    // Only accepted boundaries reach here (offer() dedupes on `key`), so this is one
-    // line per real slide change, not per poll tick. It is the answer to the most
-    // common report of all — "Now Playing is showing the wrong video": the id this
-    // detector believed, and whether it came from the DOM or the URL.
-    // `mark` is recorded by PROVENANCE, never by value — the value carries the story
-    // card id. Provenance is what a trace needs: on the story viewer the detector
-    // reports a video with no cover and no id, so whether the card yielded a DOM-proven
-    // `u:` mark is the difference between "Now Playing has one anchor left" and "it has
-    // none", and nothing else in the trace distinguishes those two.
+    // Record one trace entry per accepted slide boundary. Store mark provenance,
+    // never its story-card value, so diagnostics reveal whether a DOM anchor exists.
     const markKind = mark === '' ? 'none' : isDurableStoryMark(mark) ? 'durable' : 'provisional';
     deps.note('playing', { vid: vid ?? '', ids: ids.length, hasVideo, covers: covers.length, mark: markKind });
     // The slide identity WITHOUT the id set: ids keep growing as more representations of
@@ -443,14 +436,7 @@ export function setupPlayingDetection(
     void delivery.pump(deliver).then(() => overlay.refresh({ mediaChanged }));
   }
 
-  const frame = createFrameCoalescer(
-    detect,
-    (callback) => (usesAnimation ? window.requestAnimationFrame(callback) : window.setTimeout(callback, 0)),
-    (handle) => {
-      if (usesAnimation && typeof window.cancelAnimationFrame === 'function') window.cancelAnimationFrame(handle);
-      else clearTimeout(handle);
-    },
-  );
+  const frame = createWindowFrameCoalescer(detect, usesAnimation);
 
   const reassert = (): void => {
     if (runtime.isDisposed()) return;
@@ -515,13 +501,8 @@ export function setupPlayingDetection(
   // in-page-button setting stops it outright: off means no message and no worker wake-up. The final
   // refresh takes the button down, since with the setting off the worker answers "nothing".
   let overlayTimer: number | undefined;
-  // Stride, not a rearmed timer: the interval keeps its 750ms tick and simply SKIPS ticks
-  // once the screen has been settled for a while, so a tab parked on a finished reel stops
-  // waking the worker twice a second. Anything that moves — a new slide, a different
-  // centred photo, coming back to the tab — puts the stride back to every tick via
-  // resetOverlayCadence(), so the catch-up right after a slide change is still under a
-  // second. A hidden tab skips outright: no button to place, nobody to see it, and it is
-  // the case that kept the worker awake once per open Facebook tab.
+  // Skip interval ticks after the screen settles. Movement restores full cadence,
+  // and hidden tabs skip refreshes because no overlay is visible.
   const OVERLAY_STEADY_TICKS = 4;
   const OVERLAY_MAX_STRIDE = 7; // 7 * 750ms ~ 5s between refreshes on a settled screen
   let overlayStride = 1;

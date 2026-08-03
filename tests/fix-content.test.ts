@@ -1,11 +1,3 @@
-// What survives of the old content.ts fix suite.
-//
-// The other fourteen tests here asserted the SHAPE of content.ts — that a literal
-// line was present, that a removed variable name no longer appeared, that one
-// function delegated to another. They failed on correct refactors and could not
-// fail on broken behaviour, so they went. This one runs the real function at the
-// real boundary, which is what the shared floor is actually for.
-
 import assert from 'node:assert/strict';
 import test from 'node:test';
 

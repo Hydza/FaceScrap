@@ -223,11 +223,7 @@ test('mediaId still collapses signed variants of one WebP object', () => {
   assert.equal(mediaId(low), mediaId(high));
 });
 
-// Neither side proves a pixel area here, so none of the image variant rules fire:
-// the fill-in comes from mergeMedia's generic "row has none, incoming has one"
-// block. An image-only second copy of that rule sat below those rules for a while
-// and could never run, because the generic block had already filled the same
-// fields. This pins the behaviour on the block that actually performs it.
+// Without a measurable pixel area, generic metadata merging supplies missing fields.
 test('mergeMedia completes a half-measured row from a same-URL observation', () => {
   const heightOnly: MediaItem = {
     id: mediaId(LOW_URL),

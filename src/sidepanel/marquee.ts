@@ -81,8 +81,9 @@ export function setupMarquee(select: (card: HTMLElement) => void): void {
       covered.add(card);
       select(card);
     }
-    // ponytail: no auto-scroll when the pointer sits at an edge. The wheel works during
-    // a drag, which covers it; add an edge timer only if that turns out to be awkward.
+    // The gap left here: no auto-scroll when the pointer sits at an edge. The wheel
+    // works during a drag, which covers it; add an edge timer only if that turns out
+    // to be awkward.
   }
 
   // On the window, not the list: a drag that leaves the grid must keep tracking, and its

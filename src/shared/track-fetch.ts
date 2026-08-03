@@ -8,11 +8,7 @@
 
 import { isFbcdn } from './media';
 
-/** fetch() has no read timeout: a socket that connects then stalls mid-body
- *  (edge hiccup, network/VPN switch, silent middlebox) leaves the read pending
- *  forever. Bound the IDLE gap, never total duration — a whole-transfer cap
- *  cannot tell a stall from a large track on a slow-but-steady link, and
- *  aborted legitimate slow downloads. */
+/** Bound idle gaps rather than total duration so slow, active transfers can finish. */
 export const STALL_MS = 60_000;
 
 /** A dropped connection is worth retrying; an expired URL is not (see below). */
@@ -52,14 +48,9 @@ class ByteLimitError extends Error {}
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
-/** Bytes received so far, held as sealed Blobs plus a small unsealed tail.
- *
- *  Sealing matters: a Uint8Array is always resident in the JS heap, while the
- *  browser may back a Blob with disk. Holding every chunk of a 512 MB track as
- *  Uint8Array until the very end made the offscreen document's peak memory the
- *  size of both tracks at once. Sealing every SEAL_BYTES lets everything before
- *  the tail leave the heap, and the sealed list is still discardable in one go
- *  when a resume has to start over. */
+/** Bytes received as sealed Blobs plus a small Uint8Array tail. Sealing every
+ *  SEAL_BYTES lets completed data leave the JS heap while keeping the full buffer
+ *  discardable when a resumed request restarts. */
 interface Buffered {
   sealed: Blob[];
   tail: Uint8Array[];

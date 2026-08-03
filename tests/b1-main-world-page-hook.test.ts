@@ -1,26 +1,5 @@
-// Regression checks for finding B1: the MAIN-world page hook (page-hook.js)
-// used to be installed only as a content.ts-inserted external <script> at
-// document_start. Script-inserted external scripts are force-async, so
-// Facebook's own parser-inserted boot scripts could run — and complete their
-// earliest GraphQL fetches — before that <script> even loaded, let alone
-// patched fetch/XHR. Those early responses carry exactly the media the hook
-// exists to capture.
-//
-// The fix registers page-hook.js as a SECOND, declarative MAIN-world
-// content_scripts entry in manifest.json: Chrome guarantees a document_start
-// content script (in any world) runs before any other DOM is constructed or
-// any other script runs, so this installs before the page ever gets a chance
-// to fetch anything. The one case it cannot reach — an already-open tab whose
-// document finished loading before the worker ever reached for it — is covered
-// by the worker's own chrome.scripting injection (content-script-recovery.ts).
-// tests/page-hook-injection.test.ts drives that path end to end.
-//
-// manifest.json is real JSON and is exercised directly here. content.ts /
-// content-recovery.ts require a live document/chrome content-script
-// environment they never get under node:test (see tests/fix-content.test.ts's
-// own note on this constraint), so — like that file and
-// tests/detection-migration-guardrails.test.ts — the checks on them assert on
-// the source text instead of executing it.
+// Install the declarative MAIN-world hook at document_start before page scripts run.
+// Recovery injection covers documents that were already open after an update.
 import assert from 'node:assert/strict';
 import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -77,10 +56,7 @@ test('manifest.json registers page-hook.js as a declarative MAIN-world, document
     'content.js must stay in the default ISOLATED world — it is the one that reads chrome.* APIs',
   );
 
-  // Declarative "world": "MAIN" on a static content_scripts entry needs
-  // Chrome 111+. This project's own floor must stay at or above that, or the
-  // entry above is silently ignored on the oldest browsers it still claims
-  // to support, quietly reintroducing the exact race this fix closes.
+  // Require the browser floor that supports declarative MAIN-world scripts.
   assert.ok(
     Number(manifest.minimum_chrome_version) >= 111,
     'minimum_chrome_version must support declarative MAIN-world content scripts (Chrome 111+)',
@@ -88,8 +64,7 @@ test('manifest.json registers page-hook.js as a declarative MAIN-world, document
 });
 
 test('page-hook.js is NOT web-accessible, and nothing builds a URL for it', () => {
-  // The whole KEY, not a search for this one filename: `resources` accepts globs, so
-  // an entry of ["*.js"] would expose page-hook.js again and still not contain its name.
+  // Inspect complete entries because resource declarations may use globs.
   assert.equal(
     manifest.web_accessible_resources,
     undefined,
@@ -101,7 +76,7 @@ test('page-hook.js is NOT web-accessible, and nothing builds a URL for it', () =
       'sees a non-native window.fetch, the __vp* postMessage traffic and the <html> stamp; it removes ' +
       'an extension-origin URL and a node of ours from the page, which is what this entry cost.',
   );
-  // Every content module, not a hand-kept pair: the directory is split often.
+  // Verify that every content module is declared.
   for (const file of readdirSync(join(ROOT, 'src', 'content')).filter((name) => name.endsWith('.ts'))) {
     assert.doesNotMatch(
       readFileSync(join(ROOT, 'src', 'content', file), 'utf8'),
@@ -110,11 +85,3 @@ test('page-hook.js is NOT web-accessible, and nothing builds a URL for it', () =
     );
   }
 });
-
-// Two tests are gone from here: they asserted the STATEMENT ORDER inside the
-// ensurePageHook() content.ts used to carry, and inside its query-message handler (this index
-// must be greater than that one). What they were guarding — no second hook
-// double-patching fetch/XHR — is real, but the check was source ordering, which
-// breaks on any reshuffle of correct code. The live guard is the DOM marker the hook
-// stamps, and tests/page-hook-idempotent.test.ts exercises it the only way that proves
-// anything: by evaluating the real bundle over one document more than once.

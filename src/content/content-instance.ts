@@ -25,7 +25,7 @@ export function shouldStartContentInstance(
       try {
         existing.active = false;
       } catch {
-        /* a foreign/frozen legacy handle cannot block recovery */
+        /* a foreign or frozen handle cannot block recovery */
       }
     }
     return true;
@@ -37,7 +37,3 @@ export function shouldStartContentInstance(
     return true;
   }
 }
-
-// Gone from here: shouldInjectPageHook. The content script no longer installs the
-// MAIN-world hook, so there is no per-pass decision left to make — the worker asks the
-// document itself whether one is alive (background/content-script-recovery.ts).

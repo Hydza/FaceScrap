@@ -1,52 +1,16 @@
-/** Build and classify the story portion of a now-playing marker.
- *
- * `u:` is durable because its card id came from the active DOM card. `p:` is
- * only a provisional slide-change signal: Facebook pins the path to the card
- * that opened the tray, so that value must never become a durable binding.
- * This module owns the prefix encoding — consumers must classify marks through
- * the predicates below, never by re-deriving the string prefixes.
- */
-import { isNumericMediaId } from './media';
+import { isNumericMediaId } from './media-id';
 
-// The second segment is OPTIONAL, and that is the whole point.
-//
-// A story opened from the tray lands on /stories/<set>/<card>/. A profile HIGHLIGHT
-// lands on /stories/<set>/ with the card only in ?source=profile_highlight — the exact
-// shape media.ts already documents for labelling the surface. Requiring two segments
-// meant isStoryPath() said "not a story" there, storyCardMark() returned '' before it
-// ever looked at the DOM, and the card got no mark at all: no durable id to bind a
-// cover to, no mark for the revisit rescue, so Now Playing had nothing to anchor on
-// and showed nothing while the Library filled up normally.
+// Profile highlights may omit the card segment.
 const STORY_PATH = /\/stories\/([^/?#]+)(?:\/([^/?#]+))?/;
 const STORY_DOM_ID = /^Uz[A-Za-z0-9_-]{10,252}={0,2}$/;
 const DECODED_STORY_DOM_ID_PREFIXES = ['S:_ISC:', 'S3:'] as const;
 
-/** True for a decoded Story DOM id: one of the known prefixes followed by a
- *  numeric media id (media.ts's shared \d{5,20} bound) filling the rest of the
- *  string. Checked as a prefix match + isNumericMediaId(remainder) — NOT one
- *  RegExp spliced together from NUMERIC_MEDIA_ID_SOURCE at module scope — on
- *  purpose: media.ts imports isStoryDomId from this file, so this file and
- *  media.ts already form an import cycle, and a module-top-level read of
- *  media.ts's exports here would race that cycle's evaluation order (verified
- *  against esbuild's actual bundling: whichever of the two modules loads
- *  first left the other's shared constant `undefined` at that point, silently
- *  turning this into `/undefined$/`). Calling isNumericMediaId from inside a
- *  function body, like isStoryDomId already did before this fix, is safe
- *  regardless of load order — both modules have always finished their own
- *  top-level evaluation by the time any application code actually calls in.
- */
 function isDecodedStoryDomId(decoded: string): boolean {
   for (const prefix of DECODED_STORY_DOM_ID_PREFIXES) {
     if (decoded.startsWith(prefix) && isNumericMediaId(decoded.slice(prefix.length))) return true;
   }
   return false;
 }
-
-// The bare-numeric-id bound this module used to spell as its own
-// FB_NUMERIC_ID_RE now lives in media.ts (NUMERIC_MEDIA_ID_SOURCE /
-// isNumericMediaId), alongside the other cross-file invariants. It was never
-// story-specific, and two spellings of one bound is exactly the drift the
-// shared constant exists to prevent. Callers import isNumericMediaId directly.
 
 /** The opaque card id Facebook places on the active Story container. */
 export function isStoryDomId(value: unknown): value is string {
@@ -67,10 +31,9 @@ function decodeStoryDomId(value: string): string | null {
 
 /**
  * Recognize a real GraphQL Story node and return the same opaque id exposed by
- * its rendered DOM container. Production currently encodes
- * `S:_ISC:<story_card_id>`; the older `S3:<id>` form remains accepted for
- * captured fixtures. Requiring both fields keeps unrelated `Uz...` node ids
- * from becoming media associations.
+ * its rendered DOM container. Accept `S:_ISC:<story_card_id>` and `S3:<id>` forms.
+ * Requiring both fields keeps unrelated `Uz...` node ids from becoming media
+ * associations.
  */
 export function storyDomIdFromGraphqlNode(value: unknown): string | undefined {
   if (value == null || typeof value !== 'object') return undefined;

@@ -41,11 +41,8 @@ export function createNavIngressBudget(now: number): TokenBudget {
   });
 }
 
-/** The hook's own counts and trace. Sized to the flush it really makes: the page hook
- *  coalesces on a 2 s timer, so a burst of reports is a co-resident script forging them
- *  rather than our own flush. It matters more now than it used to — the trace records
- *  permanently, so an unbudgeted forger could keep the ring full of its own noise
- *  indefinitely and evict every real event. */
+/** Budget one 2-second page-hook diagnostics flush. Larger bursts are treated as
+ *  forged traffic so they cannot evict legitimate events from the trace. */
 export function createDiagIngressBudget(now: number): TokenBudget {
   return createTokenBudget({
     capacityItems: 4,

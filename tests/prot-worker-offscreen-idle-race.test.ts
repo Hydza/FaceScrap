@@ -1,24 +1,5 @@
-// A3 — dash-download.ts's offscreen-document idle-close was check-then-act:
-// `if (dashDeduper.inFlightCount === 0) chrome.offscreen.closeDocument().catch(() => {});`
-// fired the close WITHOUT awaiting it, never cancelled the scheduled idle
-// timer when a new job began, and ensureOffscreen trusted getContexts() even
-// while a close from an OLDER job might still be tearing the document down.
-// A job that started in that window could see the (about to be) dying
-// context via getContexts, skip creating a fresh one, and send its own
-// FACESCRAP_MUX into it.
-//
-// This proves BOTH halves of the fix:
-//   1. A job that starts BEFORE the scheduled idle-close timer fires cancels
-//      it outright — the stale close never happens underneath a job that is
-//      now running.
-//   2. A job that starts AFTER the timer has already fired (its close still
-//      in flight) waits the close out inside ensureOffscreen before trusting
-//      getContexts, instead of racing it.
-//
-// service-worker.ts has no exports (it registers every listener as a side
-// effect of module evaluation), so this drives it the same way
-// tests/prot-dash-job-started.test.ts and tests/config.test.ts do: a capture
-// chrome.* fake plus the captured runtime.onMessage listener.
+// A new DASH job must cancel a pending idle close or await an in-flight close.
+// Capture the worker's runtime listener because it registers APIs during module evaluation.
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { mock } from 'node:test';
@@ -27,10 +8,7 @@ import { join } from 'node:path';
 
 import { resetChromeStorage } from './chrome-fake';
 
-// dash-download.ts's runDownloadDash() starts a 20s keepalive setInterval on
-// every job and OFFSCREEN_IDLE_MS's own setTimeout for the idle-close under
-// test — mocking timers is what lets this test fire that timer deterministically
-// (via mock.timers.tick) instead of waiting on it in real time.
+// Mock timers to trigger keepalive and idle-close scheduling deterministically.
 mock.timers.enable({ apis: ['setInterval', 'setTimeout'] });
 
 const readSrc = (rel: string): string => readFileSync(join(process.cwd(), rel), 'utf8');
@@ -87,7 +65,7 @@ function installChromeFake(): void {
   };
   // Resolves every download 'complete' immediately, same as config.test.ts's
   // and prot-dash-job-started.test.ts's fakes: settlement must not depend on
-  // the REGISTRATION_RACE_DELAY_MS retry timer, itself now mocked here too.
+  // the REGISTRATION_RACE_DELAY_MS retry timer, which is also mocked here.
   c.downloads = {
     download: async () => nextDownloadId++,
     onChanged: { addListener() {}, removeListener() {} },
@@ -251,16 +229,11 @@ test('A3: ensureOffscreen waits out a close already in flight instead of racing 
 });
 
 test('discards an offscreen document this worker instance did not create', async () => {
-  // The document outlives the service worker and keeps its OWN job queue, which
-  // dashChain cannot see. A worker restarted mid-merge used to adopt that orphan
-  // and queue behind it — and since the offscreen only opens its progress port
-  // when a job STARTS, the new job never beat, so the idle budget expired and the
-  // user was told the merge timed out over work that had not begun.
+  // A restarted worker must replace an offscreen document whose queue it does not own.
   assert.ok(onMessage, 'runtime.onMessage listener was not registered');
   const tabId = 900_503;
 
-  // Land the previous test's document through its idle close, so ownership is
-  // clear the way it is in a fresh worker.
+  // Close the previous document before simulating a fresh worker.
   mock.timers.tick(OFFSCREEN_IDLE_MS);
   await flushMicrotasks();
   await resolveAllPendingCloses();

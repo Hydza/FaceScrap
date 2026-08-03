@@ -13,25 +13,55 @@
     "url": "https://github.com/Hydza/FaceScrap/issues"
   },
   "private": true,
+  "packageManager": "npm@11.16.0",
   "engines": {
-    "node": ">=20"
+    "node": ">=24.18"
+  },
+  "devEngines": {
+    "runtime": {
+      "name": "node",
+      "version": ">=24.18",
+      "onFail": "error"
+    },
+    "packageManager": {
+      "name": "npm",
+      "version": ">=11.16",
+      "onFail": "error"
+    }
+  },
+  "allowScripts": {
+    "esbuild@0.28.1": true
   },
   "type": "module",
   "scripts": {
     "icons": "node scripts/generate-icons.mjs",
     "build": "npm run icons && node scripts/build.mjs",
-    "package": "node scripts/package.mjs",
+    "package": "npm run check && npm run package:archive",
+    "package:archive": "node scripts/package.mjs",
     "dev": "npm run icons && node scripts/build.mjs --watch",
+    "format": "biome format --write .",
+    "lint": "biome lint . --diagnostic-level=error",
     "test": "node scripts/test.mjs",
     "typecheck": "tsc --noEmit && tsc -p tests --noEmit",
-    "check": "npm run typecheck && npm test",
+    "policy": "node scripts/repository-policy.mjs",
+    "quality:dead-code": "fallow dead-code --format json --quiet --fail-on-issues",
+    "quality:duplicates": "fallow dupes --format json --quiet --fail-on-issues",
+    "quality:code": "npm run quality:dead-code && npm run quality:duplicates",
+    "check": "npm run lint && npm run typecheck && npm run policy && npm run build && npm test",
+    "audit": "npm audit --audit-level=high",
+    "audit:signatures": "npm audit signatures",
     "qa:sidepanel": "node scripts/sidepanel-visual-qa.mjs",
-    "verify": "npm run check && npm run build && npm run qa:sidepanel"
+    "qa:live": "node scripts/live-qa.mjs",
+    "qa:matrix": "node scripts/qa-matrix.mjs",
+    "verify": "npm run check && npm run qa:sidepanel"
   },
   "devDependencies": {
+    "@biomejs/biome": "2.5.6",
+    "@puppeteer/browsers": "3.0.6",
     "@types/chrome": "^0.2.2",
-    "@types/node": "^26.1.1",
+    "@types/node": "^24.13.3",
     "esbuild": "^0.28.1",
+    "fallow": "3.10.0",
     "typescript": "^7.0.2"
   }
 }

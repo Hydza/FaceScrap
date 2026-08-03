@@ -3,6 +3,8 @@
 
 import { isStoryDomId } from './story-mark';
 
+export { isNumericMediaId, NUMERIC_MEDIA_ID_RE, NUMERIC_MEDIA_ID_SOURCE } from './media-id';
+
 export type MediaKind = 'video' | 'image' | 'audio';
 export type MediaSource = 'reel' | 'story' | 'highlight' | 'video' | 'page';
 type MediaOrigin = 'network' | 'graphql' | 'dom';
@@ -114,31 +116,9 @@ export function isProfilePicCrop(url: string): boolean {
   }
 }
 
-// --- Cross-file invariants ---------------------------------------------
-// These constants have no internal use in this module. They exist so other
-// files that independently re-derive the same numbers — content.ts's DOM
-// image floor, graphql-media.ts's candidate floor, playing-handler.ts's and
-// story-mark.ts's numeric-id checks, service-worker.ts's DASH byte-range
-// check — read from one source instead of drifting apart from it (and from
-// each other).
-
 /** Minimum natural pixel width/height for a DOM- or GraphQL-observed image to
  *  count as real content rather than an avatar/UI thumbnail/tray preview. */
 export const MIN_MEDIA_DIMENSION_PX = 200;
-
-/** Unanchored source for a plausible Facebook numeric id (video id, story
- *  card id, …): long enough to exclude small UI counters, short enough to
- *  stay a safe string length. Splice this into a larger pattern when the id
- *  sits alongside other context (e.g. a URL path segment); use
- *  NUMERIC_MEDIA_ID_RE (or isNumericMediaId) to test that a whole string is
- *  exactly one. */
-export const NUMERIC_MEDIA_ID_SOURCE = '\\d{5,20}';
-export const NUMERIC_MEDIA_ID_RE = new RegExp(`^${NUMERIC_MEDIA_ID_SOURCE}$`);
-
-/** True for a string that is exactly a plausible Facebook numeric id. */
-export function isNumericMediaId(value: unknown): value is string {
-  return typeof value === 'string' && NUMERIC_MEDIA_ID_RE.test(value);
-}
 
 /** DASH byte-range segment query params. widenDashUrl strips them to recover the
  *  full-track URL; classifyNetworkRequest's isDash check and service-worker.ts's
@@ -158,22 +138,11 @@ export function widenDashUrl(url: string): string {
   }
 }
 
-// The stories/reel checks below already require slashes on BOTH sides
-// ("/stories/…", "/reel/…"), so they anchor to a whole path segment. The
-// highlight check must match the same way: a bare substring test would also
-// accept "highlight" spelled out inside an unrelated slug — e.g. a vanity
-// page path like "/football.highlights.daily/videos/123" — which then
-// mislabels that tab's card labels and the {source} token of its download
-// filenames. Slash- or string-boundary on both sides (plural allowed).
+// Match highlight as a complete path segment, with singular and plural forms.
 const HIGHLIGHT_SEGMENT_RE = /(?:^|\/)highlights?(?:\/|$)/i;
 
-// Opening a profile's highlights does NOT produce a highlight path: Facebook
-// reuses the plain story permalink and marks the surface only in the query —
-// /stories/976731645401448/?source=profile_highlight. The path test above sees
-// just "/stories/", so on its own it labelled every profile highlight an
-// ordinary story, which then showed the wrong badge and title in Now Playing
-// and wrote "story" into the {source} token of the download filename.
-// Anchored on "_" or a string boundary so a longer unrelated value can't match.
+// Profile highlights use a story path and identify the surface through `source`.
+// Match complete underscore-delimited tokens only.
 const HIGHLIGHT_SOURCE_PARAM_RE = /(?:^|_)highlights?(?:_|$)/i;
 
 function isHighlightQuery(search: string): boolean {
@@ -181,19 +150,8 @@ function isHighlightQuery(search: string): boolean {
   return source != null && HIGHLIGHT_SOURCE_PARAM_RE.test(source);
 }
 
-/**
- * Classify a Facebook location into the capture surface FaceScrap labels media
- * with. One copy shared by the service worker (tab surface, from a navigated
- * URL), the page hook (GraphQL capture source, from `location`) and the content
- * script (DOM-scan fallback, from `location`), so their precedence — highlight,
- * then stories, then reel, then a plain watch/video page — can never drift
- * apart between the three call sites.
- *
- * `search` is required on purpose. It used to be a pathname-only classifier,
- * and all three callers duly passed only the pathname — which is exactly how
- * the profile-highlight query signal went unread. Making it required means the
- * compiler, not a reviewer, catches a caller that forgets it.
- */
+/** Classify a Facebook location for every capture path. The required search string
+ *  ensures profile-highlight query signals participate in the shared precedence. */
 export function mediaSourceFromLocation(pathname: string, search: string): MediaSource {
   if (HIGHLIGHT_SEGMENT_RE.test(pathname) || isHighlightQuery(search)) return 'highlight';
   if (/\/stories\//.test(pathname)) return 'story';
@@ -210,10 +168,8 @@ const VIDEO_EXTENSIONS = 'm4v|mov|mp4|webm';
 const IMAGE_EXTENSION_RE = new RegExp(`\\.(?:${IMAGE_EXTENSIONS})$`, 'i');
 const AUDIO_EXTENSION_RE = new RegExp(`\\.(?:${AUDIO_EXTENSIONS})$`, 'i');
 const VIDEO_EXTENSION_RE = new RegExp(`\\.(?:${VIDEO_EXTENSIONS})$`, 'i');
-/** Any path whose filename already pins a unique fbcdn object: resize/signature
- *  params rotate freely without changing identity, so mediaId keys it by path.
- *  Paths outside this set fall to genericEndpointId's semantic keying. Kept as
- *  the union of the three per-kind lists above. */
+/** Match known media filenames whose path uniquely identifies the fbcdn object.
+ *  Other paths use genericEndpointId's semantic keying. */
 const KNOWN_MEDIA_EXTENSION_RE = new RegExp(
   `\\.(?:${IMAGE_EXTENSIONS}|${AUDIO_EXTENSIONS}|${VIDEO_EXTENSIONS})$`,
   'i',
@@ -284,9 +240,7 @@ export function mediaKindFromUrl(url: string, hint?: MediaKind): MediaKind | und
   }
 }
 
-/** Per-kind fallback extension: what every kind was hardcoded to before this
- *  function existed, still used when the URL carries no extension the item's
- *  kind recognizes (or the URL fails to parse). */
+/** Per-kind fallback when the URL has no recognized extension or cannot be parsed. */
 const DEFAULT_EXTENSION: Record<MediaKind, string> = { image: 'jpg', audio: 'm4a', video: 'mp4' };
 const KIND_EXTENSION_RE: Record<MediaKind, RegExp> = {
   image: IMAGE_EXTENSION_RE,
@@ -294,16 +248,8 @@ const KIND_EXTENSION_RE: Record<MediaKind, RegExp> = {
   video: VIDEO_EXTENSION_RE,
 };
 
-/**
- * On-disk file extension for a captured MediaItem's download. Every kind
- * covers several real container/codec extensions (png/webp/gif/avif for
- * images, …), so keying the extension off `kind` alone — as the download path
- * once did — saves every non-JPEG image as a lying .jpg. Prefer the URL's own
- * extension when it's one FaceScrap recognizes for THIS item's kind; fall back
- * to the kind's historical default for a missing/unrecognized extension, an
- * extension that belongs to a different kind (e.g. a video URL ending in
- * .jpg), or an unparseable URL. Always lowercase; never throws.
- */
+/** Choose a lowercase download extension recognized for the item's kind. Use the
+ *  per-kind fallback for missing, conflicting or unparseable URL extensions. */
 export function fileExtensionFor(item: Pick<MediaItem, 'url' | 'kind'>): string {
   try {
     const path = new URL(item.url).pathname.toLowerCase();
@@ -380,21 +326,8 @@ function genericRepresentationKey(url: string, parsed: URL): string | undefined 
   return identityHash(JSON.stringify(fields));
 }
 
-// mediaId's ids are assumed to stay well under this bound: PlayingRef ids are
-// truncated at it in transport (playing-handler.ts) and saved.ts's SavedEntry
-// receipt contract reserves it under a 2-char card-id prefix. Both import this
-// constant rather than re-spelling the number, so neither can drift. `path` is
-// taken straight from the URL, and the `asset` discriminator inside
-// genericEndpointId can come straight from an attacker-decoded `efg` field
-// (fbAssetKeys) — this whole path is reachable from the untrusted
-// page-message channel (sanitizeIncomingItems) — so EVERY branch that can
-// produce a mediaId can overflow, not only genericEndpointId's. Two earlier
-// rounds each bounded a per-branch subset (genericEndpointId's three
-// branches) and missed mediaIdCandidate's OWN two branches (`video-*` and the
-// final `asset:` fallback) — a per-branch bound is exactly the pattern that
-// keeps missing a sibling. boundMediaId is therefore applied ONCE, at the
-// single point an id leaves mediaId (see mediaId below), so a future branch
-// added to mediaIdCandidate is bounded automatically instead of by omission.
+// PlayingRef transport and Saved receipts share this id bound. Candidate paths and
+// efg fields are untrusted, so every mediaId is bounded once at the public exit.
 export const MEDIA_ID_MAX_LEN = 256;
 
 /**
@@ -408,8 +341,8 @@ export const MEDIA_ID_MAX_LEN = 256;
  * already-stored short id. An overflowing candidate is hashed WHOLE (never
  * truncated: truncating could collide two long candidates that only diverge
  * near the end), so two different overlong candidates can never collapse into
- * the same bounded id regardless of which part of the candidate (path,
- * discriminator, or query) was the one that overflowed.
+ * the same bounded id regardless of whether the path, discriminator or query
+ * overflows.
  */
 function boundMediaId(candidate: string): string {
   return candidate.length <= MEDIA_ID_MAX_LEN ? candidate : `asset:q=${identityHash(candidate)}`;
@@ -436,18 +369,10 @@ function genericEndpointId(url: string, parsed: URL, path: string): string {
     // nested oh/oe/host rotate just like the outer proxy signature, while the
     // nested CDN pathname remains the canonical resource.
     if (isFbcdn(nestedUrl)) {
-      // A proxy can wrap another signed fbcdn resource — a CDN rendition or even
-      // another generic redirector — whose own oh/oe/host rotate like the outer
-      // signature. Canonicalize it recursively so nothing rotating leaks into
-      // identity. Recurses on mediaIdCandidate, the UNBOUNDED candidate: this
-      // whole function stays unbounded precisely so identityHash below sees the
-      // same string it always has. Hashing a bounded inner id instead would
-      // change this branch's output — silently, and only for nested URLs whose
-      // own candidate overflows — orphaning every already-stored row keyed off
-      // the old value, while the outer id stayed short either way. The single
-      // bound in mediaId() covers the result regardless. mediaIdCandidate always
-      // recurses on a strictly shorter string (a decoded query value is shorter
-      // than its parent URL), so this cannot loop.
+      // Canonicalize nested fbcdn resources recursively so rotating signatures do
+      // not affect identity. Keep the inner candidate unbounded to preserve stable
+      // hash input; mediaId bounds the final result. Each decoded URL is shorter,
+      // which guarantees termination.
       resourceIdentity = mediaIdCandidate(nestedUrl);
     }
     return `asset:${path}?resource=${identityHash(resourceIdentity)}`;
@@ -483,9 +408,8 @@ function mediaIdCandidate(url: string): string {
     const u = new URL(url);
     const path = u.pathname.replace(/^\/o\d+\/(?=v\/)/, '/');
     const tag = u.searchParams.get('tag');
-    // Facebook's simple GraphQL fixture shape (also used by older stored rows)
-    // already had a path-derived `video-*` id. Preserve that canonical spelling
-    // while still deriving it here rather than trusting the supplied field.
+    // Simple GraphQL shapes and persisted rows use a path-derived `video-*` id.
+    // Derive that canonical spelling instead of trusting a supplied field.
     const simpleVideo = path.match(/^\/v\/t42\/([^/]+)\.mp4$/);
     if (simpleVideo) return `video-${simpleVideo[1]}${tag == null ? '' : `?tag=${encodeURIComponent(tag)}`}`;
     // Real CDN objects have a unique filename, so resize/signature parameters
@@ -500,22 +424,15 @@ function mediaIdCandidate(url: string): string {
   }
 }
 
-// mediaIdCandidate's `video-*` and final `asset:` branches are just as
-// reachable from the untrusted page-message channel (sanitizeIncomingItems)
-// as genericEndpointId's, and just as capable of overflowing the shared id
-// contract — the reachable-but-unbounded gap two earlier rounds each left
-// open in a different branch. Bounding the whole candidate here, once, at the
-// single point every mediaId leaves this module, closes every current branch
-// AND any branch added later without depending on that branch remembering to
-// call boundMediaId itself.
+// Bound the complete candidate at the shared exit so every current and future
+// branch obeys the id contract.
 export function mediaId(url: string): string {
   return boundMediaId(mediaIdCandidate(url));
 }
 
 /**
- * Read aliases emitted by older FaceScrap builds. Path-only generic ids cannot
- * identify two resources behind the same endpoint, so consumers must only
- * accept an alias when it maps to one unique current item.
+ * Read persisted path-only aliases. Generic endpoints may serve several resources,
+ * so consumers accept an alias only when it maps to one current item.
  */
 export function historicalMediaIds(url: string): string[] {
   try {
@@ -523,11 +440,8 @@ export function historicalMediaIds(url: string): string[] {
     const path = parsed.pathname.replace(/^\/o\d+\/(?=v\/)/, '/');
     const pathOnly = `asset:${path}`;
     const current = mediaId(url);
-    // Only generic endpoints ever carried a path-only historical id. A simple
-    // video (`video-*`) or an unparseable url never did, so emitting
-    // `asset:${path}` for those would be an alias that canonicalizeHistoricalMediaId
-    // round-trips to a different id — a latent migration trap. Restrict aliases
-    // to the asset scheme so the two functions stay mutually consistent.
+    // Path-only aliases apply only to the asset scheme, preserving round-trip
+    // consistency with canonicalizeHistoricalMediaId.
     if (!current.startsWith('asset:')) return [];
     return pathOnly === current ? [] : [pathOnly];
   } catch {
@@ -535,7 +449,7 @@ export function historicalMediaIds(url: string): string[] {
   }
 }
 
-/** Re-canonicalize an `asset:` id emitted by the short-lived full-query scheme. */
+/** Canonicalize a persisted full-query `asset:` id. */
 export function canonicalizeHistoricalMediaId(id: string): string | undefined {
   if (!id.startsWith('asset:/')) return undefined;
   const resource = id.slice('asset:'.length);
@@ -546,12 +460,8 @@ export function canonicalizeHistoricalMediaId(id: string): string | undefined {
   }
 }
 
-/** Identity produced by FaceScrap 1.0 before representation-safe canonical
- * ids were introduced. Kept only as a read/display alias for persisted session
- * rows and Saved receipts; all new writes use mediaId(). `pathname` is taken
- * straight from the same untrusted URL mediaId() reads, and the digit run
- * matched below has no length cap of its own, so this is bounded the same way
- * (and through the same helper) as mediaId(). */
+/** Read/display alias for persisted session rows and Saved receipts. New writes
+ *  use mediaId(). Bound the result through the same helper as mediaId(). */
 export function legacyMediaId(url: string): string | undefined {
   try {
     const pathname = new URL(url).pathname;
@@ -562,15 +472,8 @@ export function legacyMediaId(url: string): string | undefined {
   }
 }
 
-/**
- * Alias ownership across a batch of currently-captured items: a legacy
- * path-only historical id (see historicalMediaIds) mapped to the ids of every
- * CURRENT item whose URL produces it. A generic endpoint (e.g. safe_image.php)
- * reuses one pathname, so two distinct captures can legitimately share the
- * same historical alias — matchesActiveMediaId only trusts an alias when this
- * map proves it names exactly one item. Build once per candidate batch and
- * reuse it across every item; rebuilding it per item is quadratic in batch size.
- */
+/** Map each path-only alias to its current item ids. Shared endpoints may collide,
+ *  so matchesActiveMediaId trusts only uniquely owned aliases. Build once per batch. */
 export function historicalAliasOwners(items: readonly MediaItem[]): Map<string, Set<string>> {
   const owners = new Map<string, Set<string>>();
   for (const item of items) {
@@ -583,18 +486,8 @@ export function historicalAliasOwners(items: readonly MediaItem[]): Map<string, 
   return owners;
 }
 
-/**
- * The id set to match against, built from the raw ids a PlayingRef carries:
- * every id as stored, plus the re-canonicalized form of any that came from the
- * short-lived full-query `asset:` scheme (see canonicalizeHistoricalMediaId).
- *
- * Built HERE, once, because three matchers pair it with matchesActiveMediaId
- * below — the panel's selection (now-playing.ts), the retention classifier
- * (storage.ts) and the in-page button's pure read (video-options.ts) — and one
- * of them was missing the expansion. A PlayingRef left in session storage by an
- * older build then selected a row in the panel that retention treated as
- * ordinary, so the cap could evict the very row on screen.
- */
+/** Expand PlayingRef ids with canonical forms of persisted full-query aliases.
+ *  Panel selection, retention and the in-page button share this exact set. */
 export function activeMediaIds(ids: readonly string[] | undefined): Set<string> {
   const active = new Set(ids ?? []);
   for (const id of [...active]) {
@@ -604,14 +497,8 @@ export function activeMediaIds(ids: readonly string[] | undefined): Set<string> 
   return active;
 }
 
-/**
- * Does `item` correspond to one of the ids in `active`? The canonical union
- * for matching a captured MediaItem against a set of "centered/active" media
- * ids: the item's own id, its freshly recomputed mediaId (covers a stored row
- * whose id predates a canonicalization fix), its FaceScrap-1.0 legacyMediaId,
- * or an unambiguous historical alias (see historicalAliasOwners — pass the
- * owners map built from the SAME items `active` is being matched against).
- */
+/** Match an item by stored id, current canonical id, numeric fallback or uniquely
+ *  owned path alias. Build `owners` from the same candidate batch. */
 export function matchesActiveMediaId(
   item: MediaItem,
   active: ReadonlySet<string>,
@@ -729,8 +616,7 @@ export function makeItem(
   return { id: mediaId(url), url, kind: mediaKindFromUrl(url, kind) ?? kind, source, origin, dash, addedAt: now };
 }
 
-// Exported: storage.ts validates persisted SavedEntry shapes against the same
-// enum authorities this sanitizer uses.
+// Storage validates persisted entries against these allowed values.
 export const MEDIA_KINDS: ReadonlySet<string> = new Set(['video', 'image', 'audio']);
 export const MEDIA_SOURCES: ReadonlySet<string> = new Set(['reel', 'story', 'highlight', 'video', 'page']);
 const ORIGINS: ReadonlySet<string> = new Set(['network', 'graphql', 'dom']);
@@ -794,12 +680,7 @@ export function imageDimensionsLabel(
   return `${item.width}×${item.height}`;
 }
 
-// Module-scope: mergeMedia recomputes this for the SAME already-built
-// candidate object multiple times per item (normalizeMergeCandidate's own
-// entry/exit checks, plus its caller's changed-detection compare), and
-// getMedia re-runs mergeMedia on EVERY read — at the storage cap that
-// repetition, not any one call, is what costs. A fresh TextEncoder per call
-// was one avoidable cost; the identity cache below removes the rest.
+// Reuse one encoder and cache serialized weights by immutable object identity.
 const mediaItemWeightEncoder = new TextEncoder();
 const mediaItemWeightCache = new WeakMap<object, number>();
 
@@ -869,19 +750,8 @@ function mergeStoryIds(older: unknown, newer: unknown): string[] {
   return out;
 }
 
-/**
- * Shape-check + copy a MediaItem out of an untrusted record. Both entry
- * points below — sanitizeIncomingItems (the untrusted page-message channel)
- * and mergeMedia's normalizeMergeCandidate (existing storage rows AND new
- * incoming items) — fork from this ONE gate-and-copy chain, so a MediaItem
- * field added later cannot be copied in one path and silently stripped in
- * the other: mergeMedia stores whatever this returns (byId.set), and
- * getMedia runs mergeMedia on every read, so a dropped field here used to be
- * a live, persisted data-loss bug, not just a shape mismatch.
- * `allowHistorical` is forwarded to normalizeAddedAt as-is: fresh incoming
- * items (sanitizeIncomingItems, and mergeMedia's incoming side) never allow
- * it; existing persisted rows (mergeMedia's existing side) do.
- */
+/** Shape-check and copy a MediaItem through the shared ingress and merge contract.
+ *  `allowHistorical` applies only to existing persisted rows. */
 function normalizeMediaCandidate(raw: unknown, now: number, allowHistorical: boolean): MediaItem | null {
   if (!raw || typeof raw !== 'object') return null;
   const it = raw as Record<string, unknown>;
@@ -968,9 +838,7 @@ export function classifyNetworkRequest(url: string, now: number, source: MediaSo
  * Returns [merged, changed].
  */
 function normalizeMergeCandidate(raw: MediaItem, now: number, allowHistorical: boolean): MediaItem | null {
-  // Early exit on the untouched candidate: merge-specific, kept as-is. The
-  // gate chain and field copy live once, in normalizeMediaCandidate, shared
-  // with sanitizeIncomingItems.
+  // Reject overweight inputs before shared normalization and its field copies.
   if (mediaItemWeight(raw) > MAX_MEDIA_ITEM_BYTES) return null;
   const it = normalizeMediaCandidate(raw, now, allowHistorical);
   return it != null && mediaItemWeight(it) <= MAX_MEDIA_ITEM_BYTES ? it : null;
@@ -994,26 +862,15 @@ export function mergeMedia(existing: MediaItem[], incoming: MediaItem[], now = D
       if (isIncoming) changed = true;
       return;
     }
-    // Two persisted legacy rows may name the same URL with different forged or
-    // pre-canonical ids. The returned map compacts them; flag the migration so
-    // storage writes that repaired shape back even when neither row enriches it.
+    // Compact duplicate persisted rows and mark the normalized shape for storage.
     if (!isIncoming) changed = true;
     // Enrich transactionally: every accepted intermediate shape must remain a
     // valid storable item. Never delete a field already present on `prev` just
     // to make room for new metadata. Strong playback associations win first;
     // lower-priority track/preview metadata is admitted only while it fits.
     const gainsAudio = Boolean(it.audioUrl) && !prev.audioUrl;
-    // Deliberately stays first-wins (never replaces an already-set thumbUrl):
-    // MediaItem carries no signal — verified dimensions, capture provenance,
-    // or otherwise — describing a THUMBNAIL's own quality independent of
-    // guessing at Facebook's private URL scheme. `origin` cannot substitute:
-    // it names this item's ORIGINAL capture, not necessarily which later
-    // insert supplied prev.thumbUrl (thumbUrl and origin can be set by
-    // different merge passes over the item's life), so treating e.g. a 'dom'
-    // origin as "the poster is trustworthy" would assert a correlation the
-    // data doesn't actually guarantee. Revisit if a future capture path
-    // starts attaching a verified width/height (or similar) to the
-    // thumbnail itself rather than to the item.
+    // Thumbnail selection is first-wins because MediaItem has no independent
+    // thumbnail-quality signal. Item origin does not describe a later thumbnail.
     const gainsThumb = Boolean(it.thumbUrl) && !prev.thumbUrl;
     const gainsTracks = Boolean(it.trackIds?.length) && !prev.trackIds?.length;
     const previousStoryIds = normalizeStoryIds(prev.storyIds);
@@ -1062,11 +919,7 @@ export function mergeMedia(existing: MediaItem[], incoming: MediaItem[], now = D
     if (gainsThumb && it.thumbUrl != null) {
       accept({ ...enriched, thumbUrl: it.thumbUrl });
     }
-    // Dimensions, but only into a row that has none. Whichever capture path reaches a URL
-    // first owns the row, and the network observer has no dimensions to offer at all — so
-    // a GraphQL representation arriving second used to lose its width and height for good,
-    // which dropped that rung to naming itself off the URL's encode tag. "None" is not a
-    // competing claim, so filling it in cannot overwrite a measurement.
+    // Fill missing dimensions without replacing an existing measurement.
     if ((it.height != null && enriched.height == null) || (it.width != null && enriched.width == null)) {
       const candidate = { ...enriched };
       if (it.height != null && candidate.height == null) candidate.height = it.height;

@@ -1,20 +1,5 @@
-// SWEEP-1: scripts/test.mjs bundles every tests/*.test.ts file with esbuild
-// (format: 'esm') into a bare mkdtemp() directory, then runs `node --test` on
-// the emitted .js bundles. That directory has no package.json, so a Node
-// without syntax-based module detection resolves an extension-ambiguous .js
-// as CommonJS and the bundle's own top-level `import` throws immediately —
-// even though package.json declares an `engines.node` floor older than the
-// ~20.19/22.7 where Node started guessing ESM from syntax, and CI pinning a
-// newer Node hides the mismatch. The runner answers that by writing a
-// synthetic { "type": "module" } beside the bundles.
-//
-// This used to spawn scripts/test.mjs itself, which re-ran the WHOLE suite
-// inside one of its own tests: twice the runtime, and any unrelated failure
-// resurfaced here blaming ESM detection and buried the real one under the
-// entire suite's stdout. It now reproduces a single bundle with the runner's
-// options and runs `node --test` on that alone — and pins the two settings it
-// reproduces against the runner's source, so the replica cannot drift away
-// from what scripts/test.mjs actually does.
+// Run one test bundle with the runner's ESM settings in an isolated directory.
+// The synthetic package marker makes the emitted JavaScript unambiguously ESM.
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
@@ -35,7 +20,7 @@ const ENTRY = [
 ].join('\n');
 
 test(
-  "scripts/test.mjs's bundles load as ESM even when Node cannot guess the module type from syntax (the pre-20.19/22.7 default this project's engines floor implies)",
+  "scripts/test.mjs's bundles load as ESM when syntax-based module detection is disabled",
   async () => {
     const runner = readFileSync(join(ROOT, 'scripts', 'test.mjs'), 'utf8');
     assert.match(runner, /format: 'esm',/, 'the runner no longer emits ESM — this check reproduces the wrong shape');
@@ -64,23 +49,19 @@ test(
         bundle: true,
         format: 'esm',
         platform: 'node',
-        target: 'node20',
+        target: 'node24',
         sourcemap: 'inline',
         logLevel: 'silent',
       });
 
-      // This test itself runs under `node --test`, which marks its own
-      // environment (NODE_TEST_CONTEXT / NODE_TEST_WORKER_ID) so a nested
-      // `node --test` detects reentrancy and no-ops instead of running
-      // anything. Strip those, or the child below would silently "pass"
-      // without ever loading the bundle — the false negative this exists to
-      // avoid.
+      // Strip the parent test markers so the nested `node --test` process loads
+      // and executes the bundle instead of treating the run as reentrant.
       const env: NodeJS.ProcessEnv = { ...process.env };
       delete env.NODE_TEST_CONTEXT;
       delete env.NODE_TEST_WORKER_ID;
 
-      // Same behaviour real pre-20.19/22.7 Node has: an ambiguous .js with no
-      // "type": "module" package.json nearby is CommonJS, full stop.
+      // Disable syntax-based detection so the test proves the nearby
+      // "type": "module" declaration is sufficient on its own.
       const result = spawnSync(
         process.execPath,
         ['--test', '--no-experimental-detect-module', join(dir, 'esm-probe.js')],
@@ -92,8 +73,7 @@ test(
         result.status,
         0,
         `an esbuild bundle emitted with the runner's options did not load under ` +
-          `--no-experimental-detect-module (what a pre-20.19/22.7 Node — including the declared engines ` +
-          `floor — does by default):\n--- stdout ---\n${result.stdout}\n--- stderr ---\n${result.stderr}`,
+          `--no-experimental-detect-module:\n--- stdout ---\n${result.stdout}\n--- stderr ---\n${result.stderr}`,
       );
     } finally {
       await rm(dir, { recursive: true, force: true });

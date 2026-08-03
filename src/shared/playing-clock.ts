@@ -38,7 +38,7 @@ export function nextPlayingDetectedAt(previous: number, wallNow: number): number
 
 /** Validate an untrusted content-script timestamp against worker receive time. */
 export function normalizePlayingDetectedAt(raw: unknown, receivedAt: number): number | undefined {
-  // Compatibility with an older content script that has not reloaded yet.
+  // An omitted timestamp falls back to worker receive time.
   if (raw === undefined) return receivedAt;
   // A present-but-invalid timestamp must not be silently rewritten into a
   // plausible current boundary. Ignore that NOW_PLAYING message instead.

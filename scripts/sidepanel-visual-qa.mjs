@@ -2,29 +2,33 @@
 
 // Real visual smoke test for FaceScrap's built side panel.
 //
-// This intentionally uses only Node built-ins. It launches Edge or Brave with a fresh
-// profile, discovers the unpacked MV3 extension through /json/list, drives the
-// side-panel document over CDP, and writes screenshots plus machine-readable
-// evidence to artifacts/qa/. Run `npm run build` before invoking this script.
+// It launches Chrome for Testing, Edge, or Brave with a fresh profile, discovers
+// the unpacked MV3 extension through /json/list, drives the side-panel document
+// over CDP, and writes screenshots plus machine-readable evidence to
+// artifacts/qa/<browser>/<language>/<theme>/. Run `npm run build` first.
 //
 // The evidence lives OUTSIDE dist/ on purpose: dist/ is the unpacked extension,
 // and Chrome counts every byte in that folder as extension size. 1.3 MB of QA
 // screenshots was riding along in it.
 
+import { spawn } from 'node:child_process';
 import { createHash, randomBytes } from 'node:crypto';
 import { EventEmitter } from 'node:events';
 import { access, mkdir, mkdtemp, readFile, realpath, rm, stat, writeFile } from 'node:fs/promises';
 import http from 'node:http';
 import net from 'node:net';
-import { tmpdir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
-import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { Browser, detectBrowserPlatform, install } from '@puppeteer/browsers';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const DIST = join(ROOT, 'dist');
-const QA_DIR = join(ROOT, 'artifacts', 'qa');
+const QA_ROOT = join(ROOT, 'artifacts', 'qa');
+let QA_DIR = QA_ROOT;
 const MANIFEST = join(DIST, 'manifest.json');
+const CFT_VERSION_FILE = join(ROOT, '.cft-version');
+const CFT_CACHE = join(homedir(), '.cache', 'facescrap', 'chrome-for-testing');
 const BROWSER_EXECUTABLES = Object.freeze({
   edge: 'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe',
   brave: 'C:\\Program Files\\BraveSoftware\\Brave-Browser\\Application\\brave.exe',
@@ -52,15 +56,46 @@ function stackText(error) {
   return error instanceof Error ? error.stack ?? error.message : String(error);
 }
 
+function watchChildExit(child) {
+  return new Promise((resolveExit, rejectExit) => {
+    child.once('error', rejectExit);
+    child.once('exit', (code, signal) => resolveExit({ code, signal }));
+  });
+}
+
+function runIfMain(moduleUrl, run) {
+  if (process.argv[1] == null || resolve(process.argv[1]) !== fileURLToPath(moduleUrl)) return;
+  run().catch((error) => {
+    process.stderr.write(`${errorText(error)}\n`);
+    process.exitCode = 1;
+  });
+}
+
 function appendBounded(current, chunk) {
   const next = current + String(chunk);
   return next.length <= MAX_BROWSER_LOG_CHARS ? next : next.slice(next.length - MAX_BROWSER_LOG_CHARS);
 }
 
+function parseBrowserName(value) {
+  if (value === 'chrome') {
+    throw new Error(
+      'Branded Chrome cannot load unpacked extensions from launch flags; use Chrome for Testing with --browser=cft',
+    );
+  }
+  if (value !== 'cft' && value !== 'edge' && value !== 'brave') {
+    throw new Error('--browser must be cft, edge, or brave');
+  }
+  return value;
+}
+
+function supportsRuntimeReloadRecovery(browserName) {
+  return browserName === 'edge';
+}
+
 function parseArguments(argv) {
   let referencePath;
   let language = 'es';
-  let browserName = 'edge';
+  let browserName = 'cft';
   let theme = 'light';
   let languageProvided = false;
   let browserProvided = false;
@@ -100,16 +135,14 @@ function parseArguments(argv) {
     if (argument === '--browser') {
       if (browserProvided) throw new Error('--browser may only be provided once');
       const value = argv[++index];
-      if (value !== 'edge' && value !== 'brave') throw new Error('--browser must be edge or brave');
-      browserName = value;
+      browserName = parseBrowserName(value);
       browserProvided = true;
       continue;
     }
     if (argument.startsWith('--browser=')) {
       if (browserProvided) throw new Error('--browser may only be provided once');
       const value = argument.slice('--browser='.length);
-      if (value !== 'edge' && value !== 'brave') throw new Error('--browser must be edge or brave');
-      browserName = value;
+      browserName = parseBrowserName(value);
       browserProvided = true;
       continue;
     }
@@ -136,6 +169,45 @@ function parseArguments(argv) {
     throw new Error(`Unknown argument: ${argument}`);
   }
   return { referencePath, language, browserName, theme };
+}
+
+async function resolveBrowserExecutable(browserName) {
+  if (browserName !== 'cft') {
+    return {
+      executable: BROWSER_EXECUTABLES[browserName],
+      source: 'system installation',
+      version: null,
+    };
+  }
+
+  const version = (await readFile(CFT_VERSION_FILE, 'utf8')).trim();
+  if (!/^\d+\.\d+\.\d+\.\d+$/.test(version)) {
+    throw new Error(`Invalid Chrome for Testing version in ${CFT_VERSION_FILE}: ${JSON.stringify(version)}`);
+  }
+
+  const override = process.env.FACESCRAP_CFT_EXECUTABLE?.trim();
+  if (override) {
+    return {
+      executable: resolve(override),
+      source: 'FACESCRAP_CFT_EXECUTABLE',
+      version,
+    };
+  }
+
+  const platform = detectBrowserPlatform();
+  if (!platform) throw new Error(`Chrome for Testing is not available for ${process.platform}/${process.arch}`);
+  const installed = await install({
+    browser: Browser.CHROME,
+    buildId: version,
+    cacheDir: CFT_CACHE,
+    platform,
+    downloadProgressCallback: 'default',
+  });
+  return {
+    executable: installed.executablePath,
+    source: '@puppeteer/browsers',
+    version,
+  };
 }
 
 async function assertReferenceReady(referencePath) {
@@ -259,8 +331,7 @@ async function startReferenceServer(referencePath) {
       new Promise((resolveClose, rejectClose) => {
         server.close((error) => (error ? rejectClose(error) : resolveClose()));
         // Do not let a browser keep-alive socket make QA cleanup wait forever.
-        // Node 18.2+ exposes this method; the guard preserves Node 18.0/18.1.
-        server.closeAllConnections?.();
+        server.closeAllConnections();
       }),
   };
 }
@@ -1440,6 +1511,26 @@ function pngDimensions(buffer) {
   return { width: buffer.readUInt32BE(16), height: buffer.readUInt32BE(20) };
 }
 
+async function capturePng(page) {
+  const screenshot = await page.command('Page.captureScreenshot', {
+    format: 'png',
+    fromSurface: true,
+    captureBeyondViewport: false,
+  });
+  const bytes = Buffer.from(screenshot.data, 'base64');
+  return { bytes, dimensions: pngDimensions(bytes) };
+}
+
+async function writeInspectionCapture(page, inspection, filename, expectedViewport = VIEWPORT) {
+  const { bytes, dimensions } = await capturePng(page);
+  inspection.checks.pngDimensionsExact =
+    dimensions.width === expectedViewport.width && dimensions.height === expectedViewport.height;
+  inspection.passed = Object.values(inspection.checks).every(Boolean);
+  const path = join(QA_DIR, filename);
+  await writeFile(path, bytes);
+  return { ...inspection, file: filename, path, ...dimensions, bytes: bytes.length };
+}
+
 async function captureSurface(page, surface, language) {
   await activateSurface(page, surface);
   let settingsInitialFocus;
@@ -1488,21 +1579,18 @@ async function captureSurface(page, surface, language) {
     await evaluate(page, `document.activeElement instanceof HTMLElement && document.activeElement.blur()`);
   }
   const inspection = await inspectSurface(page, surface, language);
-  if (surface === 'library') {
+  if (surface === 'library' || surface === 'saved') {
     const cardPlay = await exerciseCardPlayResize(page);
     inspection.checks.playCentered = cardPlay.initial.allValid;
     inspection.checks.cardPlayPositionsValid = cardPlay.initial.allValid && cardPlay.initial.aspectCoverage;
     inspection.checks.cardPlayResizeValid = cardPlay.valid;
     inspection.metrics.cardPlay = cardPlay;
-    inspection.checks.selectionTrayVisible =
-      await evaluate(page, `document.querySelector('#tray')?.hidden === false && document.querySelectorAll('#list .pick[aria-pressed="true"]').length === 2`);
-    inspection.passed = Object.values(inspection.checks).every(Boolean);
-  } else if (surface === 'saved') {
-    const cardPlay = await exerciseCardPlayResize(page);
-    inspection.checks.playCentered = cardPlay.initial.allValid;
-    inspection.checks.cardPlayPositionsValid = cardPlay.initial.allValid && cardPlay.initial.aspectCoverage;
-    inspection.checks.cardPlayResizeValid = cardPlay.valid;
-    inspection.metrics.cardPlay = cardPlay;
+    if (surface === 'library') {
+      inspection.checks.selectionTrayVisible = await evaluate(
+        page,
+        `document.querySelector('#tray')?.hidden === false && document.querySelectorAll('#list .pick[aria-pressed="true"]').length === 2`,
+      );
+    }
     inspection.passed = Object.values(inspection.checks).every(Boolean);
   } else if (surface === 'settings') {
     // The search box, not a control on page one: focusing a setting hid the fact that
@@ -1512,13 +1600,7 @@ async function captureSurface(page, surface, language) {
     inspection.metrics.initialFocusedElement = settingsInitialFocus;
     inspection.passed = Object.values(inspection.checks).every(Boolean);
   }
-  const screenshot = await page.command('Page.captureScreenshot', {
-    format: 'png',
-    fromSurface: true,
-    captureBeyondViewport: false,
-  });
-  const bytes = Buffer.from(screenshot.data, 'base64');
-  const dimensions = pngDimensions(bytes);
+  const { bytes, dimensions } = await capturePng(page);
   if (dimensions.width !== VIEWPORT.width || dimensions.height !== VIEWPORT.height) {
     inspection.checks.pngDimensionsExact = false;
     inspection.passed = false;
@@ -1967,13 +2049,7 @@ async function captureImageNowPlaying(
     })()`,
     'the LOW 590×443 image variant to paint first',
   );
-  const lowScreenshot = await page.command('Page.captureScreenshot', {
-    format: 'png',
-    fromSurface: true,
-    captureBeyondViewport: false,
-  });
-  const lowBytes = Buffer.from(lowScreenshot.data, 'base64');
-  const lowDimensions = pngDimensions(lowBytes);
+  const { bytes: lowBytes, dimensions: lowDimensions } = await capturePng(page);
   const lowFilename = 'now-image-low.png';
   const lowPath = join(QA_DIR, lowFilename);
   await writeFile(lowPath, lowBytes);
@@ -2176,8 +2252,7 @@ async function captureImageNowPlaying(
     `(() => {
       const foreground = document.querySelector('#now-preview > img:not(.thumb-bg)');
       const background = document.querySelector('#now-preview > img.thumb-bg');
-      // A photo has one duration surface, not two: the chip over the media. The metrics
-      // card that used to restate it is gone.
+      // Photos expose duration only in the media chip.
       const durationChip = document.querySelector('#now-dur');
       const quality = document.querySelector('#now-quality');
       const trigger = document.querySelector('#now-qtrigger');
@@ -2261,13 +2336,7 @@ async function captureImageNowPlaying(
     formatIsJpg: inspection.formatIsJpg,
     noHorizontalOverflow: inspection.noHorizontalOverflow,
   };
-  const screenshot = await page.command('Page.captureScreenshot', {
-    format: 'png',
-    fromSurface: true,
-    captureBeyondViewport: false,
-  });
-  const bytes = Buffer.from(screenshot.data, 'base64');
-  const dimensions = pngDimensions(bytes);
+  const { bytes, dimensions } = await capturePng(page);
   checks.pngDimensionsExact =
     dimensions.width === VIEWPORT.width && dimensions.height === VIEWPORT.height;
   const filename = 'now-image.png';
@@ -2432,19 +2501,7 @@ async function captureOpenResolutionList(page, { surface, filename }) {
       })()`,
     );
 
-    const screenshot = await page.command('Page.captureScreenshot', {
-      format: 'png',
-      fromSurface: true,
-      captureBeyondViewport: false,
-    });
-    const bytes = Buffer.from(screenshot.data, 'base64');
-    const dimensions = pngDimensions(bytes);
-    inspection.checks.pngDimensionsExact =
-      dimensions.width === VIEWPORT.width && dimensions.height === VIEWPORT.height;
-    inspection.passed = Object.values(inspection.checks).every(Boolean);
-    const path = join(QA_DIR, filename);
-    await writeFile(path, bytes);
-    return { ...inspection, file: filename, path, ...dimensions, bytes: bytes.length };
+    return await writeInspectionCapture(page, inspection, filename);
   } finally {
     await dismissPicker(page).catch(() => undefined);
   }
@@ -2519,19 +2576,7 @@ async function captureSettingsPage(page, tab) {
     })()`,
   );
 
-  const screenshot = await page.command('Page.captureScreenshot', {
-    format: 'png',
-    fromSurface: true,
-    captureBeyondViewport: false,
-  });
-  const bytes = Buffer.from(screenshot.data, 'base64');
-  const dimensions = pngDimensions(bytes);
-  inspection.checks.pngDimensionsExact =
-    dimensions.width === VIEWPORT.width && dimensions.height === VIEWPORT.height;
-  inspection.passed = Object.values(inspection.checks).every(Boolean);
-  const path = join(QA_DIR, filename);
-  await writeFile(path, bytes);
-  return { ...inspection, file: filename, path, ...dimensions, bytes: bytes.length };
+  return writeInspectionCapture(page, inspection, filename);
 }
 
 /** Which settings field each segmented group is supposed to write, and how to read it back.
@@ -2635,11 +2680,7 @@ async function exerciseSettingsControls(page) {
           onAccent: root.getPropertyValue('--onac').trim(),
           readable: root.getPropertyValue('--ach').trim(),
           pressed: document.querySelector('#set-accent-solid [data-accent][aria-pressed="true"]')?.dataset.accent ?? null,
-          // The header mark is painted from --acg and blended, so it is the one piece
-          // of chrome whose colour a user checks by LOOKING rather than by reading a
-          // token. It shipped as a fixed blue tile while everything around it moved.
-          // Half the palette is a flat colour, so the paint lands in background-COLOR
-          // there and in background-image only for the gradients — read whichever is set.
+          // Read the applied logo color or gradient because both represent valid accents.
           logoPaint: (() => {
             const s = getComputedStyle(document.querySelector('.brand-logo'));
             return s.backgroundImage !== 'none' ? s.backgroundImage : s.backgroundColor;
@@ -2661,13 +2702,10 @@ async function exerciseSettingsControls(page) {
       applied.paint.length > 0 &&
       applied.onAccent.length > 0 &&
       applied.readable.length > 0 &&
-      // The solid group states one colour twice; a gradient here would mean the swatch
-      // wrote the wrong half of the pair.
+      // Solid accents must set identical flat and paint values.
       applied.paint === applied.flat;
   }
-  // The point of the whole exercise: three different accents must leave the mark
-  // three different colours. A logo pinned to one brand blue passes every per-accent
-  // check above and still fails the thing a user notices.
+  // Different accents must produce distinct logo paint values.
   checks['accent:logo follows'] = new Set(metrics.accents.map((a) => a.logoPaint)).size > 1;
 
   // The panel tint is the same contract on a second palette: one attribute, four
@@ -2724,9 +2762,7 @@ async function exerciseDiagnostics(page, facebookPage) {
   const checks = {};
   const metrics = {};
 
-  // There is no switch any more, so there is nothing to toggle and nothing to restore.
-  // What replaces those four checks is stronger: the card must offer ONE action and no
-  // control that changes a setting, because the recording is no longer optional.
+  // Diagnostics are always active, so the card exposes only the export action.
   const card = await evaluate(
     page,
     `(() => {
@@ -2743,14 +2779,8 @@ async function exerciseDiagnostics(page, facebookPage) {
   checks['card:oneAction'] = card !== null && card.buttons.length === 1 && card.buttons[0] === 'diag-export';
   checks['card:noSwitch'] = card !== null && card.switches === 0 && card.details === 0;
 
-  // The only check here that crosses every hop — content script → worker →
-  // storage.local — and the only one that can fail while every UI check passes.
-  //
-  // It used to be driven by flipping the switch, which was also its trigger. With the
-  // log always recording there is no transition to make: the content script reports
-  // `contentReady` as it starts, so the evidence is already in the trace. Which is why
-  // nothing is cleared first — clearing would delete the very event being waited for,
-  // and it would never be emitted again for this document.
+  // Verify the content-to-worker-to-storage path through the startup `contentReady` event.
+  // Preserve the trace because each document emits this event only once.
   const live = await waitForEvaluation(
     page,
     `(async () => {
@@ -2759,8 +2789,7 @@ async function exerciseDiagnostics(page, facebookPage) {
       return { ready: fromContent.length > 0, sample: fromContent[0] ?? null, total: log.length };
     })()`,
     'the content script reports into the trace with no switch to turn on',
-    // content-diag coalesces for 5s and the worker's observer for another 5s. Always-on
-    // removed a settings read from this path but made both windows longer.
+    // Allow both five-second coalescing windows to flush.
     30_000,
   );
   metrics.liveEvent = live.sample;
@@ -2857,17 +2886,13 @@ async function exerciseDiagnostics(page, facebookPage) {
   checks['export:filename'] = /^facescrap-diagnostics-[\d-]+\.json$/.test(report.name);
   checks['export:identity'] = parsed.report === 'facescrap-diagnostics';
   checks['export:counters'] = parsed.counters?.captureGraphql === 12;
-  // CONTAINS the seeded three rather than equals: the log records permanently now, so
-  // the fixture tab's own events can land between the seed and the export. An exact
-  // count would turn that into a flake with no cause anyone could find.
+  // Require all seeded events while allowing concurrent fixture events.
   const seededEvents = (parsed.events ?? []).filter((event) => seeded.some((s) => s.at === event.at));
   checks['export:events'] =
     seededEvents.length === seeded.length && parsed.eventCount === parsed.events?.length;
   // Both shapes ship: objects for a script, lines for a person.
   checks['export:lines'] = Array.isArray(parsed.lines) && parsed.lines.some((line) => line.includes('graphql'));
-  // Settings ride along — half of what looks like a capture bug is a setting. Asserted
-  // on a field the fixture sets AWAY from its default, so this cannot pass on a
-  // defaults object that never travelled.
+  // Confirm the export includes a non-default fixture setting.
   checks['export:settings'] = parsed.settings?.confirmClear === true;
   checks['export:extension'] = typeof parsed.extension?.version === 'string';
   // Nothing signed may reach a file the user is about to hand to someone.
@@ -3130,19 +3155,7 @@ async function captureSingleQualityOption(page, fixture, tabId) {
         };
       })()`,
     );
-    const screenshot = await page.command('Page.captureScreenshot', {
-      format: 'png',
-      fromSurface: true,
-      captureBeyondViewport: false,
-    });
-    const bytes = Buffer.from(screenshot.data, 'base64');
-    const dimensions = pngDimensions(bytes);
-    inspection.checks.pngDimensionsExact =
-      dimensions.width === VIEWPORT.width && dimensions.height === VIEWPORT.height;
-    inspection.passed = Object.values(inspection.checks).every(Boolean);
-    const path = join(QA_DIR, filename);
-    await writeFile(path, bytes);
-    capture = { ...inspection, file: filename, path, ...dimensions, bytes: bytes.length };
+    capture = await writeInspectionCapture(page, inspection, filename);
   } finally {
     await evaluate(
       page,
@@ -3276,19 +3289,7 @@ async function captureCompactQualityScreenshot(page, { mode, filename }) {
       };
     })()`,
   );
-  const screenshot = await page.command('Page.captureScreenshot', {
-    format: 'png',
-    fromSurface: true,
-    captureBeyondViewport: false,
-  });
-  const bytes = Buffer.from(screenshot.data, 'base64');
-  const dimensions = pngDimensions(bytes);
-  inspection.checks.pngDimensionsExact =
-    dimensions.width === VIEWPORT.width && dimensions.height === 650;
-  inspection.passed = Object.values(inspection.checks).every(Boolean);
-  const path = join(QA_DIR, filename);
-  await writeFile(path, bytes);
-  return { ...inspection, file: filename, path, ...dimensions, bytes: bytes.length };
+  return writeInspectionCapture(page, inspection, filename, { width: VIEWPORT.width, height: 650 });
 }
 
 async function captureCompactQualityStates(page, fixture, tabId) {
@@ -3435,21 +3436,26 @@ async function captureCompactQualityStates(page, fixture, tabId) {
 // so "is it open" is simply whether it is hidden — captureOpenResolutionList drives it
 // directly, including that opening it does not resize the media above it.
 
-async function openPageTarget(browser, port, url, description, evidence, context) {
-  const target = await browser.command('Target.createTarget', { url, background: false });
-  await browser.command('Target.activateTarget', { targetId: target.targetId });
+async function connectCreatedTarget(browser, port, url, description) {
+  const created = await browser.command('Target.createTarget', { url, background: false });
+  await browser.command('Target.activateTarget', { targetId: created.targetId });
   const lookup = await pollJsonList(
     port,
-    (candidate) => candidate.id === target.targetId && Boolean(candidate.webSocketDebuggerUrl),
+    (candidate) => candidate.id === created.targetId && Boolean(candidate.webSocketDebuggerUrl),
     description,
   );
   const client = await CdpSocket.connect(lookup.found.webSocketDebuggerUrl);
+  return { client, target: lookup.found };
+}
+
+async function openPageTarget(browser, port, url, description, evidence, context) {
+  const { client, target } = await connectCreatedTarget(browser, port, url, description);
   attachEvidenceListeners(client, evidence, context);
   await enableEvidenceDomains(client);
   await client.command('Page.enable');
   return {
     client,
-    target: { id: lookup.found.id, type: lookup.found.type, title: lookup.found.title, url: lookup.found.url },
+    target: { id: target.id, type: target.type, title: target.title, url: target.url },
   };
 }
 
@@ -3469,50 +3475,19 @@ function trackExecutionContexts(client) {
 
 async function openSyntheticFacebookPage(browser, port, evidence) {
   const url = 'https://www.facebook.com/facescrap-theme-qa';
-  const target = await browser.command('Target.createTarget', { url: 'about:blank', background: false });
-  await browser.command('Target.activateTarget', { targetId: target.targetId });
-  const lookup = await pollJsonList(
+  const { client, target } = await connectCreatedTarget(
+    browser,
     port,
-    (candidate) => candidate.id === target.targetId && Boolean(candidate.webSocketDebuggerUrl),
+    'about:blank',
     'the synthetic Facebook theme target',
   );
-  const client = await CdpSocket.connect(lookup.found.webSocketDebuggerUrl);
   attachEvidenceListeners(client, evidence, 'synthetic-facebook');
   const executionContexts = trackExecutionContexts(client);
   await enableEvidenceDomains(client);
   await client.command('Page.enable');
 
-  const html = `<!doctype html>
-<html style="background-color: rgb(250, 250, 250)">
-<head><meta charset="utf-8"><title>FaceScrap theme QA</title></head>
-<body style="margin: 0; background-color: rgb(250, 250, 250)">
-<main style="min-height: 100vh; background-color: rgb(250, 250, 250)">FaceScrap theme QA</main>
-</body>
-</html>`;
-  let resolveFulfilled;
-  let rejectFulfilled;
-  const fulfilled = new Promise((resolveRequest, rejectRequest) => {
-    resolveFulfilled = resolveRequest;
-    rejectFulfilled = rejectRequest;
-  });
-  const requestHandler = (params) => {
-    if (params.resourceType !== 'Document' || params.request.url !== url) {
-      void client.command('Fetch.continueRequest', { requestId: params.requestId }).catch(rejectFulfilled);
-      return;
-    }
-    void client
-      .command('Fetch.fulfillRequest', {
-        requestId: params.requestId,
-        responseCode: 200,
-        responseHeaders: [
-          { name: 'Content-Type', value: 'text/html; charset=utf-8' },
-          { name: 'Cache-Control', value: 'no-store' },
-          { name: 'X-Content-Type-Options', value: 'nosniff' },
-        ],
-        body: Buffer.from(html).toString('base64'),
-      })
-      .then(resolveFulfilled, rejectFulfilled);
-  };
+  const html = syntheticFacebookDocument('FaceScrap theme QA');
+  const { fulfilled, requestHandler } = createHtmlDocumentFetch(client, url, html);
   client.on('Fetch.requestPaused', requestHandler);
   await client.command('Fetch.enable', {
     patterns: [{ urlPattern: url, resourceType: 'Document', requestStage: 'Request' }],
@@ -3543,43 +3518,14 @@ async function openSyntheticFacebookPage(browser, port, evidence) {
     client,
     executionContexts,
     url,
-    target: { id: lookup.found.id, type: lookup.found.type, url },
+    target: { id: target.id, type: target.type, url },
     transport: 'CDP Fetch fulfilled main document; no Facebook network dependency',
   };
 }
 
 async function reloadSyntheticFacebookDocument(facebookPage, url) {
-  const html = `<!doctype html>
-<html style="background-color: rgb(250, 250, 250)">
-<head><meta charset="utf-8"><title>FaceScrap runtime reload QA</title></head>
-<body style="margin: 0; background-color: rgb(250, 250, 250)">
-<main style="min-height: 100vh; background-color: rgb(250, 250, 250)">FaceScrap runtime reload QA</main>
-</body>
-</html>`;
-  let resolveFulfilled;
-  let rejectFulfilled;
-  const fulfilled = new Promise((resolveRequest, rejectRequest) => {
-    resolveFulfilled = resolveRequest;
-    rejectFulfilled = rejectRequest;
-  });
-  const requestHandler = (params) => {
-    if (params.resourceType !== 'Document' || params.request.url !== url) {
-      void facebookPage.command('Fetch.continueRequest', { requestId: params.requestId }).catch(rejectFulfilled);
-      return;
-    }
-    void facebookPage
-      .command('Fetch.fulfillRequest', {
-        requestId: params.requestId,
-        responseCode: 200,
-        responseHeaders: [
-          { name: 'Content-Type', value: 'text/html; charset=utf-8' },
-          { name: 'Cache-Control', value: 'no-store' },
-          { name: 'X-Content-Type-Options', value: 'nosniff' },
-        ],
-        body: Buffer.from(html).toString('base64'),
-      })
-      .then(resolveFulfilled, rejectFulfilled);
-  };
+  const html = syntheticFacebookDocument('FaceScrap runtime reload QA');
+  const { fulfilled, requestHandler } = createHtmlDocumentFetch(facebookPage, url, html);
   facebookPage.on('Fetch.requestPaused', requestHandler);
   await facebookPage.command('Fetch.enable', {
     patterns: [{ urlPattern: url, resourceType: 'Document', requestStage: 'Request' }],
@@ -3613,6 +3559,53 @@ async function reloadSyntheticFacebookDocument(facebookPage, url) {
   }
 }
 
+function syntheticFacebookDocument(title) {
+  return `<!doctype html>
+<html style="background-color: rgb(250, 250, 250)">
+<head><meta charset="utf-8"><title>${title}</title></head>
+<body style="margin: 0; background-color: rgb(250, 250, 250)">
+<main style="min-height: 100vh; background-color: rgb(250, 250, 250)">${title}</main>
+</body>
+</html>`;
+}
+
+function createHtmlDocumentFetch(client, url, html) {
+  let resolveFulfilled;
+  let rejectFulfilled;
+  const fulfilled = new Promise((resolveRequest, rejectRequest) => {
+    resolveFulfilled = resolveRequest;
+    rejectFulfilled = rejectRequest;
+  });
+  const requestHandler = (params) => {
+    if (params.resourceType !== 'Document' || params.request.url !== url) {
+      void client.command('Fetch.continueRequest', { requestId: params.requestId }).catch(rejectFulfilled);
+      return;
+    }
+    void client
+      .command('Fetch.fulfillRequest', {
+        requestId: params.requestId,
+        responseCode: 200,
+        responseHeaders: [
+          { name: 'Content-Type', value: 'text/html; charset=utf-8' },
+          { name: 'Cache-Control', value: 'no-store' },
+          { name: 'X-Content-Type-Options', value: 'nosniff' },
+        ],
+        body: Buffer.from(html).toString('base64'),
+      })
+      .then(resolveFulfilled, rejectFulfilled);
+  };
+  return { fulfilled, requestHandler };
+}
+
+function isExtensionContentScriptContext(candidate, expectedOrigin, excludedContextIds) {
+  return (
+    !excludedContextIds.has(candidate.id) &&
+    (candidate.origin === expectedOrigin || candidate.origin === `${expectedOrigin}/`) &&
+    candidate.auxData?.type === 'isolated' &&
+    candidate.auxData?.isDefault !== true
+  );
+}
+
 async function waitForExtensionContentScriptContext(
   executionContexts,
   extensionId,
@@ -3623,12 +3616,8 @@ async function waitForExtensionContentScriptContext(
   let observed = [];
   while (Date.now() < deadline) {
     observed = [...executionContexts.values()];
-    const context = observed.find(
-      (candidate) =>
-        !excludedContextIds.has(candidate.id) &&
-        (candidate.origin === expectedOrigin || candidate.origin === `${expectedOrigin}/`) &&
-        candidate.auxData?.type === 'isolated' &&
-        candidate.auxData?.isDefault !== true,
+    const context = observed.find((candidate) =>
+      isExtensionContentScriptContext(candidate, expectedOrigin, excludedContextIds),
     );
     if (context) return context;
     await delay(100);
@@ -3804,12 +3793,8 @@ async function waitForLiveExtensionContentScriptContext(
   let observed = [];
   let lastProbe;
   while (Date.now() < deadline) {
-    observed = [...executionContexts.values()].filter(
-      (candidate) =>
-        !excludedContextIds.has(candidate.id) &&
-        (candidate.origin === expectedOrigin || candidate.origin === `${expectedOrigin}/`) &&
-        candidate.auxData?.type === 'isolated' &&
-        candidate.auxData?.isDefault !== true,
+    observed = [...executionContexts.values()].filter((candidate) =>
+      isExtensionContentScriptContext(candidate, expectedOrigin, excludedContextIds),
     );
     for (const context of observed) {
       try {
@@ -3968,9 +3953,7 @@ async function verifyRuntimeReloadRecovery({
       };
     })()`,
   );
-  // The old CDP socket can remain open but commandless in Brave after reload.
-  // Closing it lets the harness attach cleanly to the replacement runtime even
-  // when the browser deliberately reuses the same target id and debugger URL.
+  // Close the stale socket before Brave reuses its target id and debugger URL.
   worker.close();
   const reloadedWorker = await waitForReloadedServiceWorker(
     port,
@@ -4489,9 +4472,7 @@ async function captureResponsiveSettingsControl(page, width, controlName, expect
       const settingsControlsUsable =
         controlName === 'theme'
           ? JSON.stringify(optionValues) === JSON.stringify(['auto', 'light', 'dark']) &&
-            // Exactly one lit. A group showing two, or none, would leave the user unable to
-            // tell which theme is actually in force — the equivalent of a <select> with no
-            // selected option, which the old assertion covered via control.value.
+            // Expose exactly one active theme option.
             pressedValues.length === 1 &&
             segButtons.every((button) => !button.disabled)
           : control instanceof HTMLInputElement &&
@@ -4541,13 +4522,7 @@ async function captureResponsiveSettingsControl(page, width, controlName, expect
     })()`,
   );
 
-  const screenshot = await page.command('Page.captureScreenshot', {
-    format: 'png',
-    fromSurface: true,
-    captureBeyondViewport: false,
-  });
-  const bytes = Buffer.from(screenshot.data, 'base64');
-  const dimensions = pngDimensions(bytes);
+  const { bytes, dimensions } = await capturePng(page);
   const screenshotDimensionsExact =
     dimensions.width === width && dimensions.height === VIEWPORT.height;
   const path = join(QA_DIR, selectors.filename);
@@ -4566,12 +4541,7 @@ async function captureResponsiveSettingsControl(page, width, controlName, expect
   };
 }
 
-/** One message, read from src/shared/i18n.ts — the source the panel itself renders.
- *
- *  Kept out of a private copy on purpose: a hardcoded expectation here turns every
- *  wording change into a red harness run that says "localisation broke" when nothing
- *  did, and the fix is always to retype the string in a second place. The same
- *  read-the-constant-from-source technique tests/config.test.ts uses for its timings. */
+/** Read localized expectations from the same message table rendered by the panel. */
 let messageTables;
 async function message(language, key) {
   if (!messageTables) {
@@ -4922,13 +4892,7 @@ async function captureComparisons(page, referenceEvidence) {
         rect.naturalHeight === VIEWPORT.height,
     );
     if (!imagesExact) throw new Error(`Comparison ${surface} did not render both PNGs at 1:1: ${JSON.stringify(inspection.rects)}`);
-    const screenshot = await page.command('Page.captureScreenshot', {
-      format: 'png',
-      fromSurface: true,
-      captureBeyondViewport: false,
-    });
-    const bytes = Buffer.from(screenshot.data, 'base64');
-    const dimensions = pngDimensions(bytes);
+    const { bytes, dimensions } = await capturePng(page);
     if (dimensions.width !== COMPARISON_VIEWPORT.width || dimensions.height !== COMPARISON_VIEWPORT.height) {
       throw new Error(
         `Comparison ${surface} PNG is ${dimensions.width}x${dimensions.height}, expected ${COMPARISON_VIEWPORT.width}x${COMPARISON_VIEWPORT.height}`,
@@ -5007,8 +4971,9 @@ async function main() {
       runAfter: 'npm run build',
       browserName: null,
       browserExecutable: null,
+      browserProvisioning: null,
       extensionDirectory: DIST,
-      nodeModules: 'built-in only',
+      nodeModules: '@puppeteer/browsers for Chrome for Testing provisioning; built-in CDP client',
       transport: 'Chrome DevTools Protocol over a native WebSocket client',
     },
     viewport: VIEWPORT,
@@ -5049,8 +5014,8 @@ async function main() {
   let referenceServer;
   let referencePath;
   let language = 'es';
-  let browserName = 'edge';
-  let browserExecutable = BROWSER_EXECUTABLES.edge;
+  let browserName = 'cft';
+  let browserExecutable;
   let theme = 'light';
   let runError;
   let browserStdout = '';
@@ -5058,11 +5023,17 @@ async function main() {
 
   try {
     ({ referencePath, language, browserName, theme } = parseArguments(process.argv.slice(2)));
-    browserExecutable = BROWSER_EXECUTABLES[browserName];
+    const browserResolution = await resolveBrowserExecutable(browserName);
+    browserExecutable = browserResolution.executable;
+    QA_DIR = join(QA_ROOT, browserName, language, theme);
     evidence.language = language;
     evidence.requestedTheme = theme;
     evidence.requirements.browserName = browserName;
     evidence.requirements.browserExecutable = browserExecutable;
+    evidence.requirements.browserProvisioning = {
+      source: browserResolution.source,
+      version: browserResolution.version,
+    };
     if (referencePath) {
       evidence.referenceComparison.enabled = true;
       evidence.referenceComparison.status = 'running';
@@ -5082,6 +5053,7 @@ async function main() {
         transport: 'restricted loopback HTTP',
       };
     }
+    await rm(QA_DIR, { recursive: true, force: true });
     await mkdir(QA_DIR, { recursive: true });
     profileDir = await mkdtemp(join(tmpdir(), PROFILE_PREFIX));
     assertProfileIsOwned(profileDir);
@@ -5111,10 +5083,7 @@ async function main() {
     child.stderr?.on('data', (chunk) => {
       browserStderr = appendBounded(browserStderr, chunk);
     });
-    browserExit = new Promise((resolveExit, rejectExit) => {
-      child.once('error', rejectExit);
-      child.once('exit', (code, signal) => resolveExit({ code, signal }));
-    });
+    browserExit = watchChildExit(child);
 
     const port = await waitForDevToolsPort(profileDir, browserExit);
     const version = await requestJson(port, '/json/version');
@@ -5397,7 +5366,7 @@ async function main() {
       comparisonPage = undefined;
     }
 
-    if (browserName === 'edge') {
+    if (supportsRuntimeReloadRecovery(browserName)) {
       const runtimeReloadRecovery = await verifyRuntimeReloadRecovery({
         browser,
         port,
@@ -5419,16 +5388,11 @@ async function main() {
         );
       }
     } else {
-      // Brave headless unloads this temporary unpacked extension on
-      // chrome.runtime.reload() without re-registering its service worker. That
-      // is a browser-harness limitation, not a public update path, so keep the
-      // ordinary Brave capture matrix authoritative and record the gap instead
-      // of turning it into a false product failure.
       evidence.runtimeReloadRecovery = {
         status: 'skipped',
         passed: null,
         browserName,
-        reason: 'Brave headless does not restart the temporary unpacked extension after chrome.runtime.reload().',
+        reason: `${browserName} does not re-register a command-line loaded temporary extension after chrome.runtime.reload().`,
       };
     }
 
@@ -5509,11 +5473,19 @@ async function main() {
 // Only when this file IS the command. A probe that needs the CDP plumbing below can
 // import it without launching a browser and running the whole visual gate as a side
 // effect of the import.
-if (process.argv[1] != null && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  main().catch((error) => {
-    process.stderr.write(`${errorText(error)}\n`);
-    process.exitCode = 1;
-  });
-}
+runIfMain(import.meta.url, main);
 
-export { CdpSocket, delay, evaluate, pollJsonList, requestJson, waitForDevToolsPort, BROWSER_EXECUTABLES, DIST };
+export {
+  BROWSER_EXECUTABLES,
+  CdpSocket,
+  DIST,
+  delay,
+  evaluate,
+  parseArguments,
+  pollJsonList,
+  requestJson,
+  runIfMain,
+  supportsRuntimeReloadRecovery,
+  waitForDevToolsPort,
+  watchChildExit,
+};

@@ -18,10 +18,7 @@ test('localizes public manifest metadata through English and Spanish locale cata
   assert.equal(manifest.description, '__MSG_extensionDescription__');
   assert.equal(manifest.action?.default_title, '__MSG_extensionActionTitle__');
 
-  // Every __MSG_key__ the manifest actually references, found rather than hand-listed. These keys
-  // are Chrome's own i18n and never appear in the MsgKey union, so the panel's dead-key scan
-  // cannot see them: a misspelt one renders as a raw __MSG_..__ in the browser UI with nothing to
-  // catch it. The "commands" description is the newest of them.
+  // Discover manifest message keys because they are outside the panel's MsgKey union.
   const referenced = [...JSON.stringify(manifest).matchAll(/__MSG_(\w+)__/g)].map((m) => m[1]!);
   assert.ok(referenced.includes('commandDownloadPlaying'), 'the keyboard command needs a localized description');
 
@@ -32,7 +29,7 @@ test('localizes public manifest metadata through English and Spanish locale cata
     for (const key of referenced) {
       assert.ok(messages[key]?.message?.trim(), `missing ${locale}.${key}`);
     }
-    // And nothing unread left behind: this catalog is small and hand-maintained.
+    // Reject unused entries in the manifest catalog.
     for (const key of Object.keys(messages)) {
       assert.ok(referenced.includes(key), `${locale}.${key} is in the catalog but the manifest never asks for it`);
     }

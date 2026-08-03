@@ -7,7 +7,7 @@ function harness(liveTabs: ReadonlySet<number>, hookedTabs: ReadonlySet<number> 
   const pings: number[] = [];
   const injections: Array<{ tabId: number; file: string }> = [];
   const hooks: number[] = [];
-  /** Both installs in one list, so their relative order is observable. */
+  /** Record both installs in order. */
   const order: string[] = [];
   const coordinator = createContentScriptRecoveryCoordinator({
     queryFacebookTabs: async () => [
@@ -60,10 +60,7 @@ test('update recovery can select the detector entry that replaces an invalidated
 });
 
 test('only a document with no live hook gets one', async () => {
-  // 41 lost its hook (its tab loaded while the extension was switched off); 42's is a
-  // MAIN-world hook that outlived the update, since it is plain page JS. Injecting there
-  // again would install nothing on top of it — page-hook.js stops at its own stamp, which
-  // tests/page-hook-idempotent.test.ts exercises — so what this pins is the trip not taken.
+  // Reinject the missing hook in tab 41 and skip the live hook in tab 42.
   const { coordinator, hooks } = harness(new Set(), new Set([42]));
 
   await coordinator.recover('content-recovery.js');
@@ -76,10 +73,7 @@ test('the hook goes in after the detector, never before it', async () => {
 
   await coordinator.recover();
 
-  // The detector registers its window-message listener as it evaluates; the hook starts
-  // posting captures — never retried — the moment it loads. Reversed, the first response
-  // it harvests lands with nobody listening and is lost outright. Both tabs are hookless
-  // here, so the pairing has to hold twice over.
+  // Install each detector before its hook so the first capture has a listener.
   assert.deepEqual(order, ['content.js', 'page-hook.js', 'content.js', 'page-hook.js']);
 });
 
@@ -93,7 +87,7 @@ test('a failing ping or inject on one tab never blocks recovery of the others', 
     ],
     ping: async (tabId) => {
       if (tabId === 51) throw new Error('message port closed before a response');
-      return false; // 52 has no live receiver → must still be reinjected
+      return false; // Tab 52 has no live receiver and requires reinjection.
     },
     inject: async (tabId) => {
       injected.push(tabId);

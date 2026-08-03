@@ -5,25 +5,17 @@ import { durableStoryCardKey, durableStoryMarkPortion, storyCardMark } from '../
 
 const DOM_ID = 'UzM6NTU1NTU1NTU1NTU1NTU1';
 
-// B6: storyCardMark embeds the URL's owner segment (match[1]) into the
-// durable `u:` mark, but content.ts documents that segment as pinned to
-// whichever card opened the tray — the SAME DOM-proven card yields a
-// DIFFERENT owner-bearing string depending on entry point.
-// durableStoryMarkPortion returns that whole owner-bearing string, so a
-// cache/binding keyed on it misses on a different-tray revisit even though
-// domId alone proves it is the same card. durableStoryCardKey is the
-// owner-independent keying form fixed here.
+// Key durable cards by their DOM-proven ID while preserving owner-bearing display marks.
 test('B6: durableStoryCardKey gives the SAME DOM-proven card the same key from two different tray entry points', () => {
   const fromOwnerA = storyCardMark('/stories/owner-a/entry-card/', DOM_ID);
   const fromOwnerB = storyCardMark('/stories/owner-b/entry-card/', DOM_ID);
 
-  // The owner-bearing display/compare form (durableStoryMarkPortion, left
-  // unchanged by this fix) still legitimately differs by entry point...
+  // Owner-bearing display forms may differ by entry point.
   assert.notEqual(fromOwnerA, fromOwnerB);
   assert.equal(durableStoryMarkPortion(fromOwnerA), fromOwnerA);
   assert.equal(durableStoryMarkPortion(fromOwnerB), fromOwnerB);
 
-  // ...but the KEYING form must not.
+  // Durable keys must remain owner-independent.
   assert.equal(durableStoryCardKey(fromOwnerA), durableStoryCardKey(fromOwnerB));
   assert.equal(durableStoryCardKey(fromOwnerA), `u:${DOM_ID}`);
 });

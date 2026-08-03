@@ -206,8 +206,7 @@ test('mediaSourceFromLocation anchors the highlight check to a real path segment
   assert.equal(mediaSourceFromLocation('/stories/highlights/123', ''), 'highlight');
   assert.equal(mediaSourceFromLocation('/someuser/highlights', ''), 'highlight');
   assert.equal(mediaSourceFromLocation('/watch/HIGHLIGHT/123', ''), 'highlight', 'case-insensitive');
-  // "highlight(s)" appears only as a substring of a larger, dot-joined path
-  // segment here — a real vanity page slug — and must not match.
+  // Do not match "highlight" inside a larger vanity slug.
   assert.equal(mediaSourceFromLocation('/football.highlights.daily/videos/123', ''), 'video');
   assert.equal(mediaSourceFromLocation('/mypagehighlights/videos/123', ''), 'video');
 });
@@ -219,18 +218,12 @@ test('mediaSourceFromLocation keeps the highlight > stories > reel > video prece
   assert.equal(mediaSourceFromLocation('/watch/', ''), 'video');
 });
 
-// Viewing a profile's highlights does not produce a highlight PATH: Facebook
-// reuses the plain story permalink and puts the only marker in the query.
-// Classifying on the pathname alone labelled these ordinary stories, so Now
-// Playing showed the wrong badge/title and downloads were named "story".
+// Profile highlights use a story path with a query marker.
 test('mediaSourceFromLocation reads the profile-highlight marker out of the query', () => {
-  // The real link this was reported from:
-  // https://www.facebook.com/stories/976731645401448/?source=profile_highlight
-  // (split by hand rather than via `new URL` — this file shadows the global URL
-  // with a fixture string constant.)
+  // Split the fixture manually because this file shadows the global URL constructor.
   assert.equal(mediaSourceFromLocation('/stories/976731645401448/', '?source=profile_highlight'), 'highlight');
 
-  // With and without the leading "?", and however the param is ordered.
+  // Accept either leading delimiter and any parameter order.
   assert.equal(mediaSourceFromLocation('/stories/123/', '?source=profile_highlight'), 'highlight');
   assert.equal(mediaSourceFromLocation('/stories/123/', 'source=profile_highlight'), 'highlight');
   assert.equal(mediaSourceFromLocation('/stories/123/', '?foo=1&source=profile_highlight&bar=2'), 'highlight');
@@ -238,17 +231,14 @@ test('mediaSourceFromLocation reads the profile-highlight marker out of the quer
 });
 
 test('mediaSourceFromLocation leaves other story entry points alone', () => {
-  // Every other ?source= value must keep the story label — only the highlight
-  // marker may override the path.
+  // Only the highlight marker may override the story path.
   for (const search of ['', '?source=story_tray', '?source=permalink', '?source=notification', '?source=feed_story']) {
     assert.equal(mediaSourceFromLocation('/stories/123/', search), 'story', `search=${search || '(none)'}`);
   }
-  // A value that merely contains the letters must not match: the marker is
-  // anchored on "_" or a string boundary.
+  // Require a complete highlight marker boundary.
   assert.equal(mediaSourceFromLocation('/stories/123/', '?source=spotlighted'), 'story');
   assert.equal(mediaSourceFromLocation('/stories/123/', '?source=nothighlighted'), 'story');
-  // A highlight query must not promote a page that is not media-bearing either
-  // way — the path still decides everything except the highlight/story split.
+  // The path must still identify a media-bearing page.
   assert.equal(mediaSourceFromLocation('/reel/123', '?source=story_tray'), 'reel');
 });
 
@@ -338,7 +328,7 @@ test('historicalAliasOwners + matchesActiveMediaId honour an unambiguous alias b
   );
 });
 
-// --- EF1: mediaItemWeight hoisted encoder + identity memoization ---
+// Media item weight memoization
 
 test('mediaItemWeight memoizes by object identity so a later mutation does not change the cached weight', () => {
   const candidate: Record<string, unknown> = { a: 'x' };
@@ -364,7 +354,7 @@ test('mediaItemWeight never throws for a non-object value (the identity cache mu
   assert.doesNotThrow(() => mediaItemWeight(true));
 });
 
-// --- C6: mediaId's unknown-generic-endpoint fallback stays bounded ---
+// Generic endpoint identity bounds
 
 test('mediaId bounds the unknown-generic-endpoint fallback so an over-long query cannot break the shared 256-char id contract', () => {
   const longQuery = `https://api.xx.fbcdn.net/graphql/unknown_endpoint/?a=${'x'.repeat(2000)}&b=2`;
@@ -373,9 +363,7 @@ test('mediaId bounds the unknown-generic-endpoint fallback so an over-long query
 
   const id = mediaId(longQuery);
 
-  // PlayingRef ids are truncated at 256 chars in transport and saved.ts's
-  // SavedEntry receipt contract reserves 256 chars for this value; an id past
-  // that bound breaks download requests and now-playing matching.
+  // Keep IDs within the shared transport and receipt limit.
   assert.ok(id.length <= 256, `bounded id must fit the shared 256-char id contract, got ${id.length}`);
   assert.equal(mediaId(longQuery), id, 'the same URL must hash to a stable id across calls');
   assert.notEqual(id, mediaId(otherLongQuery), 'two different overlong queries must not collide into one id');
@@ -386,7 +374,7 @@ test('mediaId bounds the unknown-generic-endpoint fallback so an over-long query
   );
 });
 
-// --- ALT2: sanitizeIncomingItems and mergeMedia share one gate-and-copy path ---
+// Shared media sanitization
 
 test('every optional MediaItem field survives sanitizeIncomingItems and then a getMedia-style re-merge', () => {
   const now = 1_800_000_000_000;
@@ -409,9 +397,7 @@ test('every optional MediaItem field survives sanitizeIncomingItems and then a g
 
   const sanitized = sanitizeIncomingItems([raw], Number.POSITIVE_INFINITY, now)[0];
   assert.ok(sanitized, 'the raw candidate must sanitize into one clean item');
-  // Check against the ORIGINAL input, not only cross-path agreement: two
-  // paths that silently drop the same field the same way would still agree
-  // with each other, so this must anchor to a value neither path invented.
+  // Anchor parity checks to the original input values.
   assert.equal(sanitized.dash, raw.dash);
   assert.equal(sanitized.audioUrl, raw.audioUrl);
   assert.equal(sanitized.thumbUrl, raw.thumbUrl);
@@ -421,8 +407,7 @@ test('every optional MediaItem field survives sanitizeIncomingItems and then a g
   assert.deepEqual(sanitized.trackIds, raw.trackIds);
   assert.deepEqual(sanitized.storyIds, raw.storyIds);
 
-  // getMedia re-runs mergeMedia(stored, []) on every read; a field the merge
-  // path's copy block forgot would be silently stripped right here.
+  // Reading stored media must preserve every accepted field.
   const [reread] = mergeMedia([sanitized], [], now);
   const result = reread[0];
 
@@ -435,27 +420,25 @@ test('every optional MediaItem field survives sanitizeIncomingItems and then a g
 
 test('normalizeMediaCandidate threads allowHistorical correctly for both mergeMedia sides after consolidation', () => {
   const now = 1_800_000_000_000;
-  const historical = now - 30 * 24 * 60 * 60 * 1000; // 30 days old, well past the 10-minute freshness window
+  const historical = now - 30 * 24 * 60 * 60 * 1000; // Outside the ten-minute freshness window.
 
-  // mergeMedia's EXISTING side (allowHistorical=true): a persisted row keeps
-  // its historical addedAt through a no-op re-merge (getMedia's self-heal).
+  // Preserve a persisted timestamp during a no-op merge.
   const stored = item({ id: mediaId(URL), addedAt: historical });
   const [merged] = mergeMedia([stored], [], now);
   assert.equal(merged.length, 1);
   assert.equal(merged[0].addedAt, historical, 'an existing stored row keeps its historical addedAt');
 
-  // sanitizeIncomingItems (allowHistorical=false, always): the SAME historical
-  // timestamp on a freshly incoming item is clamped to now instead.
+  // Clamp stale timestamps on newly received items.
   const sanitized = sanitizeIncomingItems([item({ addedAt: historical })], Number.POSITIVE_INFINITY, now)[0];
   assert.equal(sanitized.addedAt, now, 'a fresh incoming item never keeps a historical addedAt');
 
-  // mergeMedia's INCOMING side (allowHistorical=false) must match that same clamp.
+  // Apply the same clamp on the incoming side of a merge.
   const [mergedIncoming] = mergeMedia([], [item({ addedAt: historical })], now);
   assert.equal(mergedIncoming.length, 1);
   assert.equal(mergedIncoming[0].addedAt, now, 'a fresh item merged directly via mergeMedia is clamped the same way');
 });
 
-// --- Exported cross-file invariants ---
+// Cross-file invariants
 
 test('widenDashUrl and classifyNetworkRequest share one DASH byte-range param source', () => {
   const segment = `${URL}?bytestart=100&byteend=199&oh=a&oe=1`;
@@ -478,8 +461,7 @@ test('NUMERIC_MEDIA_ID exports serve both the anchored whole-string check and an
   assert.equal(isNumericMediaId('123abc'), false, 'not purely numeric');
   assert.equal(NUMERIC_MEDIA_ID_RE.test('123456'), true);
 
-  // The unanchored source must behave the same way embedded in a LARGER
-  // pattern, matching how content.ts embeds it inside a path-segment regex.
+  // Preserve matching behavior when the source is embedded in a larger pattern.
   const embedded = new RegExp(`/reel/(${NUMERIC_MEDIA_ID_SOURCE})(?=[/?#]|$)`);
   const match = '/reel/9876543210'.match(embedded);
   assert.equal(match?.[1], '9876543210');

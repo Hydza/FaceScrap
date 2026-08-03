@@ -88,27 +88,12 @@ export function withTimeout<T>(p: Promise<T>, ms: number, message: string): Prom
 }
 
 /**
- * A chain mutex: each task starts only after every task enqueued before it on the
- * SAME lock has settled (succeeded OR failed), and one rejection never blocks the
- * ones queued behind it. The caller gets back the RAW task promise — it rejects
- * exactly when `task` does; only the internal chain used to sequence FUTURE tasks
- * is caught-and-swallowed so a failure can't wedge the lane.
+ * Create an independent FIFO chain lock. Each task starts after the preceding task
+ * settles, and a rejection cannot block later work. Callers receive the raw task
+ * promise while the internal sequencing chain absorbs failures.
  *
- * Each CALL creates its own closed-over `chain`, so separate locks keep guarding
- * their own resource — never collapse two callers into one shared lock
- * (tests/found-storage-lock-factory.test.ts exists for exactly that mistake).
- *
- * storage.ts's two write locks, session-write.ts's headroom lock,
- * dash-download.ts's dashChain and offscreen.ts's muxQueue independently grew this
- * same shape, so it lives here once and they cannot drift apart. Two serial-queue
- * idioms elsewhere are DIFFERENT contracts on purpose and were deliberately left
- * alone rather than forced onto this helper: settings.ts's
- * createSettingsPatchWriter releases a hand-rolled latch in a `finally` block;
- * diag-observer.ts's flushChain reuses one handler for both the fulfilled and
- * rejected branches of `.then()`, so a failure is never swallowed the way it is
- * here. The keyed lanes below are the third shape and DO live here: they hand the
- * caller the settled/caught chain instead of the raw task, so a caller there never
- * sees its own task's rejection the way a caller here does.
+ * Keyed lanes below return the settled sequencing chain instead, so a caller never
+ * sees its own task's rejection as a caller here does.
  */
 export function createChainLock(): <T>(task: () => Promise<T>) => Promise<T> {
   let chain: Promise<void> = Promise.resolve();
@@ -155,13 +140,8 @@ export function serialQueue(): (task: () => Promise<void>, onError: (err: unknow
  * delay can never overflow regardless of how large a caller's own failure
  * counter grows (2^5 already reaches most `capMs` values in one hop).
  *
- * Shared by content-media-relay.ts's media retry (pump) and now-playing.ts's
- * binding-flush retry (retryBindings) — the two EXPONENTIAL policies among
- * FaceScrap's five capture/ack retry channels. The counter/timer bookkeeping
- * around this math is deliberately NOT unified: the two call sites manage
- * their own failure counters differently (media's saturates at 16 before this
- * clamp even applies; bindings' grows unbounded) and their base/cap constants
- * differ, so only the shared arithmetic moved here.
+ * Shared by the media and binding-flush exponential retries. Each caller retains
+ * its own counter, timer and base/cap policy; only the arithmetic is shared.
  *
  * The other three channels (theme: fixed 1s; playing: no timer, rides the
  * content script's 300ms detect() poller; pin: no timer, rides the side

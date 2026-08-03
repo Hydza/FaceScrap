@@ -1,15 +1,5 @@
-// EF8 — service-worker.ts's setBadge awaited a fresh
-// chrome.action.setBadgeBackgroundColor({color: '#1877F2'}) call — a
-// CONSTANT — before every single setBadgeText, on the worker's hottest paths
-// (every classified fbcdn media webRequest, every MEDIA_FOUND ack). This
-// proves the fix: the color call happens once for the whole worker instance,
-// no matter how many times setBadge itself runs afterward through either of
-// those two call sites.
-//
-// service-worker.ts has no exports (it registers every listener as a side
-// effect of module evaluation), so this uses the same capture-only chrome.*
-// fake as tests/fix-background-identity.test.ts; chrome.storage/onChanged
-// stay chrome-fake.ts's real in-memory implementation.
+// Set the constant badge color once per worker instance, independent of text updates.
+// Capture Chrome API calls because the worker registers listeners during module evaluation.
 import assert from 'node:assert/strict';
 import test from 'node:test';
 

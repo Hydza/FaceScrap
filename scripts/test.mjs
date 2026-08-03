@@ -20,14 +20,7 @@ if (entries.length === 0) {
 const OUT = await mkdtemp(join(tmpdir(), 'facescrap-tests-'));
 
 try {
-  // esbuild emits plain .js files here with no package.json alongside them.
-  // Node only parses an extension-ambiguous .js as ESM (letting these bundles'
-  // top-level `import`s work) if it either finds a "type": "module" in the
-  // nearest package.json or falls back to syntax-based detection — and that
-  // detection default is itself version-gated (Node >=20.19/22.7), newer than
-  // this project's declared `engines.node: >=18` floor. Declaring the type
-  // here keeps the bundles loadable as ESM on every supported Node version,
-  // not just ones new enough to guess right.
+  // Declare the module type so temporary bundles load consistently across supported Node versions.
   await writeFile(join(OUT, 'package.json'), JSON.stringify({ type: 'module' }));
 
   await esbuild.build({
@@ -37,7 +30,7 @@ try {
     bundle: true,
     format: 'esm',
     platform: 'node',
-    target: 'node20',
+    target: 'node24',
     sourcemap: 'inline',
     logLevel: 'silent',
   });
@@ -46,13 +39,11 @@ try {
     .filter((name) => name.endsWith('.test.js'))
     .sort()
     .map((name) => join(OUT, name));
-  const result = spawnSync(process.execPath, ['--test', ...bundles], {
+  const result = spawnSync(process.execPath, ['--test', '--test-timeout=30000', ...bundles], {
     cwd: ROOT,
     stdio: 'inherit',
   });
-  // A launch failure leaves status null and the reason only in result.error;
-  // with inherited stdio there is no child output, so throwing is the only
-  // way this run reports anything at all.
+  // Surface launch failures because inherited stdio has no child output to inspect.
   if (result.error) throw result.error;
   process.exitCode = result.status ?? 1;
 } finally {

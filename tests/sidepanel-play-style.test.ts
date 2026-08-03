@@ -6,9 +6,7 @@ import test from 'node:test';
 const css = readFileSync(join(process.cwd(), 'src', 'sidepanel', 'sidepanel.css'), 'utf8');
 
 test('uses one restrained play treatment across preview and tiles', () => {
-  // Both glyphs sit ON media, so both are stated as literals rather than theme tokens —
-  // a colour that followed the panel theme would vanish on half the thumbnails. What
-  // this pins is that they are the SAME literals: one treatment, two sizes.
+  // Use one literal media-overlay treatment for both glyph sizes.
   const preview = css.match(/\.preview-play\s*\{([^}]*)\}/)?.[1];
   assert.ok(preview, 'missing preview play style');
   assert.match(preview, /width:\s*56px/);
@@ -32,14 +30,11 @@ test('uses one restrained play treatment across preview and tiles', () => {
 });
 
 test('the measured sizes are the rendered sizes', () => {
-  // media-play.ts decides whether the glyph still clears the text under it from these
-  // two numbers. If the CSS grows and the constant does not, the glyph is placed for a
-  // circle that is not the one on screen.
+  // Keep runtime placement dimensions aligned with the rendered glyph.
   const source = readFileSync(join(process.cwd(), 'src', 'sidepanel', 'media-play.ts'), 'utf8');
   assert.match(source, /const PREVIEW_PLAY_SIZE = 56/);
   assert.match(source, /const CARD_PLAY_SIZE = 38/);
-  // Both obstructions now sit ON the media — the overlay line and the tile caption —
-  // rather than under it, which is what the measurement has to point at.
+  // Measure both media overlays when positioning the glyph.
   assert.match(source, /getElementById\('now-foot'\)/);
   assert.match(source, /querySelector<HTMLElement>\('\.tile-caption'\)/);
 });

@@ -8,7 +8,7 @@ import type { MediaItem, MediaKind, MediaSource } from '../shared/media';
 import { bitrate } from '../shared/video-options';
 
 /** What a captured item is CALLED in the UI, by the surface it came from. */
-export const SOURCE_KEY: Record<MediaSource, MsgKey> = {
+const SOURCE_KEY: Record<MediaSource, MsgKey> = {
   reel: 'sourceReel',
   story: 'sourceStory',
   highlight: 'sourceHighlight',
@@ -72,10 +72,7 @@ export function estimatedBytes(item: MediaItem, durationSec: number | undefined)
 /** "~18 MB" for an estimate, "18.4 MB" for a counted one. Empty for 0, so a missing
  *  estimate leaves its column blank rather than printing a confident zero.
  *
- *  Three units, not one. With only an MB tier, everything under half a megabyte
- *  rounded to "~0 MB" — which is the confident zero this function exists to avoid,
- *  and it is the COMMON case: a nine-second reel at a few hundred kbps is a few
- *  hundred KB, so the picker showed every option weighing nothing.
+ *  Choose B, KB or MB so nonzero estimates never round to a displayed zero.
  *
  *  Numbers go through Intl so the decimal separator follows the panel's language:
  *  toFixed always emits a point, and "18.4 MB" is not how a size is written in

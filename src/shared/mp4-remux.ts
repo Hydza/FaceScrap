@@ -1,24 +1,16 @@
 // MP4 remuxer: two single-track MP4s in, one two-track MP4 out. No dependency,
-// no wasm, no re-encode.
-//
-// This replaces ffmpeg.wasm, which was 9.8 MB compressed — 94% of the extension —
-// to run one `-c copy -shortest` merge. What that command actually does is copy
-// sample bytes unchanged and write a new sample table around them, which is what
-// this file does directly.
+// wasm or re-encoding.
 //
 // Two properties are load-bearing:
 //
 // 1. NOT ONE SAMPLE BYTE PASSES THROUGH JS. The output is assembled as a Blob of
 //    slices of the input Blobs, so the media stays wherever the browser put it
-//    (usually disk) and only the header is built in memory. ffmpeg had to read
-//    both tracks through its wasm heap; a 500 MB reel cost that much heap on top
-//    of the Blobs. Here the peak is the size of the sample tables.
+//    (usually disk), and only the header is built in memory.
 //
 // 2. Codec-agnostic by construction. The `stsd` box — the only place a codec is
 //    described — is copied verbatim, so AVC, HEVC, VP9, AV1, AAC, Opus, AC-3 and
 //    anything else Facebook packages keeps working without a line of code here
-//    knowing what it is. Sample bytes are equally untouched, which is what makes
-//    this lossless in the same sense `-c copy` was.
+//    knowing what it is. Untouched sample bytes keep the operation lossless.
 //
 // It reads BOTH MP4 shapes, because a DASH representation can be either. A
 // progressive file keeps every sample in one `stbl`; a fragmented one keeps an
@@ -182,14 +174,8 @@ async function topLevelBoxes(blob: Blob): Promise<BoxHeader[]> {
   return out;
 }
 
-/** Ceiling on the sample table of ONE track.
- *
- *  These tables are sized by fields inside the file, and this parser reads files
- *  off the network — a truncated or garbled response (the code elsewhere already
- *  expects "an expired fbcdn URL returned an incomplete stream") can declare a
- *  count of four billion. Expanding that would exhaust the offscreen document
- *  before anything noticed. 1.5M samples is over nine hours of 60fps video, so no
- *  real reel comes near it. */
+/** Cap one track's sample table. The limit exceeds nine hours at 60 fps while
+ *  preventing malformed network input from exhausting the offscreen document. */
 const MAX_SAMPLES_PER_TRACK = 1_500_000;
 
 /** How many entries a table can actually hold, whatever its count field claims.
@@ -567,11 +553,8 @@ export async function parseTracks(blob: Blob): Promise<Mp4Track[]> {
     if (!stbl) continue;
     const stsdBox = find(children(moov, stbl.bodyStart, stbl.end), 'stsd');
     if (!stsdBox) continue;
-    // The whole codec-agnostic story rests on copying stsd verbatim and rewriting
-    // every stsc entry with sample_description_index = 1. That is only true for a
-    // single-entry stsd; with two, the samples described by the second would be
-    // decoded with the first one's parameters. The assumption used to live in a
-    // comment at the stsc reader — refuse the file instead of assuming.
+    // Copying stsd verbatim while forcing sample_description_index = 1 is valid only
+    // for a single sample description. Reject every other shape.
     if (stsdBox.end - stsdBox.bodyStart < 8) throw new Error('This track has a truncated sample description box.');
     const stsdCursor = new Cursor(moov.subarray(stsdBox.bodyStart, stsdBox.end));
     stsdCursor.skip(4); // version + flags
@@ -605,12 +588,7 @@ export async function parseTracks(blob: Blob): Promise<Mp4Track[]> {
   }
   if (found.length === 0) throw new Error('This MP4 has no video or audio track.');
 
-  // Every sample must lie inside the file. Blob.slice CLAMPS a range that runs past
-  // the end instead of failing, so without this check a truncated track — the
-  // documented failure when an fbcdn URL expires mid-fetch — produced a file whose
-  // sample table pointed at bytes that were never written: corrupt output, reported
-  // as a successful download. Fail loudly instead, with the same advice the mux
-  // path already gives for a mismatched pair.
+  // Blob.slice clamps out-of-range spans, so validate every sample before building output.
   for (const track of found) {
     for (const sample of track.samples) {
       if (sample.offset < 0 || sample.size < 0 || sample.offset + sample.size > blob.size) {
@@ -858,11 +836,8 @@ function trackBox(
   );
   const mdia = box('mdia', mdhd, hdlr, minf);
 
-  // The edit list, rebuilt in this file's own units rather than copied byte for byte.
-  // Two things move under it: segment_duration is expressed in the MOVIE timescale,
-  // which is MOVIE_TIMESCALE here and was whatever the source chose, and the
-  // shortest-track trim can leave the media shorter than the source edit claimed. So
-  // each entry is scaled out of seconds and clamped to what is left of the movie.
+  // Rebuild the edit list in this file's movie timescale and clamp each entry to
+  // the remaining shortest-track duration.
   // Version 0 — readEditList refuses any value that would not fit in it.
   const editEntries: Uint8Array[][] = [];
   let budget = movieDuration;
@@ -890,9 +865,7 @@ interface RemuxResult {
 /**
  * Merge a video-only and an audio-only MP4 into one file.
  *
- * Trims to the shorter track, the way `-c copy -shortest` did: without it the
- * file ends on either frozen video or silence, which is the reason that flag was
- * there in the first place (see ARCHITECTURE.md).
+ * Trim to the shorter track so the file ends with neither frozen video nor silence.
  */
 export async function remux(video: Blob, audio: Blob): Promise<RemuxResult> {
   const [first, second] = await Promise.all([parseTrack(video), parseTrack(audio)]);

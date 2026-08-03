@@ -7,7 +7,7 @@ import { panelSource } from './panel-source';
 
 const ROOT = process.cwd();
 const HTML_PATH = join(ROOT, 'src', 'sidepanel', 'sidepanel.html');
-// The panel may be split into modules; read the whole directory (see panel-source.ts).
+// Read the complete panel source across module boundaries.
 
 const html = readFileSync(HTML_PATH, 'utf8');
 const controller = panelSource();
@@ -66,10 +66,7 @@ test('keeps the 2b route controls in one bottom navigation', () => {
 });
 
 test('names every settings control, whatever kind of control it is', () => {
-  // The claim has not changed — every control carries an accessible name pointing at a
-  // label that exists. What changed is the KINDS: the dropdowns became segmented button
-  // groups, so half of these are now a <div role="group"> rather than an <input>/<select>,
-  // and a group needs the name just as much.
+  // Every form control and segmented group needs an accessible name.
   const labelledInputs = [
     'set-search',
     'set-template',
@@ -84,15 +81,13 @@ test('names every settings control, whatever kind of control it is', () => {
     const tag = html.match(new RegExp(`<input\\b[^>]*id="${id}"[^>]*>`, 's'))?.[0];
     assert.ok(tag, `missing #${id}`);
     const attrs = attributes(tag!);
-    // Either form of the name is fine — the search box is its own label, the rest point
-    // at the row title beside them — but one of the two has to be there.
+    // Accept either an inline label or a reference to the row title.
     const labelId = attrs.get('aria-labelledby');
     if (labelId != null) assert.match(html, new RegExp(`\\bid="${labelId}"`), `missing label #${labelId}`);
     else assert.ok(attrs.get('aria-label'), `#${id} must carry a name`);
   }
 
-  // The resolution control is a button that opens a listbox, not a form field: its name
-  // is the row's "Resolution" label plus the value it currently shows.
+  // Name the resolution listbox trigger with its row label and current value.
   const trigger = html.match(/<button\b[^>]*id="now-qtrigger"[^>]*>/s)?.[0];
   assert.ok(trigger, 'missing #now-qtrigger');
   for (const labelId of attributes(trigger!).get('aria-labelledby')!.split(' ')) {
@@ -108,9 +103,7 @@ test('names every settings control, whatever kind of control it is', () => {
     assert.ok(labelId, `${name} must have aria-labelledby`);
     assert.match(html, new RegExp(`\\bid="${labelId}"`), `missing label #${labelId}`);
   }
-  // The three colour rows have no text of their own at all, so each group's name is the
-  // only one there is — and there are three, because "Solid", "Gradient" and "Panel
-  // tint" are not interchangeable and a single "Colour" name would say nothing.
+  // Give each text-free color group a distinct accessible name.
   for (const id of ['set-accent-solid', 'set-accent-gradient', 'set-tint']) {
     const group = html.match(new RegExp(`<div\\b[^>]*id="${id}"[^>]*>`))?.[0];
     assert.ok(group, `missing #${id}`);
@@ -119,7 +112,7 @@ test('names every settings control, whatever kind of control it is', () => {
     assert.match(html, new RegExp(`\\bid="${attrs.get('aria-labelledby')}"`), `missing label for ${id}`);
   }
 
-  // Auto/EN/ES is one control over two stored facts, and exactly one of the three is lit.
+  // Auto, English, and Spanish form one single-selection control.
   const langMatch = html.match(/<div\b[^>]*id="lang"[^>]*>([\s\S]*?)<\/div>/);
   assert.ok(langMatch, 'missing #lang');
   const langChoices = elementTags(langMatch[1]!, 'button');
@@ -140,8 +133,7 @@ test('keeps filter and settings values compatible with the runtime contracts', (
   const checkboxes = ['set-subfolder', 'set-direct', 'set-confirmclear', 'set-videosonly', 'set-keysenabled'];
   for (const id of checkboxes) assert.match(html, new RegExp(`<input\\b[^>]*id="${id}"[^>]*type="checkbox"`));
 
-  // Same claim as when these were <option value>s: what the markup offers has to be what
-  // normalizeSettings accepts, or a lit button writes a value the schema throws away.
+  // Markup options must match the values accepted by settings normalization.
   const segValues = (name: string): string[] => {
     const match = html.match(new RegExp(`<div\\b[^>]*data-seg="${name}"[^>]*>([\\s\\S]*?)<\\/div>`));
     assert.ok(match, `missing segmented control ${name}`);
@@ -152,10 +144,9 @@ test('keeps filter and settings values compatible with the runtime contracts', (
   assert.deepEqual(segValues('order'), ['newest', 'oldest']);
   assert.deepEqual(segValues('backdrop'), ['solid', 'frosted', 'glass']);
   assert.deepEqual(segValues('corners'), ['sharp', 'soft', 'round']);
-  // 480 was dropped when this became four buttons on one line; the four that remain are the
-  // steps worth a tap, and normalizeSettings still coerces anything else to the default.
+  // Offer only the four supported quality steps.
   assert.deepEqual(segValues('minres'), ['0', '360', '720', '1080']);
-  // Exactly one button pressed per group, so nothing opens claiming two values at once.
+  // Require exactly one pressed button per group.
   for (const name of ['quality', 'theme', 'order', 'cols', 'backdrop', 'corners', 'minres']) {
     const match = html.match(new RegExp(`<div\\b[^>]*data-seg="${name}"[^>]*>([\\s\\S]*?)<\\/div>`))![1]!;
     const pressed = [...match.matchAll(/aria-pressed="true"/g)];
@@ -163,11 +154,7 @@ test('keeps filter and settings values compatible with the runtime contracts', (
   }
 });
 
-// The diagnostics card used to be a switch, a disclosure, a counters box and two
-// buttons. It is one row now: the log records always, because having to turn it on and
-// reload Facebook meant the evidence was already gone by the time anyone did. What is
-// pinned is the consequence — one action on this screen, and no control that implies
-// the recording can be off.
+// Diagnostics record continuously and expose one export action without enable or reset controls.
 test('leaves the diagnostics card one action and no switch', () => {
   const card = html.match(/data-i18n="settingsDiagnostics"[\s\S]*?<\/div>/)?.[0];
   assert.ok(card, 'missing the diagnostics card');
@@ -177,9 +164,7 @@ test('leaves the diagnostics card one action and no switch', () => {
 });
 
 test('exposes an accessible bilingual theme preference control', () => {
-  // "Auto" needs its hint announced, not merely printed beside it: what automatic MEANS here
-  // (Facebook first, then the device) is not guessable from the word. That is the one thing
-  // this test is really holding, and it survived the control becoming a button group.
+  // Associate the Auto hint so assistive technology announces its precedence.
   const tag = html.match(/<div\b[^>]*data-seg="theme"[^>]*>/)?.[0];
   assert.ok(tag, 'missing the theme control');
   const attrs = attributes(tag);
@@ -209,11 +194,6 @@ test('localizes theme labels and the automatic-theme hint in English and Spanish
   assert.match(i18n, /themeDark:\s*'Oscuro'/);
 });
 
-// Dropped: a sixteen-regex mirror of sidepanel.ts's theme wiring, down to
-// `const revision = ++themeUpdateRevision`. resolveEffectiveTheme's precedence is
-// tested for real in theme.test.ts, and the stored side in
-// facebook-theme-storage.test.ts.
-
 test('exposes max saved items as a bounded-length digits-only text input', () => {
   const tag = html.match(/<input\b[^>]*id="set-maxitems"[^>]*>/)?.[0];
   assert.ok(tag, 'missing editable #set-maxitems input');
@@ -226,17 +206,7 @@ test('exposes max saved items as a bounded-length digits-only text input', () =>
   assert.equal(attrs.get('aria-labelledby'), 'label-set-maxitems');
 });
 
-// Five tests regex-matching the retention field's wiring in TS source used to sit here. They
-// asserted the shape of the code, not its behaviour, and outside the CSS/HTML/manifest/i18n
-// exception — a rename or an equivalent rewrite failed them, and a broken field could not.
-// What they were reaching for is already covered properly: sanitizeMaxItemsInput and
-// parseMaxItemsInput are pure and behaviour-tested in settings.test.ts, and the markup contract
-// (type, inputmode, pattern, maxlength, label) is asserted above, where the source IS the artifact.
-
-// This used to only assert that SOME inline 32x32 <svg> sat in the brand, which
-// is exactly how the header's private copy of the glyph drifted away from the
-// logo.svg the toolbar icons are built from — two different logos, both "valid".
-// The property worth pinning is single-sourcing, not the presence of a tag.
+// Require the shared logo asset so the header and generated icons cannot drift.
 test('the header brand mark and the icon generator read the exact same logo.svg — no duplicated glyph', () => {
   const brand = html.match(/<span\b[^>]*class="brand-logo"[^>]*>([\s\S]*?)<\/span>/);
   assert.ok(brand, 'missing .brand-logo');

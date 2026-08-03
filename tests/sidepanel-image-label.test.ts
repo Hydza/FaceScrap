@@ -92,8 +92,3 @@ test('image presentation uses Image/Imagen even when its contextual source is vi
     );
   }
 });
-
-// Dropped: a regex per call site proving the Library title and the two Now Playing
-// nodes all pass through this resolver. The resolver's own mapping is what the test
-// above evaluates, and the QA harness captures the rendered labels in both
-// languages.

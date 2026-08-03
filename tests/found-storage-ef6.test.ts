@@ -1,16 +1,5 @@
-// Regression check for the storage-lane code-review finding EF6: addMedia's
-// retention-cap eviction used to trim to EXACTLY maxItemsCache
-// (`merged.splice(0, merged.length - maxItemsCache)`), so once a tab sat AT
-// the cap, every later batch that added even a single new item satisfied
-// `merged.length > maxItemsCache` again and re-ran partitionMediaForRetention
-// (3 storage reads + an O(n) scan) from scratch.
-//
-// storage.ts now spends a small hysteresis margin BELOW the cap — but only
-// once `stored.length` (the durable count before the batch) was already at or
-// over the cap. A batch that crosses the cap for the FIRST time still trims to
-// exactly maxItemsCache, unchanged — this is what keeps unrelated exact-
-// boundary tests elsewhere (e.g. tests/now-playing.test.ts's single-shot
-// "1500 later captures" scenarios) passing without being touched.
+// Repeated writes at capacity trim below the limit to avoid a full retention scan per batch.
+// The first batch that crosses the limit still trims to the exact configured cap.
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
@@ -43,13 +32,11 @@ test('addMedia evicts a hysteresis margin below the cap once a tab is already at
 
   const tabId = 94_000;
 
-  // Fill to exactly the cap without ever exceeding it: 100 is not > 100, so no
-  // eviction runs here regardless of the fix.
+  // Filling exactly to the cap does not trigger eviction.
   await addMedia(tabId, Array.from({ length: 100 }, (_value, index) => image(index)));
   assert.equal((await getMedia(tabId)).length, 100);
 
-  // The tab is now AT the cap. One more item must trigger eviction — and the
-  // fix requires landing BELOW the cap instead of exactly at it.
+  // One more item at the cap must trigger eviction below the cap.
   await addMedia(tabId, [image(1_000)]);
   assert.equal(
     (await getMedia(tabId)).length,
@@ -86,10 +73,7 @@ test('addMedia still trims to exactly the cap the first time a batch crosses it'
 
   const tabId = 94_001;
 
-  // A single batch jumping straight from empty to over the cap is a FIRST
-  // crossing (stored.length was 0, well under the cap) — no hysteresis
-  // margin applies, matching the pre-fix exact-cap behaviour that
-  // tests/now-playing.test.ts's boundary tests rely on.
+  // A batch that crosses the cap from below trims to the cap without hysteresis.
   await addMedia(tabId, Array.from({ length: 105 }, (_value, index) => image(index)));
   assert.equal((await getMedia(tabId)).length, 100);
 });

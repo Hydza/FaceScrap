@@ -575,11 +575,7 @@ test('a failed pin quota recovery never deletes the sole protected capture', asy
 test('quota reclaim protects a row the panel shows as playing through a pre-canonicalization alias', async () => {
   const fullTab = nextTab++;
   const incomingTab = nextTab++;
-  // A generic redirector (safe_image.php) whose CURRENT canonical id embeds a
-  // resource hash, but which a previous FaceScrap build stored/observed under
-  // the bare path-only id (media.ts's historicalMediaIds/matchesActiveMediaId
-  // exist to reconcile exactly this). Oldest of the three so the generic
-  // "keep the newest row" reclaim fallback cannot accidentally save it too.
+  // Use a redirector with a path-only alias and make it the oldest retained row.
   const activeUrl =
     'https://external.xx.fbcdn.net/safe_image.php?' +
     'url=https%3A%2F%2Fexample.com%2Falt1-active.jpg&oh=rotating-signature&oe=1';
@@ -634,16 +630,14 @@ test('a wall-clock rollback does not wedge the Facebook theme behind a stale fut
   const realNow = Date.now;
   Date.now = () => now;
   try {
-    // The stored value is from a pre-rollback epoch (far ahead of a freshly
-    // read "now"), so the ordinary monotonic guard must not wedge behind it —
-    // this must ACK true and actually persist the repaired-clock observation.
+    // Accept and persist an observation after the clock rolls back.
     assert.equal(await setFacebookTheme(tabId, { theme: 'light', at: now }), true);
   } finally {
     Date.now = realNow;
   }
   assert.deepEqual(await getFacebookTheme(tabId), { theme: 'light', at: now });
 
-  // The guard resumes ordinary monotonic behaviour on the repaired epoch.
+  // Resume monotonic ordering in the repaired epoch.
   assert.equal(await setFacebookTheme(tabId, { theme: 'dark', at: now + 10 }), true);
   assert.deepEqual(await getFacebookTheme(tabId), { theme: 'dark', at: now + 10 });
 });

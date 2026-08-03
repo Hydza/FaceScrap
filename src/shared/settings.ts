@@ -264,13 +264,12 @@ type SettingsPatchWriter = (patch: SettingsPatch) => Promise<Settings>;
 /** The value a patch produces on top of `base`. Scalars replace; `keymap` merges per action, so a
  *  patch naming one binding leaves the other eight alone and two rebinds resolved from the same
  *  snapshot both survive. normalizeKeymap settles any collision between them. */
-export function applyPatch(base: Settings, patch: SettingsPatch): Settings {
+function applyPatch(base: Settings, patch: SettingsPatch): Settings {
   return normalizeSettings({ ...base, ...patch, keymap: { ...base.keymap, ...patch.keymap } });
 }
 
 /** Create one serialized read-modify-write lane. The service worker owns the
- * shared instance used by extension pages; direct writers are only a fallback
- * for tests or a temporarily unavailable/older worker. */
+ * shared instance; direct writers are a fallback when no compatible worker answers. */
 export function createSettingsPatchWriter(
   storage?: SettingsStorageArea,
 ): SettingsPatchWriter {
@@ -431,9 +430,8 @@ function missingMessageReceiver(error: unknown): boolean {
   return /receiving end does not exist/i.test(message);
 }
 
-/** Route normal extension-page writes through the worker-owned queue. A direct
- * local write remains available when no runtime exists (unit tests) or when an
- * older worker has no receiver, but content scripts never get that bypass. */
+/** Route extension-page writes through the worker-owned queue. A direct local write
+ *  remains available when no runtime or compatible receiver exists. */
 export async function saveSettings(patch: SettingsPatch): Promise<void> {
   const pendingPatch = { ...patch };
   const runtime = runtimeSettingsBroker();
@@ -458,12 +456,8 @@ export async function saveSettings(patch: SettingsPatch): Promise<void> {
     }
   }
 
-  // Deliberate tradeoff: this runs only when the worker queue is unreachable (a
-  // unit test, or an old worker around a reload), so two pages could race here
-  // unserialized. Accepted because chrome.storage has no cross-context lock — the
-  // worker queue IS the serializer — and dropping the fallback would break every
-  // legitimate no-worker write. A write that lands after the worker died still
-  // fails safe via applySetting's rollback.
+  // Without the worker queue, concurrent extension pages may race because
+  // chrome.storage has no cross-context lock. applySetting rolls back failed writes.
   await settingsPatchWriter(pendingPatch);
 }
 

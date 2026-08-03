@@ -1,23 +1,40 @@
 # Working on FaceScrap
 
+**English** · [Español](CONTRIBUTING.es.md)
+
 The invariants live in [ARCHITECTURE.md](ARCHITECTURE.md) — read that first. This file is only
 the mechanics: what to run, and the conventions the tree already follows.
 
 ## Commands
 
 ```bash
+npm run lint        # Biome over TS, JS, JSON, HTML, CSS and SVG
+npm run format      # apply the repository's Biome formatting rules
 npm run typecheck   # tsc --noEmit over src/ and tests/
 npm test            # bundles tests/*.test.ts with esbuild → node --test
-npm run check       # typecheck + test
+npm run policy      # authors, restricted references and comment quality
+npm run quality:code # dead code, duplication, cycles and dependency drift
+npm run check       # lint + typecheck + policy + fresh build + test
 npm run build       # icons + bundle → dist/
-npm run verify      # check + build + qa:sidepanel — the full gate
-npm run qa:sidepanel -- --lang en|es --theme light|dark|auto
+npm run package     # full check + deterministic release ZIP
+npm run verify      # check + one Chrome for Testing side-panel run
+npm run qa:matrix   # Chrome for Testing EN/ES in light/dark
+npm run qa:sidepanel -- --browser cft|edge|brave --lang en|es --theme light|dark|auto
 ```
 
-`qa:sidepanel` drives the real built extension over CDP. It launches Edge or Brave from an
-absolute Windows path (`scripts/sidepanel-visual-qa.mjs`), needs `dist/` already built, and writes
-its evidence to `artifacts/qa/`. It fails outside Windows or without one of those browsers
-installed; that is the environment, not a regression.
+## Code hygiene workflow
+
+1. Run `npm run quality:code` and trace each reported export, file or clone to its consumers.
+2. Delete unreachable code, consolidate clones that share one contract, and keep intentional
+   duplication only when its suppression states the current reason.
+3. Keep comments in concise English and describe only current constraints or intent. Delete
+   commented-out code and obsolete fix history.
+4. Run `npm run policy`, then `npm run check`. Both commands must pass before review.
+
+`qa:sidepanel` drives the real built extension over CDP. Its default `cft` target installs the
+version pinned in `.cft-version` through `@puppeteer/browsers` and caches it outside the repository.
+The optional Edge and Brave targets use their standard Windows paths. The command needs `dist/`
+already built and writes evidence to `artifacts/qa/<browser>/<language>/<theme>/`.
 
 It is also the only thing in this repo that exercises DOM-heavy behaviour, so a change to the
 side panel is not verified until it has run.
@@ -27,7 +44,7 @@ side panel is not verified until it has run.
 | Touched | Run |
 | --- | --- |
 | `src/shared/`, `src/background/` | `npm run check` |
-| `src/sidepanel/` (CSS, HTML, TS) | `npm run verify`, then look at `artifacts/qa/` |
+| `src/sidepanel/` (CSS, HTML, TS) | `npm run verify`, then inspect the matching directory under `artifacts/qa/` |
 | `src/content/`, `src/offscreen/` | `npm run check`, then load `dist/` unpacked at `chrome://extensions` — the capture path only exists in a real browser |
 | `manifest.json`, `src/_locales/` | `npm run check` (there are manifest and localization tests) |
 
@@ -57,6 +74,7 @@ side panel is not verified until it has run.
 
 ## Verifying the side panel by eye
 
-`artifacts/qa/` holds a screenshot per surface, per language, per theme, plus `evidence.json` with
-the measured geometry behind each check. Read the JSON, not only the exit code: a check that
-silently stopped asserting anything still reports a pass.
+Each configuration under `artifacts/qa/<browser>/<language>/<theme>/` holds its screenshots plus
+`evidence.json` with the measured geometry behind every check. `npm run qa:matrix` creates the
+primary language/theme matrix without overwriting one configuration with another. Read the JSON,
+not only the exit code: a check that silently stopped asserting anything still reports a pass.

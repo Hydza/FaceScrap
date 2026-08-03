@@ -603,11 +603,8 @@ function finishQualityPickerInteraction(): void {
   void render();
 }
 
-/** How long a render may be held off while the resolution list is open. The list is
- *  our own DOM, so "is it open" is simply whether it is hidden — no `:open` probe and
- *  no gesture fallback, both of which existed only because this used to be a native
- *  <select> that could close emitting nothing observable. The cap still stands: a
- *  panel left open on a busy tab must eventually repaint. */
+/** Hold rendering while the custom resolution list is open, with a hard cap so a
+ *  busy panel still repaints. */
 function qualityPickerRenderHoldMs(): number {
   return isResolutionPickerOpen() ? RENDER_HOLD_MAX_MS : 0;
 }
@@ -735,9 +732,7 @@ async function doRender(): Promise<void> {
 
   cardsById.clear();
   for (const c of cards) cardsById.set(c.id, c);
-  // Re-link pre-canonical Saved receipts to their current live cards. New
-  // receipts always use canonical ids; these aliases disappear with the
-  // browser session once the legacy ledger ages out.
+  // Re-link persisted pre-canonical Saved receipts to current live cards.
   for (const group of groups.values()) {
     const card = cardsById.get(videoCardId(videoGroupKey(group[0])));
     if (card == null) continue;
@@ -885,11 +880,8 @@ async function doRender(): Promise<void> {
     byId('grid-empty-body').textContent = saved ? t('savedEmptyBody') : t('libraryEmptyBody');
   }
 
-  // ponytail: full teardown/rebuild on every sig change, including a single card's
-  // busy bit flipping twice per download. Cheap at this list size, and no longer
-  // audible now that #list is not a live region (the count is). Upgrade path if it
-  // ever matters: paint state per tile in place, the way paintTray() already does for
-  // selection, and reconcile instead of replacing.
+  // Rebuild on every signature change. The list is silent, the count announces
+  // changes, and current list bounds keep the rebuild inexpensive.
   const list = byId('list');
   list.textContent = '';
   for (const c of gridCards) {
@@ -1336,11 +1328,8 @@ async function init(): Promise<void> {
     // and for a grid while a live ring is still lit; otherwise the grids are
     // storage-driven and ticking them would re-read the tab's keys for nothing.
     //
-    // 500ms for Now Playing because selectPlaying's shortest relay hold is 1.5s, and
-    // a slower tick stretched it past 2.5s of perceived handover — that is what made
-    // rapid story switching feel laggy. The grids paint nothing that decays faster
-    // than the ring, so every 4th tick (2s) is enough. An unchanged tick costs two
-    // storage reads and cheapSig, which then skips the rebuild AND the DOM work.
+    // Poll Now Playing every 500ms to observe its shortest 1.5s relay hold promptly.
+    // Grids have no faster decay, so every fourth tick is sufficient.
     let tickN = 0;
     window.setInterval(() => {
       tickN++;

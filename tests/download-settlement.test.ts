@@ -55,9 +55,7 @@ test('remains pending after enqueue and resolves only on matching complete', asy
 });
 
 test('stops waiting on a download the user paused instead of holding the worker awake', async () => {
-  // `paused` keeps a download in `in_progress` for as long as the user leaves it
-  // there, so this promise never settled: the caller's keepalive kept pinging, the
-  // MV3 worker never slept, and the panel card stayed busy until the panel closed.
+  // A paused download must settle instead of keeping the worker and panel busy.
   const fake = fakeDownloads([{ id: 21, state: 'in_progress' } as chrome.downloads.DownloadItem]);
   const pending = waitForDownloadSettlement(fake.api, 21, { stallMs: 60_000 });
   await Promise.resolve();
@@ -70,7 +68,7 @@ test('stops waiting on a download the user paused instead of holding the worker 
 test('gives up on a download that reports no new bytes for the stall window', async () => {
   const stuck = { id: 22, state: 'in_progress', bytesReceived: 4096 } as chrome.downloads.DownloadItem;
   const fake = fakeDownloads([stuck]);
-  // 750 ms window → the 250 ms poll floor, so three samples of an unchanged count.
+  // A 750 ms window yields three unchanged samples at the 250 ms poll floor.
   const pending = waitForDownloadSettlement(fake.api, 22, { stallMs: 750 });
   await assert.rejects(pending, /stopped making progress/i);
   assert.equal(fake.listeners.size, 0);
@@ -80,8 +78,7 @@ test('does not give up on a slow download that is still moving', async () => {
   const moving = { id: 23, state: 'in_progress', bytesReceived: 0 } as chrome.downloads.DownloadItem;
   const fake = fakeDownloads([moving]);
   const pending = waitForDownloadSettlement(fake.api, 23, { stallMs: 750 });
-  // Advance the byte count faster than the window closes, for longer than the
-  // window, then complete. A moving download must never be called stalled.
+  // Continued byte progress must prevent a stalled result.
   const ticking = setInterval(() => {
     moving.bytesReceived += 1024;
   }, 100);
@@ -119,11 +116,7 @@ test('a registration search that keeps failing settles with an error instead of 
       addListener: (listener) => listeners.add(listener),
       removeListener: (listener) => listeners.delete(listener),
     },
-    // Always rejects and no onChanged delta is ever emitted below — the exact
-    // shape of the race this backstop exists to close (terminal state reached
-    // before the listener attached, so no further delta is coming) combined
-    // with a backstop that cannot read it either. downloadDirect calls this
-    // with no timeoutMs, so only this module's own give-up path can recover it.
+    // Simulate a missing terminal event and an unreadable backstop state.
     async search() {
       throw new Error('downloads.search unavailable');
     },
@@ -148,9 +141,7 @@ test('a registration search that fails a few times still settles once it finds t
     },
     async cancel() {},
   };
-  // No onChanged emit at all: this only resolves if the retried search itself
-  // is read, proving a transient failure does not permanently poison the race
-  // check the way a single unretried failure did.
+  // Resolve through the retried search without emitting a change event.
   await waitForDownloadSettlement(api, 55);
   assert.ok(calls >= 3, `expected at least 3 search attempts, got ${calls}`);
   assert.equal(listeners.size, 0);
@@ -171,9 +162,7 @@ test('a timeout settles with the timeout reason even when cancel triggers an int
   const baseCancel = fake.api.cancel;
   fake.api.cancel = async (id) => {
     await baseCancel(id);
-    // Mirrors real Chromium: cancelling an in-progress download fires its own
-    // 'interrupted' onChanged delta while this settlement's cancel() await
-    // (triggered by the timeout below) is still in flight.
+    // Cancellation emits an interrupted event before the cancel promise settles.
     fake.emit({ id, state: { current: 'interrupted' }, error: { current: 'USER_CANCELED' } });
   };
   await assert.rejects(

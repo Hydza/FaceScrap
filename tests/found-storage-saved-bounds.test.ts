@@ -1,12 +1,4 @@
-// Regression check for the storage-lane "ALSO EXPORT" item: SAVED_THUMB_MAX,
-// SAVED_LABEL_MAX and the saved-id bound used to be module-private numbers in
-// storage.ts (1024 / 16 / 258) while service-worker.ts's inbound-receipt
-// validation hardcoded the same three literals with no compile-time link.
-// saved.ts now exports SAVED_ID_MAX/SAVED_THUMB_MAX/SAVED_LABEL_MAX and uses
-// them itself in sanitizeEntry, so this test locks the exported values to the
-// ACTUAL persisted truncation behaviour of addSaved/getSaved — if a future
-// edit ever let the exported constant and the real slice bound drift apart,
-// this fails.
+// Exported saved-entry bounds must match the truncation applied during persistence.
 import assert from 'node:assert/strict';
 import test from 'node:test';
 

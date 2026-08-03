@@ -48,7 +48,7 @@ chrome.runtime.onMessage.addListener((msg) => {
  * port; correctness timeouts live in the SW. It counts IDLE time, not elapsed — every
  * forwarded mux report restarts the clock — so a merge that legitimately runs for
  * minutes, or sits queued behind another, is never tagged failed while the worker is
- * still working. A fixed deadline did exactly that.
+ * still working.
  */
 async function startDashDownload(
   tid: number,

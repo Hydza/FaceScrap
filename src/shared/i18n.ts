@@ -3,7 +3,7 @@
 // The table and t()/fmt() are chrome-free, but loadLang/saveLang/resolveLang below use
 // chrome.storage.local — so this bundles into the panel and the ISOLATED-world content
 // script, NEVER the MAIN-world page hook or the offscreen document, neither of which has
-// chrome.storage. (The header used to claim the whole module was chrome-free.)
+// chrome.storage.
 
 export type Lang = 'en' | 'es';
 

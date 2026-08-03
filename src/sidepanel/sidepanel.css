@@ -1,6 +1,4 @@
-/* Bundled variable Manrope (400-800) — the panel's display face. It ships with
-   the extension because MV3's CSP forbids loading remote fonts, and the build
-   already copies src/sidepanel/fonts into dist. */
+/* Bundled Manrope variable font; MV3 CSP forbids remote fonts. */
 @font-face {
   font-family: "Manrope";
   font-style: normal;
@@ -10,22 +8,13 @@
 }
 
 /* ── Tokens ───────────────────────────────────────────────────────────────────
-   Twelve theme colours, four elevations, five radii. Everything the panel paints
-   resolves through one of them; a literal colour below this block is a bug.
-
-   The canvas, the two surfaces and the hairline are NOT set here — the panel tint
-   owns those four together (see :root[data-tint]), so a tinted canvas can never
-   end up under neutral cards. */
+   Panel colors, elevations and radii resolve through these tokens. Panel tint owns
+   the canvas, surfaces and hairline together (see :root[data-tint]). */
 :root {
   color-scheme: dark;
   --tx: #eef1f5;              /* primary text */
   --md: #9aa4b2;              /* secondary text, interactive chrome */
-  /* Faint STATIC labels. The design's value, verbatim.
-     MEASURED: 4.36:1 on graphite's card is the ONE pairing under AA's 4.5:1. Every other
-     tint clears it on both surfaces — 4.84:1 at worst on a canvas, 4.52:1 at worst on a
-     card (sand). Kept because the handoff states this hex and the ratio is a design
-     decision, not an oversight; the shortfall is recorded per pair in the contrast test's
-     RECORDED_SHORTFALLS, which is the single source for it. */
+  /* Static-label color. Graphite cards measure 4.36:1; all other surfaces meet AA. */
   --ft: #7c828a;
   --fld: #10141a;             /* field interiors */
   --off: #3a3f46;             /* toggle off track */
@@ -63,6 +52,7 @@
   --mono: "JetBrains Mono", ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
   --media-wash: linear-gradient(150deg, #1d4ed8, #0ea5e9 55%, #0b3b7a);
 }
+/* fallow-ignore-next-line code-duplication -- Explicit and system light themes share tokens. */
 :root[data-theme="light"] {
   color-scheme: light;
   --tx: #101318;
@@ -92,8 +82,7 @@
   --nav-wash: rgba(var(--acrgb), 0.1);
 }
 
-/* Before settings load, match the device so Auto/Light never flashes the dark
-   default. Once JS writes data-theme, the explicit preference wins this fallback. */
+/* Match the system theme until data-theme supplies an explicit preference. */
 @media (prefers-color-scheme: light) {
   :root:not([data-theme]) {
     color-scheme: light;
@@ -334,14 +323,7 @@ h2,
 h3,
 p { margin: 0; }
 
-/* One rule for every container that scrolls: the bar is never painted, on any
-   surface, so it can't compete with content or read differently from tab to tab.
-   Scrolling itself is untouched — this only styles pseudo-elements, never
-   `overflow`, so wheel/touch/keyboard still work. The standard scrollbar-width
-   lands in Chrome 121 and this extension supports 116+, so ::-webkit-scrollbar is
-   what does the real work across the supported range. Zeroing the width also drops
-   the ~10px of layout Chromium reserves for a classic scrollbar, so the grid's
-   right-hand column no longer narrows just because the list became scrollable. */
+/* Hide scrollbar chrome without disabling wheel, touch, or keyboard scrolling. */
 .grid,
 .now,
 .settings-body,
@@ -376,21 +358,8 @@ p { margin: 0; }
   background: var(--sf);
   border-bottom: 1px solid var(--ln);
 }
-/* The brand mark lives in ONE file: icons/logo.svg, which the icon generator also
-   reads to build the toolbar PNGs. The radius clips the img to the same corner the
-   SVG's own rx renders to at 26px, so the glow hugs the tile and not a square. */
-/* The mark follows the chosen accent WITHOUT losing its glyph.
- *
- * A mask was the obvious way and it is wrong: every pixel of the tile is opaque in
- * logo.svg, so masking leaves the silhouette and throws the camera and its sun away.
- * Blending keeps them. The accent gradient is painted underneath, and the <img> on
- * top contributes only its LUMINOSITY — so the tile's mid grey takes the accent's
- * hue, the white strokes stay white, and the sun stays the lightest thing in the
- * mark. `isolation: isolate` keeps the blend inside this box instead of reaching
- * the header behind it.
- *
- * logo.svg is still the ONE source: the icon generator rasterises it, the contract
- * test pins this <img> to it, and nothing here duplicates the glyph. */
+/* icons/logo.svg is the shared brand source. Blend its luminosity over the accent
+   gradient to preserve the camera and sun details; isolation contains the blend. */
 .brand-logo {
   flex: none;
   width: 26px;
@@ -1350,7 +1319,7 @@ p { margin: 0; }
   -webkit-mask: url("icons/check.svg") center / contain no-repeat;
   mask: url("icons/check.svg") center / contain no-repeat;
 }
-/* A file whose source post is no longer reachable. */
+/* The source post is unavailable. */
 .tile-badge.is-gone {
   background: rgba(0, 0, 0, 0.55);
   color: rgba(255, 255, 255, 0.9);
@@ -1840,7 +1809,7 @@ p { margin: 0; }
 /* Gated on has-bg: backdrop-filter forces a compositing layer per element it is set
    on, and with no custom image behind the cards there is nothing to blur. A panel
    without a background pays nothing.
-   ponytail: one layer per VISIBLE card when a background IS set, which Chrome culls
+   The cost is one layer per VISIBLE card when a background IS set, which Chrome culls
    for off-screen tiles. If a dense grid ever stutters, the upgrade is one blurred
    layer behind the whole grid — at the cost of blurring the gaps, which is where the
    image shows. */

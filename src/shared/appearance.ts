@@ -6,11 +6,8 @@
 // as part of the same product. Each entry therefore names a real surface of that palette
 // or an obvious neighbour of one.
 //
-// Every entry carries its OWN `onAccent`. That is not a detail: the accent is what the
-// primary button and the selection rings are filled with, so a light accent (the reaction
-// yellow, the signup green, the lime) needs dark text on it or the button drops below
-// WCAG AA. A single hardcoded white would have made several of these unreadable — see the
-// contrast test, which computes the ratio for every entry rather than trusting this comment.
+// Every accent carries its own `onAccent` color so light and dark fills maintain
+// WCAG AA contrast on buttons and selection rings.
 //
 // Each entry also carries the two READABLE-ON-CANVAS steps the accent itself cannot be:
 // `softDark` for the dark canvas and `softLight` for the light one. Those are what `--ach`
@@ -339,12 +336,8 @@ export const ACCENTS: readonly Accent[] = [
 
 export const DEFAULT_ACCENT: AccentId = 'brand';
 
-/** Falls back by NAME, not by position: `ACCENTS` is ordered for the swatch rows, so
- *  `ACCENTS[0]` is a layout decision, while settings.ts coerces an unknown stored id to
- *  DEFAULT_ACCENT. Reordering a row must not be able to make the two answers disagree.
- *  No production caller today — settings.ts coerces before anything reads this table —
- *  kept, with tintById, so accent-palette.test.ts can pin the table-side fallback to
- *  the same rule the settings coercion follows. */
+/** Fall back by id rather than array position so swatch reordering cannot change
+ *  the default accent. */
 export function accentById(id: string): Accent {
   return ACCENTS.find((accent) => accent.id === id) ?? ACCENTS.find((accent) => accent.id === DEFAULT_ACCENT)!;
 }

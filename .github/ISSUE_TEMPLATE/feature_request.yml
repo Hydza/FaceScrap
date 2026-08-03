@@ -1,0 +1,63 @@
+name: Feature request
+description: Propose a focused improvement for FaceScrap
+title: "[Feature]: "
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Explain the user need before the proposed interface. Requests must respect platform rules, content rights, and the extension's security boundaries.
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before submitting
+      options:
+        - label: I searched existing issues and the roadmap for this request.
+          required: true
+        - label: This request concerns content I am authorized to access and download.
+          required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: User need
+      description: What task is difficult or impossible today, and who encounters it?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed behavior
+      description: Describe the expected workflow and result.
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Capture and detection
+        - Now Playing
+        - Library or Saved
+        - Downloads
+        - Settings and appearance
+        - Accessibility
+        - Browser compatibility
+        - Development and documentation
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Describe current workarounds or simpler options.
+  - type: textarea
+    id: constraints
+    attributes:
+      label: Constraints and risks
+      description: Note privacy, permissions, compatibility, performance, or maintenance implications.
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional context or mockups
+      description: Attach only material you have the right to share and remove private information.

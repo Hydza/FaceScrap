@@ -4,7 +4,7 @@
 // The redaction cases are the ones worth reading first. Every URL in this log comes
 // from Facebook, and an fbcdn URL is signed — `oh` and `oe` are a capability, not an
 // id. The log exists to be exported and handed to someone, so a token surviving
-// redaction is not a cosmetic bug: it hands over a working link to media the user
+// redaction is a privacy risk: it hands over a working link to media the user
 // may not have meant to share. The bounds tests matter for a duller reason —
 // storage.local is shared with the settings and the language key.
 
@@ -147,9 +147,8 @@ test('keeps the newest events when the stored trace is over its count', () => {
 test('keeps the stored trace under its byte cap even when the count is legal', () => {
   // Exactly AT the count cap, with each event near the per-event ceiling: the count
   // bound alone would let all of them through and they would land on storage.local at
-  // well over a megabyte. The byte cap is the only thing standing between that and a
-  // value that is re-read and re-written on every append for the life of the install —
-  // which is what the log now does, permanently, rather than for one debugging session.
+  // well over a megabyte. The byte cap limits a value that is re-read and re-written
+  // on every append for the life of the install.
   const fat: DiagEvent[] = Array.from({ length: DIAG_LOG_MAX_EVENTS }, (_, i) => ({
     at: i,
     ctx: 'worker',
@@ -228,9 +227,8 @@ test('names an unknown throwable without letting it grow unbounded', () => {
 });
 
 test('the observer names its own ring when a burst outruns the pending bound', () => {
-  // Three rings bound this path, and a gap in the exported trace is only readable if
-  // it says which of them dropped the events. That `where` was the one thing the
-  // three hand-copied rings did NOT have in common.
+  // Three rings bound this path, so an exported gap must identify which ring
+  // dropped the events.
   const writes: DiagEvent[][] = [];
   const observer = createDiagObserver({
     write: async () => {},

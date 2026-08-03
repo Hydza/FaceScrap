@@ -1,17 +1,4 @@
-// Regression check for the storage-lane code-review finding C2: getMedia's
-// read-time id-migration repair used to write back through addMedia from
-// WHATEVER context called it. The side panel calls getMedia in its render
-// loop, and every mutex in storage.ts is an in-memory promise chain local to
-// ONE JS context — so a panel-issued write here has no lock against the
-// worker's own concurrent addMedia and can straddle it, silently dropping a
-// capture or resurrecting a tab the worker just cleared.
-//
-// storage.ts now gates the write on isServiceWorkerContext (`typeof document
-// === 'undefined'`): an MV3 service worker has no document; a side panel is a
-// normal HTML page and always has one. That constant is evaluated ONCE at
-// module load, so `document` must be stubbed before storage.ts is first
-// (dynamically) imported below — this file never imports it statically, so
-// this is the only module in the whole run that observes `document` defined.
+// Define document before importing storage to exercise a non-worker caller.
 import assert from 'node:assert/strict';
 import test, { beforeEach } from 'node:test';
 
@@ -40,12 +27,10 @@ test('getMedia repairs its return value but never persists the migration outside
   await chrome.storage.session.set({ [`media_${tabId}`]: [legacyRow] });
 
   const migrated = await getMedia(tabId);
-  // The caller still gets the repaired shape immediately...
+  // The caller receives the normalized shape immediately.
   assert.equal(migrated[0]?.id, mediaId(url));
 
-  // ...but with `document` defined (this module's stand-in for "not the
-  // worker"), nothing may write that repair back. Flush past the fire-and-
-  // forget addMedia() call the old code issued unconditionally.
+  // Let any queued work settle before verifying that storage stayed unchanged.
   await new Promise<void>((resolve) => setImmediate(resolve));
   assert.deepEqual((await chrome.storage.session.get(`media_${tabId}`))[`media_${tabId}`], [legacyRow]);
 });

@@ -13,24 +13,8 @@ export interface VideoCandidate {
   containsCentre: boolean;
 }
 
-/**
- * Remove the hit-tested cover that sat above a video we subsequently proved is already
- * playing. Facebook leaves blur-up/previous-card placeholders in the hit-test stack during
- * transitions; keeping that cover would mix two cards in one PlayingRef and teach the panel
- * a durable false association.
- *
- * `coverSharesCard` is what separates that placeholder from a cover this must NOT touch.
- * The viewer sets `pointer-events: none` on its `<video>`, so hit-testing the centre
- * returns the slide's own poster sitting behind it and never the video — which arrives
- * through the fallback scan with the same signature a real placeholder produces. Discarding
- * the poster there threw away the ONLY id that can name an MSE video, whose `blob:`
- * currentSrc never becomes one: the button then had nothing but streamed-track anchoring,
- * and stayed hidden on the surfaces it exists for while the panel showed the piece.
- *
- * A placeholder left over from another card lives in another card's subtree; the slide's own
- * poster is inside the same one. That containment is the discriminator, and it is the only
- * evidence available once the video is out of the hit-test stack.
- */
+/** Remove cover evidence from another card after a video is proven active. Preserve
+ *  same-card posters because they may be the only stable id for an MSE `blob:` video. */
 export function discardPlaceholderCoverEvidence(
   ids: Set<string>,
   covers: string[],
@@ -42,19 +26,8 @@ export function discardPlaceholderCoverEvidence(
   covers.length = 0;
 }
 
-/**
- * Do the playing video and the hit-tested cover belong to the same viewer card?
- *
- * The video's own parent has to hold the cover. Deliberately NOT a walk up the tree:
- * climbing even one extra level reaches an ancestor that contains every card on the page,
- * which answers "yes" for any placeholder at all and destroys the distinction. The viewer
- * stacks a slide's poster and its video as siblings in the card, so one level is where the
- * answer is; a layout that nests them further reports no shared card and falls back to
- * discarding, which is the behaviour this replaced — a missing button, not a wrong one.
- *
- * Kept here beside the decision it feeds rather than in the DOM code, so the rule is
- * testable without a browser.
- */
+/** Whether the video and cover share the video's direct parent. Do not walk higher:
+ *  broader ancestors can contain several cards and create false associations. */
 export function coverSharesVideoCard(
   video: { parentElement: unknown } | null | undefined,
   cover: unknown,
@@ -68,16 +41,8 @@ export function coverSharesVideoCard(
 /** Must be substantially on screen to count at all. */
 const MIN_VISIBLE_PX = 100;
 
-/** Index of the video being watched, or undefined if none qualifies.
- *
- *  `gotCover` means the hit-test at the centre found a large fbcdn cover. That
- *  used to skip this fallback entirely, on the theory that a cover means a photo
- *  slide and any video under it is the previous slide buried beneath. True for a
- *  PAUSED video — the viewer keeps old slides stacked and pauses them. Not true
- *  for a playing one: a residual blur-up placeholder still fading out over a reel
- *  that has already started leaves the same hit-test signature, and suppressing
- *  the fallback there adopted no video at all while one played in plain sight.
- *  So the cover only excludes paused candidates.
+/** Index of the video being watched, or undefined if none qualifies. A large
+ *  hit-tested cover excludes paused candidates but not an actively playing video.
  *
  *  Ranking: playing beats paused, then holding the centre, then visible area.
  *  Area maxes around ~2e6 px², so the boosts always dominate it — the centre

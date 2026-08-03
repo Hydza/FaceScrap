@@ -1,12 +1,4 @@
-// Retention must protect exactly what the panel paints as playing.
-//
-// Three matchers pair with media.ts's matchesActiveMediaId, and they had drifted:
-// the panel's selection (now-playing.ts's domMatchFresh) and the in-page button's
-// pure read (video-options.ts's playingItems) re-canonicalized the ids a PlayingRef
-// carries before matching; the retention classifier (storage.ts's isExactPlayingItem)
-// did not. A ref left in chrome.storage.session by a build that used the short-lived
-// full-query `asset:` scheme therefore selected a row in the panel that
-// partitionMediaForRetention treated as ordinary — evictable while it was on screen.
+// Retention, panel selection, and in-page controls must match active media identically.
 
 import assert from 'node:assert/strict';
 import test from 'node:test';
@@ -15,13 +7,11 @@ import { resetChromeStorage } from './chrome-fake';
 import { mediaId, type MediaItem } from '../src/shared/media';
 import { saveSettings } from '../src/shared/settings';
 
-// A generic redirector: the only id shape canonicalizeHistoricalMediaId can rewrite,
-// because the current canonical form hashes the resource the proxy wraps instead of
-// keeping the rotating oh/oe signature.
+// Use a redirector identity whose canonical form ignores rotating signatures.
 const WATCHED_URL =
   'https://external.xx.fbcdn.net/safe_image.php?' +
   'url=https%3A%2F%2Fexample.com%2Fwatched.jpg&oh=rotating-signature&oe=1';
-// The same photo as an older build spelled it: whole sorted query, no resource hash.
+// Represent the same photo with its query-based alias.
 const PRE_CANONICAL_REF_ID =
   'asset:/safe_image.php?oe=1&oh=rotating-signature&' +
   'url=https%3A%2F%2Fexample.com%2Fwatched.jpg';
@@ -41,8 +31,7 @@ test('a pre-canonicalization PlayingRef id protects its row from the maxItems ca
   await resetChromeStorage();
   await saveSettings({ maxItems: 3 });
 
-  // Imported AFTER the settings write, like max-items-retention.test.ts: storage.ts
-  // reads the cap once at module evaluation.
+  // Import storage after writing the cap because the module reads it once.
   const { addMedia, getMedia, setPlaying } = await import('../src/shared/storage');
   const { purgeTabBindings, selectPlaying } = await import('../src/shared/now-playing');
   await new Promise<void>((resolve) => setImmediate(resolve));
@@ -61,15 +50,14 @@ test('a pre-canonicalization PlayingRef id protects its row from the maxItems ca
     await addMedia(tabId, [watched]);
     await setPlaying(tabId, { ids: [PRE_CANONICAL_REF_ID], hasVideo: false, at: 1_800_000_000_100 });
 
-    // The panel paints it: the stored id is re-canonicalized before matching.
+    // The panel canonicalizes the stored ID before matching.
     assert.deepEqual(
       (await selectPlaying(tabId, await getMedia(tabId))).map((item) => item.url),
       [WATCHED_URL],
       'the selection matcher must still resolve the older id spelling',
     );
 
-    // Five newer captures against a cap of three. The FIFO cut may only run through
-    // ordinary rows, so it has to take fillers and leave the photo on screen.
+    // Evict ordinary rows while retaining the active photo at the cap.
     await addMedia(tabId, [filler(1), filler(2), filler(3), filler(4), filler(5)]);
     const kept = (await getMedia(tabId)).map((item) => item.url);
     assert.equal(kept.length, 3);

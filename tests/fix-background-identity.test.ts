@@ -4,8 +4,8 @@ import test from 'node:test';
 import { resetChromeStorage } from './chrome-fake';
 
 // service-worker.ts registers every listener as a side effect of module
-// evaluation (it has no exports), so exercising a fix inside it means booting
-// a wider slice of chrome.* than the storage-only fake most suites need.
+// evaluation, so testing its identity handling requires a broader chrome.*
+// surface than the storage-only fake most suites need.
 // chrome.storage/onChanged stay chrome-fake's real in-memory implementation;
 // everything added below is a capture-only stub — each addListener just
 // remembers the callback (or discards it, for listeners these tests never

@@ -1,13 +1,4 @@
-// The side panel's source, as one string.
-//
-// Several tests assert that the panel does something — reads a setting through the
-// shared helper, wires a listener, localises a label — by pattern-matching its
-// source. They each used to read src/sidepanel/sidepanel.ts directly, which tied
-// them to that one file: moving a function into a sibling module broke the test
-// without changing any behaviour, and the failure looked like a regression.
-//
-// Reading the whole directory keeps the assertion where it belongs ("the panel does
-// X") and lets the panel be split into modules without touching them.
+// Concatenate all side-panel TypeScript so source-contract tests ignore module boundaries.
 
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';

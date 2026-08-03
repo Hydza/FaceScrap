@@ -1,0 +1,34 @@
+{
+  "$schema": "https://raw.githubusercontent.com/fallow-rs/fallow/main/schema.json",
+  "entry": [
+    "src/background/service-worker.ts",
+    "src/content/content.ts",
+    "src/content/content-recovery.ts",
+    "src/content/page-hook.ts",
+    "src/offscreen/offscreen.ts",
+    "src/sidepanel/sidepanel.css",
+    "src/sidepanel/sidepanel.ts",
+    "tests/*.test.ts"
+  ],
+  "ignorePatterns": ["artifacts/**", "dist/**", "node_modules/**", "**/*.zip"],
+  // Browser QA runs only from development scripts.
+  "ignoreDependencies": ["@puppeteer/browsers"],
+  "duplicates": {
+    "mode": "mild",
+    "minTokens": 50,
+    "minOccurrences": 2,
+    "threshold": 0.01
+  },
+  "rules": {
+    "circular-dependencies": "error",
+    "duplicate-exports": "error",
+    "stale-suppressions": "error",
+    "unlisted-dependencies": "error",
+    "unresolved-imports": "error",
+    "unused-dependencies": "error",
+    "unused-dev-dependencies": "error",
+    "unused-exports": "error",
+    "unused-files": "error",
+    "unused-types": "error"
+  }
+}

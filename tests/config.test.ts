@@ -9,9 +9,7 @@ import { ATTEMPTS, RETRY_DELAY_MS, STALL_MS, WORST_CASE_SILENCE_MS } from '../sr
 import { getSaved, SAVED_ID_MAX, SAVED_LABEL_MAX, SAVED_THUMB_MAX } from '../src/shared/saved';
 import { resetChromeStorage } from './chrome-fake';
 
-// The suite runs with cwd = repo root (scripts/test.mjs). import.meta.url can't
-// be used: esbuild bundles the tests into a temp dir, so it no longer resolves
-// to the repo.
+// Test bundles run from a temporary directory with the repository as their working directory.
 const readJson = (rel: string): unknown => JSON.parse(readFileSync(join(process.cwd(), rel), 'utf8'));
 const readSrc = (rel: string): string => readFileSync(join(process.cwd(), rel), 'utf8');
 
@@ -19,9 +17,7 @@ test('package.json declares the Node engine the toolchain actually targets', () 
   const pkg = readJson('package.json') as { engines?: { node?: string } };
   const floor = /^>=(\d+)/.exec(pkg.engines?.node ?? '');
   assert.ok(floor, 'a from-source builder on old Node gets no guidance without a ">=N" engines field');
-  // A truthy check passed while the field said >=18 next to `target: 'node20'`.
-  // The bundles are down-levelled to exactly one Node; a floor below it promises
-  // support for a runtime nothing was ever compiled for.
+  // Keep the declared runtime floor aligned with the bundle target.
   const target = /target: 'node(\d+)'/.exec(readSrc('scripts/test.mjs'));
   assert.ok(target, 'scripts/test.mjs must keep declaring its esbuild Node target');
   assert.equal(Number(floor[1]), Number(target[1]), 'engines.node and the esbuild target must name the same Node');
@@ -30,26 +26,18 @@ test('package.json declares the Node engine the toolchain actually targets', () 
 test('the manifest and package.json ship one version', () => {
   const pkg = readJson('package.json') as { version?: string };
   const manifest = readJson('manifest.json') as { version?: string };
-  // The release zip is named from the manifest and the repo is tagged from
-  // package.json. Two numbers here is a release nobody can identify afterwards.
+  // Package metadata and extension metadata must identify the same release.
   assert.match(String(pkg.version), /^\d+\.\d+\.\d+$/);
   assert.equal(manifest.version, pkg.version);
 });
 
 test('DASH_UI_HARD_CAP_MS is derived strictly above one full worker job worst case', () => {
-  // messages.ts derives this panel-side ceiling from MUX_HARD_CAP_MS +
-  // SETTLE_CAP_MS rather than a bare literal precisely so it cannot silently
-  // regress to equalling (or falling below) the worker's own worst case —
-  // which would let the panel time out at or before the worker is still
-  // entitled to keep working on the very same job.
+  // The panel must outwait the worker's complete mux and settlement budget.
   assert.ok(DASH_UI_HARD_CAP_MS > MUX_HARD_CAP_MS + SETTLE_CAP_MS);
 });
 
 test('the mux idle window is derived above track-fetch\'s full retry-ladder worst case', () => {
-  // Nothing beats during a stall, a backoff or a hanging reconnect, so a mux cut off
-  // INSIDE the ladder kills a track that was about to report its own specific error.
-  // The worker imports WORST_CASE_SILENCE_MS and adds a margin, so it cannot drift
-  // below the ladder by construction; this pins the arithmetic and today's numbers.
+  // The mux idle window must cover the complete retry ladder plus its margin.
   assert.equal(
     WORST_CASE_SILENCE_MS,
     STALL_MS * ATTEMPTS + (RETRY_DELAY_MS * (ATTEMPTS * (ATTEMPTS - 1))) / 2,
@@ -62,19 +50,7 @@ test('the mux idle window is derived above track-fetch\'s full retry-ladder wors
   );
 });
 
-// C7 regression: a Saved-receipt write failure AFTER an already-successful
-// download must be reported as ok:true, never a failed download — otherwise
-// the panel tags an already-saved file Failed, and clicking Retry lands
-// inside the dedup window and silently no-ops, hiding that the file was
-// already written the first time.
-//
-// service-worker.ts has no exports (it registers every listener as a side
-// effect of module evaluation — see tests/fix-background-identity.test.ts's
-// own comment), so exercising this needs a minimal chrome.* fake sufficient
-// to import it cleanly and capture its onMessage listener. Kept as its own
-// small fake rather than sharing one across test files: chrome.storage comes
-// from chrome-fake.ts's real in-memory implementation; everything else below
-// is a capture-only stub.
+// Capture the worker's message listener with a minimal runtime stub.
 type Sender = chrome.runtime.MessageSender;
 type SendResponse = (response?: unknown) => void;
 type OnMessageListener = (message: unknown, sender: Sender, sendResponse: SendResponse) => boolean | undefined;
@@ -107,9 +83,7 @@ function installDownloadChromeFake(): void {
     onCommitted: { addListener() {} },
     onErrorOccurred: { addListener() {} },
   };
-  // Resolves every download 'complete' immediately: the download itself must
-  // succeed so only the Saved-receipt write (below, per-test) is the failure
-  // under test.
+  // Complete each download immediately so tests can isolate receipt failures.
   c.downloads = {
     download: async () => nextDownloadId++,
     onChanged: { addListener() {}, removeListener() {} },
@@ -129,10 +103,7 @@ function installDownloadChromeFake(): void {
     },
     sendMessage: async () => undefined,
     getPlatformInfo: async () => ({}),
-    // Only present so hasOffscreen() feature-detects true and the
-    // FACESCRAP_DOWNLOAD_DASH handler does not reject before reaching
-    // downloadDash — the E4 test below never lets execution reach a real
-    // createDocument/mux call (see that test's comment).
+    // Expose offscreen support without starting a mux operation.
     getContexts: async () => [],
     ContextType: { OFFSCREEN_DOCUMENT: 'OFFSCREEN_DOCUMENT' },
   };
@@ -141,8 +112,7 @@ function installDownloadChromeFake(): void {
 
 await resetChromeStorage();
 installDownloadChromeFake();
-// No exports to bind — importing it only for the chrome.* listener it
-// registers as a side effect, captured by the fake installed just above.
+// Import the worker to register its message listener.
 await import('../src/background/service-worker');
 
 test('C7: a Saved-receipt write failure after a successful download reports ok:true, not a failed download', async () => {
@@ -150,10 +120,7 @@ test('C7: a Saved-receipt write failure after a successful download reports ok:t
   const tabId = 900_001;
   const receipt = { id: 'v:c7-test', kind: 'video', source: 'reel', savedAt: 0 };
 
-  // Every OTHER storage.session write (including the download's own control-
-  // headroom bookkeeping) still uses chrome-fake.ts's real in-memory
-  // implementation; only the Saved-ledger write inside addSaved is made to
-  // fail, and only for the duration of this test.
+  // Fail only the receipt write while preserving all other storage behavior.
   const originalSet = chrome.storage.session.set;
   (chrome.storage.session as unknown as { set: unknown }).set = async () => {
     throw new Error('simulated storage.session failure');
@@ -189,14 +156,7 @@ test('E4: a dash download completed before a simulated worker restart is not re-
     filename: 'clip.mp4',
     saveAs: false,
   };
-  // Seeds the durable mirror exactly as recordDashCompletionAcrossRestart
-  // would after a genuine completion — done directly rather than through a
-  // real download so this test need not fake a working offscreen mux
-  // round-trip. This IS the point: if downloadDash's durable check did not
-  // short-circuit before dashChain/ensureOffscreen, execution would reach
-  // this fake's incomplete FACESCRAP_MUX handling (sendMessage resolves
-  // undefined, so runDownloadDash throws "Could not merge audio and video."),
-  // and the assertion below would see ok:false instead.
+  // Seed a durable completion so the request must bypass the mux path.
   await chrome.storage.session.set({
     dash_dedup_completed_v1: { [dashDownloadKey(identity)]: Date.now() - 1_000 },
   });
@@ -218,17 +178,11 @@ test('E4: a dash download completed before a simulated worker restart is not re-
     );
     assert.equal(handled, true);
   });
-  // Success, but flagged: nothing was downloaded and no Saved receipt was
-  // rewritten. A bare `{ ok: true }` here is what let a second Download on a card
-  // whose file the user had deleted answer "saved" for half an hour.
+  // Report the successful deduplication without writing another receipt.
   assert.deepEqual(response, { ok: true, deduped: true });
 });
 
-// C1 regression, the in-page twin of E4: the button (and the global shortcut, which
-// runs the same handler with the active tab as its sender) shares downloadDash with
-// the panel. It used to discard that answer and write the Saved receipt anyway, so a
-// second press on a file the user had deleted reported it saved without moving a byte
-// — the exact regression E4 pins on the panel's own path.
+// A deduplicated in-page download must not create another saved receipt.
 test('C1: a deduped in-page download writes no Saved receipt', async () => {
   assert.ok(onMessage, 'runtime.onMessage listener was not registered');
   const { addMedia, getMedia, setPlaying } = await import('../src/shared/storage');
@@ -244,10 +198,7 @@ test('C1: a deduped in-page download writes no Saved receipt', async () => {
   await addMedia(tabId, [seed]);
   await setPlaying(tabId, { ids: [seed.id], hasVideo: true, at: now }, now);
 
-  // Keyed off the STORED item and the real settings — the same inputs the handler
-  // resolves its request from. A key that missed would let execution reach the mux
-  // round trip this fake cannot serve, so getting it wrong fails the test rather
-  // than passing it vacuously.
+  // Build the completion key from the same stored item and settings as the handler.
   const [stored] = await getMedia(tabId);
   assert.ok(stored, 'the seeded representation must read back');
   const settings = await loadSettings();
@@ -273,14 +224,12 @@ test('C1: a deduped in-page download writes no Saved receipt', async () => {
     assert.equal(handled, true);
   });
 
-  // deduped:true is the proof the collapse happened rather than some earlier refusal.
+  // The flag confirms that the request reached the deduplication path.
   assert.deepEqual(answer, { ok: true, deduped: true });
   assert.deepEqual(await getSaved(tabId), [], 'a call that wrote no file must write no receipt');
 });
 
-// The worker validates an inbound receipt against saved.ts's own bounds instead of
-// re-spelling the numbers. Asserted through the real message path, so a re-hardcoded
-// literal that disagrees with the exported bound cannot satisfy it.
+// Validate inbound receipts through the worker against the shared storage limits.
 test('an inbound receipt is bounded by saved.ts\'s limits, not by re-spelled literals', async () => {
   assert.ok(onMessage, 'runtime.onMessage listener was not registered');
   const tabId = 900_003;
@@ -301,14 +250,13 @@ test('an inbound receipt is bounded by saved.ts\'s limits, not by re-spelled lit
     });
   const base = { kind: 'video', source: 'reel', savedAt: 0 };
 
-  // One char past the bound is refused outright: a TRUNCATED receipt id could never
-  // re-link to its live card, so accepting it would be worse than rejecting it.
+  // Reject IDs above the bound because truncation would break card identity.
   assert.deepEqual(await sendReceipt({ ...base, id: `v:${'a'.repeat(SAVED_ID_MAX - 1)}` }), {
     ok: false,
     error: 'Invalid download request.',
   });
 
-  // Exactly at the bound it lands, and the display fields are clamped on the way in.
+  // Accept an ID at the bound and clamp optional display fields.
   const id = `v:${'a'.repeat(SAVED_ID_MAX - 2)}`;
   assert.deepEqual(
     await sendReceipt({

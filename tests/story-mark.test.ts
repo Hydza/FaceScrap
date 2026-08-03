@@ -10,10 +10,7 @@ import {
   storyCardMark,
 } from '../src/shared/story-mark';
 
-// A profile highlight opens at /stories/<set>/ with the card only in the query —
-// one path segment, not two. Requiring two meant this surface produced no mark at
-// all, so Now Playing had nothing to anchor a highlight on and stayed empty while
-// the Library filled with the very same captures.
+// A profile highlight identifies its card in the query instead of a second path segment.
 const HIGHLIGHT_PATH = '/stories/976731645401448/';
 const CARD_DOM_ID = 'UzM6NTU1NTU1NTU1NTU1NTU1';
 
@@ -25,15 +22,13 @@ test('a profile highlight path is a story path, with or without a trailing card 
 });
 
 test('a highlight card still earns a durable mark from its DOM id', () => {
-  // The DOM id is what makes a mark durable; the URL's second segment is only the
-  // fallback. A highlight has no second segment, so before this it got neither.
+  // Prefer the durable DOM ID when the URL has no card segment.
   assert.equal(storyCardMark(HIGHLIGHT_PATH, CARD_DOM_ID), `u:976731645401448/${CARD_DOM_ID}`);
   assert.equal(isDurableStoryMark(storyCardMark(HIGHLIGHT_PATH, CARD_DOM_ID)), true);
 });
 
 test('a highlight with no DOM id yields no mark rather than one every slide shares', () => {
-  // `p:976731645401448/undefined` would give every slide of the highlight the same
-  // provisional identity — worse than none, because it compares equal across cards.
+  // Reject incomplete provisional identities that would collapse multiple cards.
   assert.equal(storyCardMark(HIGHLIGHT_PATH), '');
 });
 

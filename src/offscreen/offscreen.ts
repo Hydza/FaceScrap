@@ -16,19 +16,9 @@ import { MUX_PORT, MUX_PROGRESS_MS, type MuxProgress, type MuxResponse, type Run
 import { remux } from '../shared/mp4-remux';
 import { fetchDashTracks, MAX_DASH_OUTPUT_BYTES } from '../shared/track-fetch';
 
-// Diagnostics (see shared/diag-log.ts). This document is where an HD download
-// actually happens — the two track fetches and the remux — so a failure here is
-// the one the user reports as "saving does nothing".
-//
-// AN OFFSCREEN DOCUMENT HAS chrome.runtime AND ESSENTIALLY NOTHING ELSE.
-// `chrome.storage` is undefined here (measured on Edge 150; see
-// tests/fix-offscreen-apis.test.ts). It cannot persist what it records, so it does not
-// try: this document hands its trace back in the mux answer instead.
-//
-// This is not a style preference. Touching chrome.storage at module scope here
-// throws while this script is still evaluating, which means the mux listener at the
-// bottom of this file never registers — and every HD download then fails instantly
-// with a generic error, because the worker's message reaches no receiver.
+// Offscreen documents expose chrome.runtime but not chrome.storage. Return each
+// job's diagnostics with its mux response so module evaluation and listener
+// registration never depend on storage access.
 setDiagContext('offscreen');
 /** Opens a progress port to the worker for ONE job. Jobs are serialized on both
  *  sides (muxQueue here, dashChain there), so at most one is ever open. */
@@ -125,10 +115,8 @@ function revokeBlob(url: string): void {
   URL.revokeObjectURL(url);
 }
 
-// The remuxer is stateless, so this is no longer a correctness requirement the way
-// it was with ffmpeg's single instance and fixed FS filenames. It stays because it
-// bounds memory: two concurrent jobs mean two pairs of fully-fetched tracks held at
-// once, and the worker's own dashChain already expects one job at a time.
+// Serialize jobs to cap memory at one fetched track pair and match the worker's
+// single-job dashChain contract.
 const muxQueue = createChainLock();
 function enqueueMux(videoUrl: string, audioUrl: string): Promise<string> {
   // The port opens when the job STARTS, not when it is queued: the worker times
@@ -157,9 +145,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (sender.tab) return undefined;
   const m = msg as RuntimeMessage | undefined;
   if (m?.type === 'FACESCRAP_MUX') {
-    // A job's events leave with its answer, so anything still in the ring belongs to a
-    // job whose answer never landed. Dropped rather than attributed to this one — which
-    // is what setting the flag used to do here, as a side effect of clearing.
+    // Drop undelivered events from an incomplete job before recording this one.
     diagLogDrain();
     (async () => {
       try {

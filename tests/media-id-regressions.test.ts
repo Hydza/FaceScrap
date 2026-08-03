@@ -96,8 +96,7 @@ test('generic video endpoints keep representations of the same asset distinct', 
 });
 
 test('non-/v/ audio and video extensions stay stable across rotating signatures', () => {
-  // mediaKindFromUrl already recognizes these kinds; mediaId must agree and key
-  // them by their unique filename instead of fragmenting on oh/oe rotation.
+  // Media kind and identity must agree and ignore rotating signatures.
   for (const ext of ['aac', 'mp3', 'ogg', 'opus', 'wav', 'mov', 'm4v']) {
     assert.equal(
       mediaId(`https://cdn.xx.fbcdn.net/o1/clip.${ext}?oh=sig-a&oe=1`),
@@ -105,7 +104,7 @@ test('non-/v/ audio and video extensions stay stable across rotating signatures'
       `${ext} identity must ignore rotating signatures`,
     );
   }
-  // Distinct filenames behind the same endpoint must never collapse together.
+  // Keep distinct filenames behind one endpoint separate.
   assert.notEqual(
     mediaId('https://cdn.xx.fbcdn.net/o1/clip.aac?oh=x&oe=1'),
     mediaId('https://cdn.xx.fbcdn.net/o1/other.aac?oh=y&oe=2'),
@@ -119,13 +118,12 @@ test('safe-image proxies canonicalize a nested generic video redirector', () => 
   const proxy = (inner: string, outerSignature: string): string =>
     `https://external.xx.fbcdn.net/safe_image.php?url=${encodeURIComponent(inner)}&oh=${outerSignature}`;
 
-  // Both the outer proxy signature and the nested redirector signature rotate;
-  // identity must come from the nested asset, not the raw signed nested string.
+  // Derive identity from the nested asset instead of rotating proxy signatures.
   assert.equal(
     mediaId(proxy(nested('nested-a'), 'outer-a')),
     mediaId(proxy(nested('nested-b'), 'outer-b')),
   );
-  // A genuinely different nested asset stays distinct.
+  // Keep different nested assets distinct.
   const otherAsset = efg({ xpv_asset_id: '99999999999999999' });
   assert.notEqual(
     mediaId(proxy(nested('nested-a'), 'outer-a')),
@@ -134,14 +132,11 @@ test('safe-image proxies canonicalize a nested generic video redirector', () => 
 });
 
 test('historicalMediaIds emits only asset-scheme aliases that round-trip through canonicalize', () => {
-  // A tagged simple video is keyed video-*, never a path-only asset id, so it
-  // must not produce a misleading historical alias that canonicalize would
-  // round-trip to a different identity.
+  // A tagged video must not emit an alias that canonicalizes to another identity.
   const taggedVideo = 'https://video.xx.fbcdn.net/v/t42/abc123.mp4?tag=hd_720p&oh=1&oe=2';
   assert.deepEqual(historicalMediaIds(taggedVideo), []);
 
-  // Whatever alias a generic endpoint does emit must canonicalize back to an
-  // asset id — never diverge into a video-*/invalid shape.
+  // Generic endpoint aliases must canonicalize to an asset identity.
   const generic =
     'https://external.xx.fbcdn.net/safe_image.php?url=https%3A%2F%2Fexample.com%2Fx.jpg&oh=a&oe=1';
   const aliases = historicalMediaIds(generic);

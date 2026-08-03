@@ -1,6 +1,5 @@
-// Guards the size budget: ~806 KB unpacked, all of it built from src/. It was 32.7 MB
-// while it carried an ffmpeg core to run one merge, so the rule is one vendored binary
-// away from breaking. The remuxer's own correctness lives in fix-mp4-remux.test.ts.
+// Keep the unpacked extension within budget and reject vendored runtime binaries.
+// Remuxer correctness is covered by dedicated remuxer tests.
 
 import assert from 'node:assert/strict';
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
@@ -22,9 +21,7 @@ test('ships no runtime dependency at all', () => {
 });
 
 const DIST = join(ROOT, 'dist');
-// Headroom over today's ~806 KB, and still thirty times under the 32.7 MB the
-// ffmpeg era cost. A tripwire for a vendored binary coming back, not a
-// byte-level ratchet every esbuild bump has to renegotiate.
+// Leave room for build-tool variance while catching large vendored binaries.
 const MAX_UNPACKED_BYTES = 1_048_576;
 
 function unpackedBytes(dir: string): number {
@@ -61,17 +58,15 @@ test('no ffmpeg or wasm remains in the extension, its build or its docs', () => 
     'docs/flow.es.svg',
   ]) {
     const source = read(...file.split('/'));
-    // Comments in offscreen.ts and mp4-remux.ts still explain what was replaced and
-    // why, and both READMEs say outright that there is no bundled ffmpeg — those are
-    // the only places the name may appear. The two diagrams are on this list because
-    // they went on describing a merge this extension stopped doing.
+    // Check runtime configuration and architecture diagrams; source notes
+    // and READMEs may mention ffmpeg for context.
     assert.doesNotMatch(source, /ffmpeg/i, `${file} still names ffmpeg`);
   }
   // Nothing is loaded into the offscreen page but our own bundle.
   const html = read('src', 'offscreen', 'offscreen.html');
   const scripts = [...html.matchAll(/<script[^>]*src="([^"]+)"/g)].map((m) => m[1]);
   assert.deepEqual(scripts, ['offscreen.js']);
-  // And with no wasm, the CSP no longer needs to allow compiling any.
+  // The CSP must not enable WebAssembly compilation.
   const manifest = JSON.parse(read('manifest.json')) as {
     content_security_policy?: { extension_pages?: string };
   };
@@ -81,24 +76,15 @@ test('no ffmpeg or wasm remains in the extension, its build or its docs', () => 
 });
 
 test('keeps the output-size limit on the merge', () => {
-  // Two import/call-site mirrors were dropped from here: the remuxer's own suite
-  // proves it works, and "offscreen.ts calls it" is not something a regex should be
-  // asserting. This limit is different — it is the only guard against publishing a
-  // blob URL for something larger than the two tracks that went in.
+  // Reject output larger than the combined inputs before publishing its blob URL.
   assert.match(read('src', 'offscreen', 'offscreen.ts'), /merged\.blob\.size > MAX_DASH_OUTPUT_BYTES/);
 });
 
 test('the remuxer never reads sample bytes into memory', () => {
   const remuxer = read('src', 'shared', 'mp4-remux.ts');
-  // The whole memory argument for dropping ffmpeg rests on this: the output is
-  // Blob slices of the inputs. An arrayBuffer() over a track would quietly
-  // reintroduce the heap cost a 500 MB reel used to pay.
+  // Keep sample bytes as Blob slices so large tracks are not copied into memory.
   assert.match(remuxer, /blobs\[chunk\.track\]\.slice\(chunk\.srcStart, chunk\.srcEnd\)/);
-  // Banning arrayBuffer() outright would be a lie: the reader has to pull the
-  // metadata boxes in to find where the samples are. What must never be read is
-  // a SAMPLE range — so pin every call site instead of forbidding the call. The
-  // old form sliced the file at `export async function remux(`, which sits near
-  // the bottom, so it covered none of the three reads below.
+  // Allow arrayBuffer only for the metadata ranges needed to locate samples.
   const HEADER_READS = [
     'at, Math.min(at + 16, blob.size)', // the 16-byte box head
     'moof.start, moof.end',

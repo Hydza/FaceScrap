@@ -243,15 +243,9 @@ async function getPlayingMediaPin(tabId: number): Promise<PlayingMediaPin | null
   return sanitizePlayingMediaPin(await readKey<unknown>(playingPinKey(tabId), null));
 }
 
-/** `owners` must be historicalAliasOwners(items) and `active` must be
- *  activeMediaIds(ref.ids), BOTH built once from the same batch `item` is drawn
- *  from (see partitionMediaForRetention's one-per-batch builds) — shared with
- *  now-playing.ts's selection matcher (domMatchFresh) so a row whose stored id
- *  predates the current canonical scheme is protected from eviction exactly
- *  when the panel is already displaying it as playing. The REF side of that
- *  parity is the activeMediaIds() expansion: a ref left over from the older
- *  scheme has to be expanded here too, or the panel selects a row this refuses
- *  to protect. */
+/** Build `owners` and `active` once from the same batch as `item`. Sharing this
+ *  expanded matching contract with panel selection protects every displayed row
+ *  from retention eviction. */
 function isExactPlayingItem(
   item: MediaItem,
   ref: PlayingRef | null,
@@ -545,9 +539,8 @@ async function reclaimGlobalMediaQuota(
     }
   }
 
-  // No safe candidate existed, or even removing all ordinary candidates was
-  // insufficient. All attempted writes were atomic failures, so rejecting here
-  // preserves every previously stored row and never touches Saved history.
+  // Reject when safe reclamation cannot satisfy the atomic write.
+  // This preserves all stored rows and Saved history.
   throw quotaErrorForGlobalReclaim();
 }
 
@@ -682,17 +675,9 @@ export function setPlaying(tabId: number, ref: PlayingRef, receivedAt?: number):
           completed = true;
           return;
         }
-        // `at` marks when THIS SLIDE began, not when the last observation of it arrived.
-        // playingEvidence measures every streamed track against it to tell "this slide's
-        // stream" from the previous slide's residue, and that only works if it holds still
-        // while one slide plays.
-        //
-        // The detector re-emits several times a second, and on a story viewer it alternates
-        // between adopting the video (no ids — an MSE src is a blob:) and adopting the cover
-        // behind it (one id, no video). Re-stamping on each of those moved the anchor faster
-        // than any track could ever be measured against it, so nothing anchored, the panel
-        // showed "Nothing playing" over a running video and the in-page button stayed hidden.
-        // Carry the stored timestamp forward whenever the slide identity is unchanged.
+        // `at` marks the slide boundary, not its latest observation. Preserve it while
+        // video and cover observations resolve to the same slide identity so track
+        // evidence remains anchored to that boundary.
         const identity = playingSlideIdentity(ref);
         const stamped =
           current != null && identity !== '' && identity === playingSlideIdentity(current)
@@ -872,9 +857,8 @@ function parseBindRecord(raw: unknown): BindRecord {
       return { version: BIND_VERSION, generation: record.generation, revision: record.revision, state };
     }
   }
-  // Legacy BindState, or a versioned record whose state was corrupt: generation and
-  // revision zero let the first durable update migrate it instead of making a reopened
-  // panel lose every learned mapping.
+  // Normalize an unversioned or invalid record at generation and revision zero so
+  // the next durable update can preserve valid learned mappings.
   const legacy = sanitizeBindState(raw);
   return legacy != null ? { version: BIND_VERSION, generation: 0, revision: 0, state: legacy } : EMPTY_BIND_RECORD;
 }
@@ -1018,4 +1002,3 @@ export async function setCaps(caps: Caps): Promise<void> {
 export async function getCaps(): Promise<Caps | null> {
   return readKey<Caps | null>(CAPS_KEY, null);
 }
-

@@ -150,7 +150,9 @@ export function paintNow(now: NowState | null, controls: NowControls): void {
   const preview = byId('now-preview');
   preview.classList.toggle('is-video', now.kind === 'video');
   // Rebuilt each paint. An expired or blocked fbcdn URL falls back to the gradient wash.
-  preview.querySelectorAll('img').forEach((el) => el.remove());
+  preview.querySelectorAll('img').forEach((el) => {
+    el.remove();
+  });
   if (now.thumbUrl != null) {
     const { bg, img } = buildThumbPair(now.thumbUrl, preview, { onLoad: paintImageResolution });
     preview.prepend(bg, img);
@@ -232,7 +234,9 @@ export function paintNow(now: NowState | null, controls: NowControls): void {
    *  six rows is cheaper to redraw than to diff, and the edge light is a sibling that
    *  survives because only the rows are replaced. */
   function paintRows(): void {
-    list.querySelectorAll('.picker-row').forEach((row) => row.remove());
+    list.querySelectorAll('.picker-row').forEach((row) => {
+      row.remove();
+    });
     for (const option of now!.options) {
       const row = document.createElement('button');
       row.type = 'button';

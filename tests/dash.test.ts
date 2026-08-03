@@ -188,26 +188,20 @@ test('extractPrefetchPairs does not truncate a legitimate large feed', () => {
 });
 
 test('extractUrlsByKey stays bounded when a video key recurs in unclosed objects', () => {
-  // A dense recurrence of an outer video key inside an unterminated nested
-  // structure used to re-scan each object window from every interior key,
-  // freezing the main thread. Bounded recovery must skip each failed window, so
-  // this large hostile body resolves quickly to no URLs — a regression here
-  // hangs the runner instead of failing an assertion.
-  const text = '"playable_url":{'.repeat(150_000); // ~2.4 MB, never closes
+  // Bound recovery work for each malformed object window.
+  const text = '"playable_url":{'.repeat(150_000); // About 2.4 MB of unterminated objects.
   assert.deepEqual(extractUrlsByKey(text), []);
 });
 
 test('extractUrlsByKey recovers a valid object after a malformed sibling', () => {
-  // Skipping the failed window must not swallow a valid direct-object URL that
-  // follows a cheaply-malformed one.
+  // Preserve a valid direct-object URL after a malformed object.
   const recovered = 'https://video.xx.fbcdn.net/v/recovered-after-malformed.mp4';
   const body = `{"playable_url":{"uri":]},"playable_url":{"uri":"${recovered}"}}`;
   assert.deepEqual(extractUrlsByKey(body), [recovered]);
 });
 
 test('fromPrefetchReps rejects a non-finite height instead of sorting it to the top', () => {
-  // ladderPairs sorts video reps highest-height-first (see its comment); a
-  // forged/malformed Infinity must not win that sort against a real 1080p rung.
+  // Invalid infinite dimensions must not outrank a valid 1080p representation.
   const reps = [{
     representations: [
       {

@@ -1,8 +1,7 @@
 // What the panel remembers per tab.
 //
-// Keyed by tab because content-derived ids collide across tabs (the same reel open
-// twice), and kept across tab switches because wiping it on onActivated repainted an
-// in-flight download as idle, inviting a duplicate run.
+// Key by tab because content-derived ids can collide across tabs. Preserve state
+// across tab switches so in-flight downloads remain busy.
 //
 // All `const`: an ES import is a read-only binding, so a `let` could not be
 // reassigned from another module. That is why the panel's own flags (bulkRunning,

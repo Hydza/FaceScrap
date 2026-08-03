@@ -129,30 +129,9 @@ export const MUX_HARD_CAP_MS = 30 * 60_000;
  *  reason as MUX_HARD_CAP_MS. */
 export const SETTLE_CAP_MS = 5 * 60_000;
 
-/** Absolute ceiling on one panel-side wait. DERIVED to sit strictly above one
- *  full worker job's own worst case (MUX_HARD_CAP_MS + SETTLE_CAP_MS) instead
- *  of merely asserting it does — a bare `35 * 60_000` here once equalled that
- *  sum exactly, so the panel could time out at the very instant the worker was
- *  still entitled to keep working on the SAME job. The extra margin covers
- *  IPC/round-trip slack neither constant accounts for. The worker always gets
- *  to report a real result first; this only fires if it died without
- *  answering at all.
- *
- *  Used as a REBASABLE window (withHeartbeat's armStarted, async.ts), not a
- *  single fixed deadline from send time: dashChain (dash-download.ts)
- *  serializes DASH jobs, so a request queued behind another long-running one
- *  can sit for an unbounded time before its OWN mux even starts. Arming this
- *  once at send time — never calling armStarted — budgeted only for ONE
- *  job's worst case while actually covering "queue wait + that job", so a
- *  queued request could exhaust it while the worker was still entitled to
- *  keep working on that SAME request, then finish it and write a Saved
- *  receipt under a card the panel had already tagged Failed. The worker now
- *  broadcasts FACESCRAP_DASH_JOB_STARTED (addressed by dashDownloadKey, so a
- *  panel can never rebase off some OTHER window's job) the moment a request
- *  leaves dashChain; the panel restarts this SAME window from that moment.
- *  Until that signal arrives — including if it never does, e.g. the worker is
- *  reaped and restarted mid-queue — the original send-time deadline keeps
- *  running, so every path still terminates. */
+/** Absolute panel-side ceiling derived from the worker's mux and settlement caps,
+ *  plus IPC margin. The window is rebased when this request leaves dashChain;
+ *  until then, the send-time deadline guarantees termination across worker restarts. */
 export const DASH_UI_HARD_CAP_MS = MUX_HARD_CAP_MS + SETTLE_CAP_MS + 5 * 60_000;
 
 /** service worker → side panel: mux progress, forwarded from the offscreen port.
@@ -161,20 +140,9 @@ export interface MuxProgressMsg extends MuxProgress {
   type: 'FACESCRAP_MUX_PROGRESS';
 }
 
-/** service worker → side panel: this specific queued DASH job has left
- *  dashChain (background/dash-download.ts) and its mux has started. Fire-and-forget,
- *  like MuxProgressMsg above — with no panel open, sendMessage simply has no
- *  receiver.
- *
- *  `key` is dashDownloadKey's own value for the job (download-settlement.ts):
- *  reusing it, rather than minting a new id, means the panel can compute the
- *  SAME value from the request it is about to send and match this signal to
- *  it without any extra round trip. MuxProgressMsg carries no job identity at
- *  all — every panel's heartbeat fires on ANY job's progress, queued or not,
- *  which is fine for an idle timer that only needs to see SOME liveness — but
- *  reusing that for a hard-cap rebase would rebase the WRONG panel's clock off
- *  someone else's job, reproducing the very bug this message exists to fix.
- *  See withHeartbeat (async.ts) and DASH_UI_HARD_CAP_MS above. */
+/** service worker → side panel: this queued DASH job has left dashChain. `key`
+ *  identifies the exact request whose hard-cap window may be rebased; generic mux
+ *  progress has no job identity and drives only idle timers. */
 export interface DashJobStartedMsg {
   type: 'FACESCRAP_DASH_JOB_STARTED';
   key: string;
@@ -264,13 +232,8 @@ export type MuxResponse = ({ ok: true; blobUrl: string } | { ok: false; error: s
   events?: DiagEvent[];
 };
 
-/** offscreen → service worker: a long-lived port carrying mux progress.
- *
- *  A one-shot sendMessage gives the worker exactly one event — the answer — so
- *  its only way to notice a wedged job was a wall-clock deadline, which cannot
- *  tell "wedged" from "large file on a slow link" and killed the latter. A port
- *  turns progress into events the worker can time against, and its disconnect
- *  reports an offscreen document that died outright, which no timer detects. */
+/** offscreen → service worker: long-lived mux progress. Activity distinguishes a
+ *  slow transfer from a stall, and disconnect reports offscreen termination. */
 export const MUX_PORT = 'facescrap-mux';
 
 /** One progress report. `bytes` is cumulative for the whole job. */

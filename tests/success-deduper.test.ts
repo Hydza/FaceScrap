@@ -60,11 +60,7 @@ test('a backwards clock sample invalidates success suppression', async () => {
   assert.equal(calls, 2);
 });
 
-// DedupSnapshot mirrors the in-memory `completed` map above into a plain,
-// serializable object (see success-deduper.ts) so a caller can persist it
-// (e.g. chrome.storage.session) and recognize success across a worker
-// restart, which the Maps above cannot survive. Wall-clock-keyed by design —
-// these tests use plain millisecond numbers standing in for Date.now().
+// Persist completed keys as a wall-clock-based serializable snapshot.
 
 test('isRecentlyCompleted matches a key within its window and rejects an elapsed or backwards-clock sample', () => {
   const snapshot = { 'pair-a': 1_000 };
@@ -77,8 +73,7 @@ test('isRecentlyCompleted matches a key within its window and rejects an elapsed
 test('withCompletion prunes expired entries, keeps live ones, and never mutates its input', () => {
   const snapshot = { 'pair-a': 1_000, 'pair-b': 1_700 };
   const next = withCompletion(snapshot, 'pair-c', 1_800, 500);
-  // pair-a (800ms old) is past the 500ms window and is dropped; pair-b (100ms
-  // old) is still live and kept; pair-c is the fresh completion.
+  // Drop expired pair-a, retain live pair-b, and add fresh pair-c.
   assert.deepEqual(next, { 'pair-b': 1_700, 'pair-c': 1_800 });
   assert.deepEqual(snapshot, { 'pair-a': 1_000, 'pair-b': 1_700 }, 'withCompletion must not mutate its input');
 });

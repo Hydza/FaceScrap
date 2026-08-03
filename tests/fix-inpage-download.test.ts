@@ -1,6 +1,4 @@
-// The in-page download button. The behavioural tests drive the overlay against
-// a minimal DOM/window pair; the contract tests pin the trust boundary, which is
-// the part of this feature that must not regress quietly.
+// Drive the in-page overlay against a minimal DOM/window pair and pin its trust boundary.
 
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
@@ -30,8 +28,7 @@ const worker = [
 ]
   .map((file) => readFileSync(file, 'utf8'))
   .join('\n');
-// The whole module IS the in-page handler now, so these assertions read it directly
-// instead of slicing a range out of the router.
+// Read the dedicated in-page handler directly for static assertions.
 const playingHandler = readFileSync(join(ROOT, 'src', 'background', 'playing-download.ts'), 'utf8');
 const overlaySource = readFileSync(join(ROOT, 'src', 'content', 'download-overlay.ts'), 'utf8');
 
@@ -40,9 +37,7 @@ const overlaySource = readFileSync(join(ROOT, 'src', 'content', 'download-overla
 // The two in-page messages carry none and must therefore REQUIRE a tab. Getting
 // either polarity backwards is the whole risk of this feature.
 
-// Driven through the real handler rather than grepped out of the router: since the
-// two URL-carrying messages moved into download-handler.ts they can be invoked
-// directly, which proves the refusal instead of proving the source still spells it.
+// Exercise the real handler so this test validates runtime rejection semantics.
 test('refuses URL-carrying download messages from a content script', () => {
   const handler = createDownloadHandler({ isDead: () => false });
   const fromPage = { tab: { id: 7, url: 'https://www.facebook.com/' } } as chrome.runtime.MessageSender;
@@ -180,12 +175,8 @@ test('the overlay never sends a media URL — only a message type and a label', 
 
   // ...carrying nothing but `type` and `label`.
   //
-  // This replaces a blunt ban on the word "fbcdn" appearing in the file. That ban
-  // was the wrong proxy: the anchor picker now READS the page's own
-  // background-image to find photo stories painted as a <div>, so it legitimately
-  // recognises an fbcdn URL that the page already had. The invariant is not "never
-  // sees a URL" — it is "never TELLS the worker one", because that is what would
-  // let a compromised page aim the downloader.
+  // The overlay may read page-owned fbcdn URLs to identify photo-story backgrounds,
+  // but it must never send a media URL to the worker.
   const payloads = [...overlaySource.matchAll(/sendMessage\(\{([\s\S]*?)\}\)/g)].map((m) => m[1]!);
   assert.ok(payloads.length >= 2, `expected both send sites, found ${payloads.length}`);
   for (const payload of payloads) {
@@ -228,9 +219,7 @@ test('optionForLabel matches the requested resolution, and falls back rather tha
 });
 
 // ── What the button is allowed to offer ─────────────────────────────────────
-// The first version asked selectPlaying() — the DETECTOR, which endorses, learns
-// durable bindings and writes the playing pin. A polling handler on that state is
-// a second writer, and it broke detection and the downloads that follow from it.
+// Read playing state without invoking detector write paths.
 
 test('resolves what is playing without running the detector', () => {
   assert.doesNotMatch(worker, /selectPlaying/, 'the worker must not run the detector at all');
@@ -268,7 +257,7 @@ test('offers video representations only — never the audio track of the same vi
   );
   for (const item of group) assert.equal(item.kind, 'video');
 
-  // The helper being right is not enough — the wiring is what was wrong.
+  // Verify that the live handler uses the grouped media result.
   assert.match(playingHandler, /videoGroupOf\(video, items\)/);
 });
 
@@ -475,9 +464,7 @@ test('anchors a photo story Facebook painted as a background-image div', () => {
   assert.equal((pickAnchorElement(withVideo, styled) as Element).tagName, 'VIDEO');
 });
 
-// The first placement put the button in the media's top-right corner — which is
-// exactly where Facebook's story controls live, so it covered the mute, play and
-// more buttons. It now joins that row instead of landing on it.
+// Place the trigger beside the existing control row without covering its controls.
 
 /** A media element with a chain of ancestors, so the control search can walk up
  *  out of the media box the way it does in a real story viewer. */
@@ -529,11 +516,9 @@ test('anchors to the left of the leftmost control in Facebook own row', () => {
   );
 });
 
-// The bug: on a photo story the image is letterboxed inside the card, so the
-// control row sits ABOVE the image and a search bounded by the media rect found
-// nothing. The button then fell back to the image's corner and drifted with it.
+// Search the whole card so controls above a letterboxed photo remain eligible.
 test('finds the row above a letterboxed photo, and refuses the page own top bar', () => {
-  // The card, and the photo inside it — the geometry of the reported case.
+  // Geometry for a letterboxed photo inside its card.
   const card = { left: 12, top: 30, right: 500, bottom: 860, width: 488, height: 830 };
   const photo = { left: 12, top: 265, right: 500, bottom: 635, width: 488, height: 370 };
   const row = [
@@ -705,9 +690,8 @@ test('offers the resolutions on click and downloads the one picked', async () =>
 });
 
 test('joins the row only where it cannot scroll away from the media', async () => {
-  // A feed post: its only row is the post header, ABOVE the image. That row leaves
-  // the viewport while the image is still centred, so a button anchored to it hopped
-  // to the corner mid-scroll. The corner is the placement there from the start.
+  // A feed header can leave the viewport while its media remains visible, so use
+  // corner placement from the start.
   const image = { left: 300, top: 300, right: 700, bottom: 600, width: 400, height: 300 };
   const postCard = { left: 300, top: 240, right: 700, bottom: 760, width: 400, height: 520 };
   const header = [{ left: 640, top: 250, right: 672, bottom: 282, width: 32, height: 32 }];
@@ -769,9 +753,7 @@ test('closes an open menu when the slide moves on, but not while the same one pl
 test('renders the resolutions as options, on a backdrop you can see the frame through', () => {
   const menu = overlaySource.match(/\.menu \{([^}]*)\}/)?.[1];
   assert.ok(menu, 'missing the .menu block');
-  // A palette of chips, not a column tall enough to cover the reel — and a GRID,
-  // because wrapped flex sized each chip to its own text and left the columns
-  // ragged with "2560p" beside "720p".
+  // Use an even two-column grid so labels align without covering the reel.
   assert.match(menu, /grid-template-columns:\s*repeat\(2, 1fr\)/);
   assert.doesNotMatch(menu, /flex-wrap|flex-direction/);
   // An odd count must not leave a half-empty last row.
@@ -813,8 +795,7 @@ test('the copied colour is the real control colour, and transparency is refused'
 
   assert.equal(await paint('rgba(0, 0, 0, 0.65)'), 'rgba(0, 0, 0, 0.65)', 'their circle, not one of ours');
   // A control Facebook paints nothing on must leave the CSS fallback in charge.
-  // Copying "rgba(0, 0, 0, 0)" would put an invisible circle beside their solid
-  // ones, which is the bug this whole mechanism exists to avoid.
+  // Ignore transparent control colors.
   assert.equal(await paint('rgba(0, 0, 0, 0)'), undefined);
   assert.equal(await paint('transparent'), undefined);
 });
@@ -836,10 +817,8 @@ test('re-asks what is playing only once the new slide has reached the worker', (
 
 test('the overlay hides itself when nothing downloadable is playing, and on a dead context', async () => {
   const calls: unknown[] = [];
-  // Nothing on screen can anchor the button, so the answer is already known here.
-  // Waiting for a round trip to act on it is what left the button up for a beat
-  // after a viewer closed: the message costs a service-worker wake-up, and the
-  // worker still holds the slide that just left.
+  // Hide immediately when no on-screen anchor exists; the worker may still hold
+  // the slide that just left.
   const overlay = createDownloadOverlay({
     sendMessage: async (message) => {
       calls.push(message);
@@ -935,10 +914,7 @@ test('a late answer never overrides the refresh that started after it', async ()
 });
 
 test('still reports the card when the control row has auto-hidden', () => {
-  // Facebook hides the reel controls after a few seconds of stillness. With no row
-  // to find, this used to answer nothing at all — and place() then hit-tested the
-  // bare <video>, which every viewer covers with its own scrim, so the button
-  // disappeared along with the controls instead of falling back to the corner.
+  // Fall back to the card when viewer controls auto-hide.
   const card = { left: 12, top: 30, right: 500, bottom: 860, width: 488, height: 830 };
   const media = { left: 12, top: 265, right: 500, bottom: 635, width: 488, height: 370 };
   const found = pickControlAnchor(fakeDoc({ control: [] }), win, anchoredMedia(media, [card, media]));
@@ -947,9 +923,7 @@ test('still reports the card when the control row has auto-hidden', () => {
 });
 
 test('holds the identified group while the slide stays put', () => {
-  // The streamed-track evidence goes stale 12s after the last track, and a short
-  // reel stops streaming once buffered — which is why the button appeared and then
-  // vanished a few seconds later while the video was still looping.
+  // Keep the selected group while streaming evidence ages out during buffered playback.
   const T = 1_000_000;
   assert.equal(rememberedVideoGroup(1, 'video:99', 'g1', T), 'g1');
   assert.equal(rememberedVideoGroup(1, 'video:99', undefined, T + 60_000), 'g1', 'same slide keeps its answer');
@@ -967,9 +941,7 @@ test('holds the identified group while the slide stays put', () => {
 });
 
 test('holds its place when Facebook auto-hides the control row', async () => {
-  // The reel viewer hides mute/play/⋯ after a few seconds of stillness. The row then
-  // measures as absent, and a button that recomputed its position from scratch went
-  // to the media's corner and back on the next mouse move.
+  // Preserve the trigger slot while auto-hidden viewer controls are absent.
   const media = { left: 300, top: 100, right: 700, bottom: 700, width: 400, height: 600 };
   const { doc, win, host, controls } = fakeDom(media, [
     { left: 570, top: 120, right: 602, bottom: 152, width: 32, height: 32 },
@@ -993,10 +965,7 @@ test('holds its place when Facebook auto-hides the control row', async () => {
 });
 
 test('gives up the pixel rather than drawing over Facebook chrome', async () => {
-  // The wrap is position:fixed at z-index 2147483000 and tracks the control row.
-  // Scroll the feed and that row slides under Facebook's sticky top bar — the row
-  // goes under it, a z-index that high does not, so the button was left painted
-  // ON the navbar. It has to yield the point instead.
+  // Yield the point when sticky page chrome covers the fixed control row.
   const { doc, win, card, host } = fakeDom(
     { left: 300, top: 100, right: 700, bottom: 700, width: 400, height: 600 },
     [{ left: 570, top: 120, right: 602, bottom: 152, width: 32, height: 32 }],

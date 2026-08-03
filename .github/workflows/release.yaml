@@ -1,0 +1,42 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    if: github.repository_owner == 'Hydza'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - name: Verify tag version
+        shell: bash
+        run: |
+          version="$(node -p "JSON.parse(require('fs').readFileSync('package.json', 'utf8')).version")"
+          test "$GITHUB_REF_NAME" = "v$version"
+      - run: npm run package
+      - name: Publish release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          archive="FaceScrap-v${GITHUB_REF_NAME#v}.zip"
+          sha256sum "$archive" > SHA256SUMS.txt
+          gh release create "$GITHUB_REF_NAME" "$archive" SHA256SUMS.txt \
+            --title "FaceScrap $GITHUB_REF_NAME" \
+            --generate-notes \
+            --verify-tag

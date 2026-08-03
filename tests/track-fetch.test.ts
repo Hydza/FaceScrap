@@ -5,7 +5,7 @@ import { fetchDashTracks, fetchTrack } from '../src/shared/track-fetch';
 
 const URL_OK = 'https://video.xx.fbcdn.net/v/track.mp4';
 
-/** A body that yields `chunks`, then optionally drops the connection. */
+/** Yield chunks and optionally drop the connection. */
 function body(chunks: string[], failAfter?: number): ReadableStream<Uint8Array> {
   const enc = new TextEncoder();
   let i = 0;
@@ -24,7 +24,7 @@ function body(chunks: string[], failAfter?: number): ReadableStream<Uint8Array> 
   });
 }
 
-/** Records the Range header of every attempt so tests can assert on resumption. */
+/** Record the Range header for each attempt. */
 function fakeFetch(responses: (() => Response)[]): { fetch: typeof globalThis.fetch; ranges: (string | null)[] } {
   const ranges: (string | null)[] = [];
   let call = 0;
@@ -54,12 +54,12 @@ test('returns the whole body when the read succeeds first time', async () => {
   const blob = await fetchTrack(URL_OK, () => {}, { fetch });
 
   assert.equal(await textOf(blob), 'abcdef');
-  assert.deepEqual(ranges, [null]); // no Range header on a fresh read
+  assert.deepEqual(ranges, [null]); // A fresh read has no Range header.
 });
 
 test('resumes from the bytes already held after a mid-body drop', async () => {
   const { fetch, ranges } = fakeFetch([
-    () => new Response(body(['abc', 'def'], 2)), // 6 bytes, then drops
+    () => new Response(body(['abc', 'def'], 2)), // Drop after six bytes.
     () => new Response(body(['ghi']), { status: 206 }),
   ]);
 
@@ -70,18 +70,15 @@ test('resumes from the bytes already held after a mid-body drop', async () => {
 });
 
 test('does not stitch a 206 that starts somewhere other than where it resumed', async () => {
-  // A 206 says "here is A range", not "here is the range you asked for". Appending a
-  // body that starts at the wrong offset makes the file LONGER than the source, and
-  // the remuxer's bounds check only catches files that are too SHORT — so this used
-  // to ship as a successful download of a broken track.
+  // Restart when a partial response begins at the wrong offset.
   const { fetch, ranges } = fakeFetch([
-    () => new Response(body(['abc', 'def'], 2)), // 6 bytes, then drops
+    () => new Response(body(['abc', 'def'], 2)), // Drop after six bytes.
     () =>
       new Response(body(['XYZ']), {
         status: 206,
-        headers: { 'Content-Range': 'bytes 99-101/200' }, // not byte 6
+        headers: { 'Content-Range': 'bytes 99-101/200' }, // Starts at the wrong byte.
       }),
-    () => new Response(body(['abcdefghi'])), // clean restart from zero
+    () => new Response(body(['abcdefghi'])), // Restart from zero.
   ]);
 
   const blob = await fetchTrack(URL_OK, () => {}, { fetch, retryDelayMs: 0 });
@@ -91,10 +88,9 @@ test('does not stitch a 206 that starts somewhere other than where it resumed', 
 });
 
 test('takes a 206 that carries the whole file as the whole file', async () => {
-  // Content-Range starting at 0 means the head we hold is already in this body;
-  // keeping both would duplicate it.
+  // Replace buffered bytes when a partial response restarts at zero.
   const { fetch } = fakeFetch([
-    () => new Response(body(['abc'], 1)), // 3 bytes, then drops
+    () => new Response(body(['abc'], 1)), // Drop after three bytes.
     () =>
       new Response(body(['abcdef']), {
         status: 206,
@@ -106,9 +102,7 @@ test('takes a 206 that carries the whole file as the whole file', async () => {
 });
 
 test('keeps every byte in order across the seal boundary', async () => {
-  // Chunks are sealed into Blobs every 16 MB so they can leave the JS heap instead
-  // of all staying resident until the end. Sealing must not reorder or lose bytes,
-  // and the tail after the last seal must still make it out.
+  // Blob sealing must preserve chunk order and the final unsealed tail.
   const oneMb = 'x'.repeat(1024 * 1024);
   const chunks = [...Array.from({ length: 17 }, () => oneMb), 'TAIL'];
   const { fetch } = fakeFetch([() => new Response(body(chunks))]);
@@ -123,9 +117,8 @@ test('keeps every byte in order across the seal boundary', async () => {
 
 test('restarts from scratch when the server ignores the Range request', async () => {
   const { fetch } = fakeFetch([
-    () => new Response(body(['abc'], 1)), // 3 bytes, then drops
-    // 200, not 206: this body is the WHOLE file, so keeping the first 3 bytes
-    // would duplicate them and corrupt the track.
+    () => new Response(body(['abc'], 1)), // Drop after three bytes.
+    // A full response replaces the three buffered bytes.
     () => new Response(body(['abcdef']), { status: 200 }),
   ]);
 
@@ -142,8 +135,7 @@ test('gives up after the attempt limit and surfaces the failure', async () => {
 });
 
 test('does not retry a hard HTTP failure', async () => {
-  // An expired fbcdn URL answers 403 every time; retrying only delays the error
-  // the user needs to see (reload the page to get fresh URLs).
+  // Do not retry a terminal 403 response.
   const { fetch, ranges } = fakeFetch([() => new Response('gone', { status: 403 })]);
 
   await assert.rejects(fetchTrack(URL_OK, () => {}, { fetch, retryDelayMs: 0 }), /403/);
@@ -159,15 +151,13 @@ test('reports progress as bytes arrive, and rewinds when a restart discards them
 
   await fetchTrack(URL_OK, (total) => seen.push(total), { fetch, retryDelayMs: 0 });
 
-  // Cumulative totals, and the restart must report the drop rather than letting
-  // the worker's progress run past the real byte count.
+  // A restart must reset cumulative progress to the real byte count.
   assert.deepEqual(seen, [3, 0, 6]);
 });
 
 test('rejects an advertised response that exceeds the track ceiling before reading it', async () => {
   const seen: number[] = [];
-  // The Response constructor itself may prime a stream, so progress (rather
-  // than pull()) is the reliable proof that fetchTrack accepted no body bytes.
+  // Use progress to confirm that no body bytes were accepted.
   const stream = new ReadableStream<Uint8Array>({ pull() {} });
   const { fetch } = fakeFetch([() => new Response(stream, { headers: { 'Content-Length': '6' } })]);
 
@@ -216,9 +206,7 @@ test('aborts the sibling request when one advertised track is oversized', async 
 });
 
 test('propagates a caller-supplied abort signal into the in-flight fetches', async () => {
-  // childOpts replaces opts.signal with the internal controller's own signal,
-  // so without linking the two, aborting the caller's signal did nothing and
-  // the fetch ran to completion (or hung) regardless.
+  // Propagate the caller's abort signal to the internal request controller.
   const fetch = ((_url: string, init?: RequestInit) => {
     return new Promise<Response>((_resolve, reject) => {
       init?.signal?.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')), { once: true });
@@ -227,9 +215,7 @@ test('propagates a caller-supplied abort signal into the in-flight fetches', asy
 
   const external = new AbortController();
   const cancelReason = new Error('caller cancelled');
-  // attempts: 1 and a short stallMs bound the failure mode where propagation
-  // is broken: the internal idle-stall timer still ends the hang quickly
-  // instead of the test running for the default 60s STALL_MS.
+  // Bound the test with one attempt and a short stall timeout.
   const promise = fetchDashTracks(URL_OK, URL_OK, () => {}, () => {}, {
     fetch,
     signal: external.signal,
@@ -245,8 +231,6 @@ test('propagates a caller-supplied abort signal into the in-flight fetches', asy
   } catch (e) {
     caught = e;
   }
-  // Identity, not just "it rejected": a stall-timeout rejection would also
-  // make the promise reject, but with a different error, so this is the only
-  // outcome that proves the caller's own signal actually reached the fetch.
+  // Error identity proves that the caller's signal reached the fetch.
   assert.equal(caught, cancelReason);
 });

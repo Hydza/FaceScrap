@@ -124,8 +124,7 @@ function savedBadge(card: Card): HTMLElement {
 export function renderCard(card: Card, controls: CardControls): HTMLElement {
   const el = document.createElement('article');
   el.className = 'tile';
-  // Not the accent outline alone: "this is what the tab is playing" was carried by colour
-  // only, which no screen reader reads.
+  // Expose the live state independently of its visual outline.
   if (card.live) {
     el.classList.add('is-live');
     el.setAttribute('aria-current', 'true');
@@ -166,14 +165,8 @@ export function renderCard(card: Card, controls: CardControls): HTMLElement {
   // whose capture is gone (a replay revives it); anything else is unreachable media.
   const why = t(card.stale ? 'titleSavedGone' : 'titleBlobUnavailable');
 
-  // The whole tile is a selection target, not just the 22px dot — at three columns that
-  // circle is a fraction of what there is to aim at. Selecting is ALL a tile does now:
-  // the design gave the grid one verb and moved downloading to the tray that selecting
-  // raises, so there is no second control here to exclude but Saved's reveal button.
-  //
-  // Selectable means DOWNLOADABLE, in both grids. A stale receipt has no target, so
-  // letting it into the cart would put an id in the tray that the bulk run then skips —
-  // a count that promises more than it can save.
+  // The whole tile selects; the tray owns downloading. Only downloadable cards are
+  // selectable, so the tray count always matches the bulk run.
   if (card.target != null) {
     el.addEventListener('click', (e) => {
       if ((e.target as HTMLElement).closest('.tile-reveal, .pick') != null) return;

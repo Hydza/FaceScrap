@@ -1,28 +1,59 @@
 name: Bug report
-description: Something in FaceScrap doesn't work
+description: Report reproducible behavior that does not work as expected
+title: "[Bug]: "
 labels: [bug]
 body:
   - type: markdown
     attributes:
       value: |
-        FaceScrap depends on Facebook internals that change often, and it runs on
-        many Chromium browsers. The details below let a fix start without a
-        back-and-forth. Check the [Releases](https://github.com/Hydza/FaceScrap/releases)
-        page first — the issue may already be fixed in a newer build.
-  - type: textarea
-    id: what
+        Thank you for helping improve FaceScrap. Search existing issues and test the latest available release before submitting.
+  - type: checkboxes
+    id: checks
     attributes:
-      label: What happened
-      description: What you did, what you expected, and what happened instead.
-      placeholder: I played a reel on a story tray and nothing appeared in the panel…
+      label: Before submitting
+      options:
+        - label: I searched open and closed issues for the same problem.
+          required: true
+        - label: I tested the latest available FaceScrap version.
+          required: true
+        - label: I have permission to use the affected account and content.
+          required: true
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: Describe the problem and when it occurs.
+      placeholder: The side panel remains empty after I play a reel.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Reproduction steps
+      description: Provide the shortest reliable sequence.
+      placeholder: |
+        1. Open…
+        2. Select…
+        3. Observe…
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected result
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual result
     validations:
       required: true
   - type: input
     id: browser
     attributes:
       label: Browser and version
-      description: e.g. Chrome 139, Edge 138, Brave 1.72, Opera, Vivaldi. Find it at the browser's About page.
-      placeholder: Chrome 139
+      placeholder: Chrome 139 / Edge 138 / Brave 1.72
     validations:
       required: true
   - type: input
@@ -36,22 +67,50 @@ body:
     id: version
     attributes:
       label: FaceScrap version
-      description: The commit or release tag you built/downloaded (shown in the extension's Settings).
-      placeholder: v1.0
+      description: Enter the release tag or commit.
+      placeholder: v1.0.1
     validations:
       required: true
   - type: dropdown
     id: surface
     attributes:
-      label: Where it happened
+      label: Affected area
       options:
-        - Story / highlight
-        - Reel
-        - Watch / video page
-        - Library or Saved view
-        - Download (progressive)
-        - Download (HD / merged)
+        - Now Playing
+        - Library or Saved
+        - Reel, story, or highlight
+        - Video page
+        - Direct download
+        - Merged video and audio
         - Settings
+        - Installation or build
         - Other
     validations:
       required: true
+  - type: dropdown
+    id: frequency
+    attributes:
+      label: Frequency
+      options:
+        - Every time
+        - Often
+        - Sometimes
+        - Once
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Evidence and diagnostics
+      description: Attach screenshots or a diagnostics export after reviewing it. Do not include private data, cookies, headers, or signed resource values.
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional context
+  - type: checkboxes
+    id: privacy
+    attributes:
+      label: Attachment review
+      options:
+        - label: I reviewed every attachment and removed private information.
+          required: true

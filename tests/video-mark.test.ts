@@ -27,9 +27,7 @@ test('preserves and bounds progressive source markers', () => {
 
 test('advances the mark between reels even when the load key is reused', () => {
   const mark = createVideoMarkFactory('epoch-a');
-  // Facebook can hand two different reels the SAME MediaSourceHandle (or, mid
-  // transition, a pooled <video> with srcObject still null) — the WeakMap then
-  // mints one id for both slides and the panel stays pinned to the first.
+  // Do not let a shared MediaSource marker collapse two reel IDs.
   const reusedKey = {};
   const first = combineVideoMark(mark(reusedKey, ''), '111111111');
   const second = combineVideoMark(mark(reusedKey, ''), '222222222');
@@ -38,21 +36,17 @@ test('advances the mark between reels even when the load key is reused', () => {
 });
 
 test('leaves the mark untouched where no reel id exists', () => {
-  // Stories have no data-video-id; folding in `undefined` must not perturb the
-  // marker their whole binding scheme is keyed on.
+  // Omitted video IDs must not alter Story markers.
   assert.equal(combineVideoMark('vm:epoch-a:1', undefined), 'vm:epoch-a:1');
 });
 
 test('keeps the reel id clear of the story/video mark separator', () => {
-  // detectPlaying joins the story and video marks with '#', and storage bounds
-  // an overlong mark by its LAST '#'. An inner '#' would move that cut point.
+  // Remove inner separators before joining Story and video markers.
   assert.equal(combineVideoMark('vm:epoch-a:1', '123456789').includes('#'), false);
 });
 
 test('strips an inner "#" from a progressive source mark before capping it', () => {
-  // Same invariant as above, from the other input that can carry one: a raw
-  // `src` URL. A literal '#' surviving here would let a fragment in the src
-  // masquerade as the story/video separator and move storage's bounding cut.
+  // Remove URL fragments that could mimic the Story/video separator.
   const mark = createVideoMarkFactory('epoch-a');
 
   assert.equal(mark({}, 'https://video.xx.fbcdn.net/clip.mp4#t=10').includes('#'), false);

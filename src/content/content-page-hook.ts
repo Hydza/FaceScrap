@@ -31,9 +31,8 @@ export function setupPageHookIngress(runtime: ContentRuntime, deps: PageHookDeps
       const data = e.data;
       if (!data || data.__vpData !== true) return;
       if (data.diag !== undefined || data.log !== undefined) {
-        // Charged like every other branch. Unbudgeted this was the one way in that a
-        // co-resident script could write to a store that now keeps its contents for
-        // good, so a forger could hold the ring full of its own events forever.
+        // Charge diagnostics against their own budget so co-resident scripts cannot
+        // fill the persistent event ring with forged reports.
         if (diagBudget.tryTake(1, 1, performance.now())) deps.reportDiag(data.diag, data.log);
         return;
       }

@@ -1,14 +1,4 @@
-// The "button on the video" switch, driven through the handler that actually answers it.
-//
-// The gate lives in the worker, not in the content script, for the same reason every other
-// "what can this tab download" question does: the overlay decides nothing, it asks. So the
-// switch is only real if the OPTIONS reply changes — and this drives the real handler against
-// real stored state rather than reading the source for an `if`.
-//
-// The second half matters as much as the first. FACESCRAP_REQUEST_PLAYING_DOWNLOAD is shared
-// with the global keyboard shortcut, which is configured separately in
-// chrome://extensions/shortcuts. Gating that path too would have made a UI switch silently
-// disable a shortcut the user set up somewhere else entirely.
+// Verify that the worker gates the in-page button without disabling the keyboard shortcut.
 
 import assert from 'node:assert/strict';
 import test from 'node:test';
@@ -26,8 +16,7 @@ type Handler = (
   sendResponse: (response: unknown) => void,
 ) => true | undefined;
 
-/** The handler with its three injected dependencies stubbed to the harmless answers: the tab is
- *  alive, it is a Facebook tab, and a receipt write is a no-op. */
+/** Create a handler for a live Facebook tab with inert receipt writes. */
 async function handlerUnderTest(): Promise<Handler> {
   const { createPlayingDownloadHandler } = await import('../src/background/playing-download');
   return createPlayingDownloadHandler({
@@ -37,14 +26,14 @@ async function handlerUnderTest(): Promise<Handler> {
   });
 }
 
-/** The reply shape the overlay reads: labels only, never a URL. */
+/** Return the label-only reply consumed by the overlay. */
 interface Reply {
   ok?: boolean;
   error?: string;
   media?: { kind: string; labels: string[] };
 }
 
-/** Ask the handler one question and wait for its asynchronous reply. */
+/** Send one request and await the handler reply. */
 function ask(handler: Handler, type: string): Promise<Reply> {
   return new Promise((resolve) => {
     handler(
@@ -55,7 +44,7 @@ function ask(handler: Handler, type: string): Promise<Reply> {
   });
 }
 
-/** A tab that is watching one downloadable reel. */
+/** Seed one downloadable reel for a tab. */
 async function seedPlayingReel(): Promise<void> {
   const { addMedia, setPlaying } = await import('../src/shared/storage');
   const now = Date.now();
@@ -75,7 +64,7 @@ test('the button is offered by default, and the switch takes it away', async () 
     const handler = await handlerUnderTest();
     await seedPlayingReel();
 
-    // Default on: the reel resolves to something the button can offer.
+    // The enabled default exposes the reel to the button.
     await setInPageButton(true);
     const offered = await ask(handler, 'FACESCRAP_PLAYING_DOWNLOAD_OPTIONS');
     assert.equal(offered.ok, true);
@@ -83,8 +72,7 @@ test('the button is offered by default, and the switch takes it away', async () 
     assert.equal(offered.media.kind, 'video');
     assert.ok(Array.isArray(offered.media.labels) && offered.media.labels.length > 0);
 
-    // Switched off: the same stored state, and the answer is "nothing". That is the reply the
-    // overlay already handles by hiding, and it hides BEFORE build(), so nothing is injected.
+    // The disabled setting hides the same stored reel from the overlay.
     await setInPageButton(false);
     const withheld = await ask(handler, 'FACESCRAP_PLAYING_DOWNLOAD_OPTIONS');
     assert.deepEqual(withheld, { ok: true, media: undefined });
@@ -100,9 +88,7 @@ test('turning the button off leaves the global shortcut working', async () => {
     await seedPlayingReel();
     await setInPageButton(false);
 
-    // The download request is the shortcut's path too, and it must still resolve the reel.
-    // A refusal here would mean a switch in the panel had quietly disabled a shortcut set up
-    // in chrome://extensions/shortcuts, with nothing on screen to explain why.
+    // The keyboard shortcut must still resolve the reel.
     const answer = await ask(handler, 'FACESCRAP_REQUEST_PLAYING_DOWNLOAD');
     assert.notEqual(
       answer?.error,
@@ -124,6 +110,6 @@ test('a corrupt stored value leaves the button on rather than silently gone', as
       `${JSON.stringify(bad)} must not read as "off"`,
     );
   }
-  // Only a real false turns it off.
+  // Only the boolean value `false` disables the feature.
   assert.equal(normalizeSettings({ inPageButton: false }).inPageButton, false);
 });

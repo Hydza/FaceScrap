@@ -1,24 +1,4 @@
-// PROTOCOL lane, stage 1 — C5 residual: the side panel's DASH_UI_HARD_CAP_MS
-// wait used to arm at chrome.runtime.sendMessage time, before a request even
-// reached dashChain (dash-download.ts serializes every DASH job on that one
-// chain). A request queued behind another long-running job could exhaust that
-// whole budget while still queued, then have the worker finish it and write a
-// Saved receipt under a card the panel had already tagged Failed.
-//
-// The fix: dash-download.ts's downloadDash() now broadcasts
-// FACESCRAP_DASH_JOB_STARTED — addressed by dashDownloadKey — the instant a
-// request LEAVES dashChain, so the panel can rebase its hard cap off the job
-// actually starting. The panel's half of this used to be pinned by source-text
-// assertions; those were dropped as refactor-detectors, so what follows is the
-// whole automated guard — the panel side shows up in a real tab as a merge that
-// times out early.
-//
-// This test proves the WORKER-side half: a second, differently-keyed request
-// queued behind a first must not see its own start signal until the first's
-// entire run (mux + download + settlement) has actually finished — not merely
-// once it is received or queued. If downloadDash regressed to broadcasting at
-// receive time (the same bug shape as before, just moved earlier), this test
-// would see job B's signal long before job A's mux ever resolves.
+// A queued DASH job must emit its start signal only after the preceding job settles.
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { mock } from 'node:test';
@@ -26,14 +6,7 @@ import { mock } from 'node:test';
 import { dashDownloadKey, type DashDownloadIdentity } from '../src/shared/download-settlement';
 import { resetChromeStorage } from './chrome-fake';
 
-// dash-download.ts's runDownloadDash() starts a 20s keepalive setInterval and
-// a 60s offscreen-idle-close setTimeout on EVERY job, success or failure (by
-// design — see OFFSCREEN_IDLE_MS's comment there). Mocking timers here is not
-// about the fix under test; it is what lets this test exercise a REAL job
-// end-to-end without the process (or this file's `node --test` run) blocking
-// on those multi-second real-world backstops. Only setInterval/setTimeout are
-// mocked — Promise-based flushing below never depends on either, so nothing
-// needs the mock clock ever advanced or ticked.
+// Mock long-lived timers so real jobs do not keep the test process open.
 mock.timers.enable({ apis: ['setInterval', 'setTimeout'] });
 
 type Sender = chrome.runtime.MessageSender;
@@ -43,16 +16,7 @@ type OnMessageListener = (message: unknown, sender: Sender, sendResponse: SendRe
 let onMessage: OnMessageListener | undefined;
 let nextDownloadId = 1;
 
-// Every FACESCRAP_MUX request (worker -> offscreen, in real life) is held
-// pending here until the test explicitly resolves it via the stored resolver
-// — keyed by videoUrl, since each job below uses a distinct one. This is what
-// lets the test PROVE ordering: while job A's resolver is never called, its
-// mux (and everything chained after it) cannot settle, so dashChain cannot
-// advance to job B — if it did anyway, that would itself be a bug.
-//
-// Every FACESCRAP_DASH_JOB_STARTED broadcast is logged instead, in send
-// order, so the test can assert exactly when each job's signal went out
-// relative to the other job's mux resolving.
+// Hold each mux request until explicitly released, and record start broadcasts in send order.
 const pendingMux = new Map<string, () => void>();
 const jobStartedLog: string[] = [];
 
@@ -83,7 +47,7 @@ function installChromeFake(): void {
   };
   // Resolves every download 'complete' immediately, same as config.test.ts's
   // fake: settlement must not depend on the REGISTRATION_RACE_DELAY_MS retry
-  // timer (download-settlement.ts), which is now a mocked/fake timer here.
+  // timer (download-settlement.ts), which is mocked here.
   c.downloads = {
     download: async () => nextDownloadId++,
     onChanged: { addListener() {}, removeListener() {} },
@@ -125,10 +89,7 @@ function installChromeFake(): void {
 
 await resetChromeStorage();
 installChromeFake();
-// No exports to bind — importing it only for the chrome.runtime.onMessage
-// listener it registers as a side effect, captured by the fake installed
-// just above (same pattern as tests/config.test.ts and
-// tests/fix-background-identity.test.ts).
+// Import the module for the runtime listener captured by the fake above.
 await import('../src/background/service-worker');
 
 function sendDash(identity: DashDownloadIdentity): Promise<unknown> {

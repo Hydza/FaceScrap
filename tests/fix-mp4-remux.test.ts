@@ -1,18 +1,5 @@
-// The MP4 remuxer that replaced ffmpeg.wasm.
-//
-// The fixtures are REAL media, not hand-written boxes: a 160x120 AVC track and an
-// AAC track, both recorded by Chromium's own MediaRecorder, which is the closest
-// thing available to what Facebook's packager serves — separate single-track MP4s
-// with real sample tables and a real avcC/esds in stsd. Hand-built fixtures would
-// only prove the writer agrees with the reader.
-//
-// The audio is deliberately LONGER than the video, so every run exercises the
-// shortest-track trim that `-c copy -shortest` used to do.
-//
-// Neither fixture carries an edit list, and both happen to use the same movie
-// timescale the writer emits — so the edit-list tests at the end of this file graft
-// one on. That combination is why a verbatim copy of that box read as correct here
-// for as long as it did.
+// Exercise the remuxer with real Chromium-recorded AVC and AAC tracks.
+// The fixtures cover shortest-track trimming; dedicated cases add missing edit-list metadata.
 
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
@@ -110,10 +97,8 @@ test('trims to the shorter track, the way -shortest did', async () => {
 
   const tracks = await parseTracks(new Blob([await result.blob.arrayBuffer()]));
   for (const track of tracks) {
-    // Neither track may run meaningfully past the shorter one — that is a file
-    // ending on frozen video or on silence, which is what the flag existed to
-    // prevent. One sample of overshoot is allowed because it is also what ffmpeg
-    // did: the last packet admitted starts before the limit and ends after it.
+    // Neither track may run meaningfully past the shorter one. Allow one sample
+    // of overshoot because trimming admits packets that start before the limit.
     const oneSample = Math.max(...track.samples.map((s) => s.duration)) / track.timescale;
     assert.ok(
       seconds(track) <= shorter + oneSample + 1e-6,
@@ -150,11 +135,9 @@ test('puts the header before the media so playback can start without the whole f
   assert.ok(ftyp < moov && moov < mdat, `expected ftyp < moov < mdat, got ${ftyp}/${moov}/${mdat}`);
 });
 
-// The parser reads bytes off the network, and the table sizes come from inside
-// those bytes. Both of these were real gaps found reviewing it after the fact.
+// Treat parsed table sizes and sample offsets as untrusted input.
 test('refuses a truncated track instead of writing a file with samples past its end', async () => {
-  // Blob.slice clamps a range that runs past the end rather than throwing, so
-  // without a bounds check this produced a corrupt file reported as a success.
+  // Blob.slice clamps out-of-range requests, so explicit bounds validation is required.
   const half = new Blob([videoBytes.subarray(0, Math.floor(videoBytes.length / 2))]);
   await assert.rejects(() => parseTrack(half), /truncated|no moov|no samples/i);
   await assert.rejects(() => remux(half, audioBlob), /truncated|no moov|no samples/i);
@@ -248,9 +231,8 @@ function audioWithEditList(segmentDuration: number, movieTimescale: number, medi
 }
 
 test('rescales the edit list into the movie timescale it writes, not the one it read', async () => {
-  // 0.1s of priming, in a source movie timescale of 48000. Copied through verbatim, the
-  // same 4800 units read against this writer's own timescale of 1000 became 4.8 SECONDS
-  // of empty presentation: audio playing over a blank screen until the video appeared.
+  // Convert 0.1 seconds of priming from the source timescale of 48000 to the
+  // output timescale of 1000.
   const patched = audioWithEditList(4800, 48000);
   const source = await parseTrack(patched);
   assert.ok(source.edits, 'the grafted list must be readable at all');
@@ -296,10 +278,8 @@ test('leaves a file with no edit list without one', async () => {
 });
 
 // ── The progressive shape ────────────────────────────────────────────────────
-// Both fixtures above are FRAGMENTED — Chromium's MediaRecorder emits moof/trun and
-// leaves the stbl empty. Facebook serves either shape, so every test up to here has
-// been exercising half the reader. These build the other half: one stbl carrying the
-// real stts/stsc/stsz/stco tables, wrapped around the real avc1 stsd of the fixture.
+// Chromium's MediaRecorder fixtures are fragmented and leave stbl empty. Build the
+// progressive shape with real stts/stsc/stsz/stco tables and the fixture's avc1 stsd.
 //
 // Building it here rather than checking in a third fixture is deliberate: the sample
 // COUNT is the variable under test, and no checked-in file can be both small enough to
@@ -316,9 +296,7 @@ const boxOf = (type: string, ...parts: Buffer[]): Buffer => {
 };
 const fullBoxOf = (type: string, version: number, flags: number, ...parts: Buffer[]): Buffer =>
   boxOf(type, Buffer.from([version, (flags >> 16) & 0xff, (flags >> 8) & 0xff, flags & 0xff]), ...parts);
-/** Packed uint32 table. Spreading one argument per entry is what the writer under
- *  test used to do, and this builder hit the very same RangeError writing the file
- *  that was meant to expose it. */
+/** Pack uint32 values without spreading large arrays into function arguments. */
 const u32Table = (values: number[]): Buffer => {
   const out = Buffer.alloc(values.length * 4);
   for (let i = 0; i < values.length; i++) out.writeUInt32BE(values[i]! >>> 0, i * 4);
@@ -480,9 +458,7 @@ test('reads a PROGRESSIVE MP4 — one stbl, no fragments — as faithfully as a 
 });
 
 test('a progressive stsz declaring four billion samples is bounded by the box, not expanded', async () => {
-  // The same corruption tests/fix-mp4-remux.test.ts tried on the fragmented fixtures,
-  // where an empty stbl meant it never reached readSampleTable and the assertion could
-  // not fail. Here the stbl is the only source of samples, so it does.
+  // Use a populated progressive stbl so readSampleTable validates the declared count.
   const { stsd } = await parseTrack(videoBlob);
   const { blob } = progressiveVideo({
     stsd,
@@ -506,15 +482,12 @@ test('a progressive stsz declaring four billion samples is bounded by the box, n
 });
 
 test('writes a sample table far past the argument limit of a variadic call', async () => {
-  // stsz, stss and stco carry one entry per sample. Spreading an argument per entry
-  // into box()/fullBox() threw `RangeError: Maximum call stack size exceeded` at about
-  // 62 400 entries — while the reader accepts MAX_SAMPLES_PER_TRACK = 1 500 000. Any
-  // video past roughly 25 minutes hit it, and the user saw only "Could not merge audio
-  // and video."
+  // stsz, stss, and stco carry one entry per sample and must be constructed without
+  // spreading those entries into variadic calls.
   const { stsd } = await parseTrack(videoBlob);
   const audio = await parseTrack(audioBlob);
   const audioSeconds = seconds(audio);
-  const sampleCount = 90_000; // comfortably past the old ceiling
+  const sampleCount = 90_000; // Exceeds typical variadic argument limits.
   // Fit the whole track inside the audio so the shortest-track trim keeps every
   // sample: it is the sample COUNT reaching the writer that this test is about.
   const timescale = Math.ceil((sampleCount * 2) / (audioSeconds * 0.9));
@@ -557,10 +530,8 @@ test('writes a sample table far past the argument limit of a variadic call', asy
 });
 
 test('writes a version-1 ctts so a negative composition offset survives', async () => {
-  // The reader takes negative offsets from a v1 ctts and from a v1 trun; the writer
-  // always emitted v0, where the field is UNSIGNED. -512 came out as 4 294 966 784 and
-  // the player placed the frame four billion ticks away — a file that downloads
-  // "successfully" and does not present.
+  // Preserve negative composition offsets by emitting version 1 when the field
+  // must be signed.
   const { stsd } = await parseTrack(videoBlob);
   const { blob } = progressiveVideo({
     stsd,
@@ -589,9 +560,8 @@ test('writes a version-1 ctts so a negative composition offset survives', async 
 });
 
 test('writes an empty stss rather than claiming every frame is a seek point', async () => {
-  // "No stss" means "every sample is a sync sample" — the reader says so itself. A
-  // track where NOTHING is a sync sample was falling into the same branch, so the
-  // output told players they could start decoding on any inter frame.
+  // An explicitly empty sync table must remain distinct from an absent table,
+  // which means every sample is a sync sample.
   const { stsd } = await parseTrack(videoBlob);
   const { blob } = progressiveVideo({
     stsd,
