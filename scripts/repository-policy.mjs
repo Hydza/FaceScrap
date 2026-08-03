@@ -153,7 +153,7 @@ function commentBody(value) {
     .replace(/^\s*\/\*+\s?/, '')
     .replace(/\s*\*\/\s*$/, '')
     .replace(/^\s*<!--\s?/, '')
-    .replace(/\s*-->\s*$/, '')
+    .replace(/\s*--!?>\s*$/, '')
     .replace(/^\s*#\s?/gm, '')
     .split(/\r?\n/)
     .map((line) => line.replace(/^\s*\*\s?/, ''))

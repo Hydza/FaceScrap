@@ -73,6 +73,8 @@ test('comment rules accept direct English and reject non-English or obsolete exp
   const policy = await loadPolicy();
 
   assert.deepEqual(policy.analyzeComment('// Keep the request alive until storage settles.'), []);
+  assert.deepEqual(policy.analyzeComment('<!-- Keep the page metadata concise. -->'), []);
+  assert.deepEqual(policy.analyzeComment('<!-- Keep the page metadata concise. --!>'), []);
   assert.deepEqual(policy.analyzeComment('// Match "Resolución mínima" when the input omits accents.'), []);
   assert.ok(policy.analyzeComment('// Este comentario explica porque guarda el archivo.').length > 0);
   assert.ok(policy.analyzeComment('// This used to retry the request.').length > 0);

@@ -57,9 +57,25 @@ class FakeDocument {
 
 const TAG = /<(\/?)([A-Za-z_][\w.:-]*)((?:\s+[\w.:-]+\s*=\s*"[^"]*")*)\s*(\/?)>/g;
 
+function withoutXmlComments(xml: string): string {
+  let body = '';
+  let cursor = 0;
+
+  while (cursor < xml.length) {
+    const start = xml.indexOf('<!--', cursor);
+    if (start < 0) return body + xml.slice(cursor);
+    body += xml.slice(cursor, start);
+    const end = xml.indexOf('-->', start + 4);
+    if (end < 0) return body;
+    cursor = end + 3;
+  }
+
+  return body;
+}
+
 // Model only the well-formed XML used by this suite.
 function parseXml(xml: string): FakeDocument {
-  const body = xml.replace(/<\?[\s\S]*?\?>/g, '').replace(/<!--[\s\S]*?-->/g, '');
+  const body = withoutXmlComments(xml.replace(/<\?[\s\S]*?\?>/g, ''));
   const doc = new FakeDocument();
   const stack: (FakeDocument | FakeElement)[] = [doc];
   let last = 0;

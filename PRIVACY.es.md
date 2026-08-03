@@ -4,7 +4,7 @@
 - **Última actualización:** 2 de agosto de 2026
 - **Responsable:** Hydza
 
-Este aviso describe cómo FaceScrap 1.0.1 maneja información cuando se instala como una extensión
+Este aviso describe cómo FaceScrap 1.0.2 maneja información cuando se instala como una extensión
 desempaquetada del navegador. FaceScrap funciona dentro del navegador y no requiere una cuenta de
 FaceScrap.
 

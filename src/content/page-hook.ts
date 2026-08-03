@@ -1,8 +1,4 @@
-// FaceScrap page hook (MAIN world).
-// Runs in the page's own JS context so it can read the responses of the
-// GraphQL calls Facebook already makes. We NEVER re-issue queries with a
-// hardcoded doc_id (Meta rotates those every 2-4 weeks) — we only passively
-// read what the client fetches, plus embedded JSON in the initial document.
+// Runs in the page context to inspect existing GraphQL responses and embedded JSON.
 
 import {
   fbAssetKeys,
@@ -483,6 +479,25 @@ const MAX_BODY_BYTES = 24 * 1024 * 1024;
 const SCAN_QUEUE_MAX = 8;
 const SCAN_QUEUE_MAX_BYTES = MAX_BODY_BYTES;
 let draining = false;
+
+// Match only an HTTPS authority. Facebook may JSON-escape or percent-encode the
+// scheme separators, so normalize the authority into a URL before checking it.
+const EMBEDDED_HTTPS_AUTHORITY_RE =
+  /https(?::|%3a|\\+u003a)(?:(?:\/|\\+\/|%2f|\\+u002f)){2}([^/\\?#\s"'<>%]{1,512})/gi;
+
+function containsFbcdnUrl(text: string): boolean {
+  EMBEDDED_HTTPS_AUTHORITY_RE.lastIndex = 0;
+  for (
+    let match = EMBEDDED_HTTPS_AUTHORITY_RE.exec(text);
+    match != null;
+    match = EMBEDDED_HTTPS_AUTHORITY_RE.exec(text)
+  ) {
+    const authority = match[1];
+    if (authority && isFbcdn(`https://${authority}/`)) return true;
+  }
+  return false;
+}
+
 function scanText(text: string, source: MediaSource, keep = false, label?: string): void {
   if (!text || text.length < 20) return;
   if (text.length > MAX_BODY_BYTES) {
@@ -491,10 +506,8 @@ function scanText(text: string, source: MediaSource, keep = false, label?: strin
     return;
   }
   // Pre-gate at ENQUEUE: every parser needs isFbcdn on each URL, so a body with no
-  // fbcdn host yields nothing, and media-less GraphQL (typing/presence/notifs) never
-  // takes a queue slot or schedules a drain. Escaped JSON keeps the bare `fbcdn.net`
-  // host intact, so this never hides media behind an unlisted key.
-  if (!text.includes('fbcdn.net')) return;
+  // validated fbcdn URL yields nothing, and media-less GraphQL never takes a queue slot.
+  if (!containsFbcdnUrl(text)) return;
   scanQueue.push({ text, source, keep, label });
   // Prefer dropping disposable traffic, but a burst made only of document
   // (`keep`) jobs is still bounded. No job, including the newly queued one, is
@@ -732,7 +745,7 @@ if (!alreadyHooked) {
         const node = scripts[i];
         if (!scannedScripts.has(node)) {
           const c = node.textContent;
-          if (c && c.length > 40 && c.includes('fbcdn.net')) {
+          if (c && c.length > 40 && containsFbcdnUrl(c)) {
             if (!budget.add(c, '\n')) {
               diagBump('documentScanCapped');
               break; // cap hit: leave `node` unmarked so a fresh-budget pass can retry it

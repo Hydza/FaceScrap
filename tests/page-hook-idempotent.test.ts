@@ -28,6 +28,8 @@ interface FakePage {
   posted: unknown[];
   /** Run every timer armed by the hook. */
   runScheduled(): void;
+  /** Number of timers waiting to run. */
+  pendingTimers(): number;
   attributes: Map<string, string>;
   fetchCalls: unknown[][];
   openCalls: unknown[][];
@@ -35,7 +37,7 @@ interface FakePage {
   native: { fetch: AnyFn; open: AnyFn; pushState: AnyFn };
 }
 
-function createFakePage(): FakePage {
+function createFakePage(scriptTexts: readonly string[] = []): FakePage {
   const listeners: Array<{ type: string; fn: Handler }> = [];
   const posted: unknown[] = [];
   const attributes = new Map<string, string>();
@@ -76,8 +78,8 @@ function createFakePage(): FakePage {
           attributes.set(name, value);
         },
       },
-      // The fixture contains no script with a media host.
-      querySelectorAll: (): unknown[] => [],
+      querySelectorAll: (selector: string): unknown[] =>
+        selector === 'script' ? scriptTexts.map((textContent) => ({ textContent })) : [],
     },
     xhr: { prototype: { open: nativeOpen } },
     history: { pushState: nativePushState, replaceState: () => undefined },
@@ -89,6 +91,7 @@ function createFakePage(): FakePage {
       const due = scheduled.splice(0, scheduled.length);
       for (const fn of due) fn();
     },
+    pendingTimers: (): number => scheduled.length,
     attributes,
     fetchCalls,
     openCalls,
@@ -199,4 +202,46 @@ test('the wrapper that stayed still reaches the page\'s own fetch and XHR', asyn
   page.xhr.prototype.open.call(request, 'GET', 'https://www.facebook.com/api/graphql');
   assert.deepEqual(xhrListeners, ['load'], 'one load listener per XHR, however often Facebook reopens it');
   assert.equal(page.openCalls.length, 2, "and both open() calls still reach the page's own implementation");
+});
+
+test('GraphQL scanning accepts only exact or subdomain fbcdn hosts', () => {
+  const pendingAfterXhr = (url: string): number => {
+    const page = createFakePage();
+    evaluateHook(page);
+    let onLoad: AnyFn | undefined;
+    const request = {
+      responseText: JSON.stringify({ playable_url: url }),
+      addEventListener(type: string, listener: AnyFn): void {
+        if (type === 'load') onLoad = listener;
+      },
+    };
+    page.xhr.prototype.open.call(request, 'GET', 'https://www.facebook.com/api/graphql');
+    onLoad?.call(request, { type: 'load' });
+    return page.pendingTimers();
+  };
+
+  assert.equal(pendingAfterXhr('https://fbcdn.net/v/clip.mp4'), 2);
+  assert.equal(pendingAfterXhr('https://video.xx.fbcdn.net/v/clip.mp4'), 2);
+  for (const url of [
+    'https://notfbcdn.net/v/clip.mp4',
+    'https://video.xx.fbcdn.net.evil.test/v/clip.mp4',
+    'https://fbcdn.net:443@evil.test/v/clip.mp4',
+    'https://evil.test/path/fbcdn.net/clip.mp4',
+    'http://video.xx.fbcdn.net/v/clip.mp4',
+  ]) {
+    assert.equal(pendingAfterXhr(url), 1, `${url} must not schedule a media scan`);
+  }
+});
+
+test('document scanning validates JSON-escaped fbcdn hosts', () => {
+  const valid = String.raw`{"playable_url":"https:\/\/video.xx.fbcdn.net\/v\/clip.mp4"}`;
+  const deceptive = String.raw`{"playable_url":"https:\/\/video.xx.fbcdn.net.evil.test\/v\/clip.mp4"}`;
+
+  const accepted = createFakePage([valid]);
+  evaluateHook(accepted);
+  assert.equal(accepted.pendingTimers(), 2, 'a valid escaped fbcdn URL must schedule a media scan');
+
+  const rejected = createFakePage([deceptive]);
+  evaluateHook(rejected);
+  assert.equal(rejected.pendingTimers(), 1, 'a deceptive escaped hostname must not schedule a media scan');
 });

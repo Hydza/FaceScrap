@@ -4,6 +4,17 @@ All notable changes to FaceScrap are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [1.0.2] - 2026-08-02
+
+### Security
+
+- Validate captured media hosts with parsed URL hostnames instead of substring
+  checks.
+- Pass visual QA values to the browser runtime as structured arguments instead
+  of constructing executable source.
+- Harden HTML comment normalization and the XML test fixture parser against
+  incomplete delimiter handling.
+
 ## [1.0.1] - 2026-08-02
 
 ### Added

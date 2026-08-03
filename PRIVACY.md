@@ -4,7 +4,7 @@
 - **Last updated:** August 2, 2026
 - **Maintainer:** Hydza
 
-This notice describes how FaceScrap 1.0.1 handles information when installed as an unpacked
+This notice describes how FaceScrap 1.0.2 handles information when installed as an unpacked
 browser extension. FaceScrap runs in the browser and does not require a FaceScrap account.
 
 ## Information handled by the extension

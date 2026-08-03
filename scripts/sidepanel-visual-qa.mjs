@@ -681,6 +681,46 @@ async function evaluate(client, expression) {
   return result.result?.value;
 }
 
+async function callFunction(client, functionDeclaration, values = []) {
+  const receiver = await client.command('Runtime.evaluate', {
+    expression: 'globalThis',
+    returnByValue: false,
+  });
+  if (receiver.exceptionDetails) {
+    const description = receiver.exceptionDetails.exception?.description ?? receiver.exceptionDetails.text;
+    throw new Error(`Could not resolve the page global object: ${description}`);
+  }
+
+  const objectId = receiver.result?.objectId;
+  if (!objectId) throw new Error('Could not resolve the page global object');
+
+  let result;
+  try {
+    result = await client.command('Runtime.callFunctionOn', {
+      objectId,
+      functionDeclaration,
+      arguments: values.map((value) => ({ value })),
+      awaitPromise: true,
+      returnByValue: true,
+      userGesture: true,
+    });
+  } catch (error) {
+    throw new Error(`${errorText(error)} while calling a page function`);
+  } finally {
+    try {
+      await client.command('Runtime.releaseObject', { objectId });
+    } catch {
+      // The target may close before the remote object can be released.
+    }
+  }
+
+  if (result.exceptionDetails) {
+    const description = result.exceptionDetails.exception?.description ?? result.exceptionDetails.text;
+    throw new Error(`Runtime.callFunctionOn failed: ${description}`);
+  }
+  return result.result?.value;
+}
+
 async function evaluateInExecutionContext(client, contextId, expression) {
   let result;
   try {
@@ -4261,9 +4301,10 @@ async function exerciseThemeTransitions(page, facebookPage, fixture, theme, tabI
   const autoLightSignal = await waitForFacebookThemeSignal(page, tabId, 'light');
   const autoLightAgain = await waitForTheme(page, 'light', 'automatic light Facebook theme after mutation');
 
-  await evaluate(
+  await callFunction(
     page,
-    `(async () => chrome.storage.session.remove(${JSON.stringify(`facebook_theme_${tabId}`)}))()`,
+    'async function (key) { await chrome.storage.session.remove(key); }',
+    [`facebook_theme_${tabId}`],
   );
   const autoFallback = await waitForEvaluation(
     page,
