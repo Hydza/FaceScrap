@@ -1,0 +1,317 @@
+# Instincts generated from https://github.com/Hydza/FaceScrap
+# Generated: 2026-08-03T01:38:27.767Z
+# Version: 2.0
+# NOTE: This file supplements (does not replace) any existing curated instincts.
+# High-confidence manually curated instincts should be preserved alongside these.
+
+---
+id: FaceScrap-commit-length
+trigger: "when writing a commit message"
+confidence: 0.6
+domain: git
+source: repo-analysis
+source_repo: https://github.com/Hydza/FaceScrap
+---
+
+# FaceScrap Commit Length
+
+## Action
+
+Keep commit messages concise (~43 characters)
+
+## Evidence
+
+- Average commit message length: 43 chars
+- Based on 1 commits
+
+---
+id: FaceScrap-naming-files
+trigger: "when creating a new file"
+confidence: 0.8
+domain: code-style
+source: repo-analysis
+source_repo: https://github.com/Hydza/FaceScrap
+---
+
+# FaceScrap Naming Files
+
+## Action
+
+Use kebab-case naming convention
+
+## Evidence
+
+- Analyzed file naming patterns in repository
+- Dominant pattern: kebab-case
+
+---
+id: FaceScrap-export-style
+trigger: "when exporting from a module"
+confidence: 0.7
+domain: code-style
+source: repo-analysis
+source_repo: https://github.com/Hydza/FaceScrap
+---
+
+# FaceScrap Export Style
+
+## Action
+
+Prefer named exports
+
+## Evidence
+
+- Export pattern analysis
+- Dominant style: named
+
+---
+id: FaceScrap-test-separate
+trigger: "when writing tests"
+confidence: 0.8
+domain: testing
+source: repo-analysis
+source_repo: https://github.com/Hydza/FaceScrap
+---
+
+# FaceScrap Test Separate
+
+## Action
+
+Place tests in the tests/ or __tests__/ directory, mirroring src structure
+
+## Evidence
+
+- Separate test directory pattern detected
+- Tests live in dedicated test folders
+
+---
+id: FaceScrap-test-naming
+trigger: "when creating a test file"
+confidence: 0.85
+domain: testing
+source: repo-analysis
+source_repo: https://github.com/Hydza/FaceScrap
+---
+
+# FaceScrap Test Naming
+
+## Action
+
+Name test files using the pattern: *.test.ts
+
+## Evidence
+
+- File pattern: *.test.ts
+- Consistent across test files
+
+---
+id: facescrap-instinct-file-naming
+trigger: "When creating a new file in the repository"
+confidence: 0.9
+domain: code-style
+source: repo-analysis
+source_repo: Hydza/FaceScrap
+---
+
+# Facescrap Instinct File Naming
+
+## Action
+
+Name the file using kebab-case (e.g., my-file.ts)
+
+## Evidence
+
+- Pattern in namingConventions.files: kebab-case
+
+---
+id: facescrap-instinct-function-naming
+trigger: "When defining a new function"
+confidence: 0.9
+domain: code-style
+source: repo-analysis
+source_repo: Hydza/FaceScrap
+---
+
+# Facescrap Instinct Function Naming
+
+## Action
+
+Name the function using camelCase
+
+## Evidence
+
+- Pattern in namingConventions.functions: camelCase
+
+---
+id: facescrap-instinct-class-naming
+trigger: "When defining a new class"
+confidence: 0.9
+domain: code-style
+source: repo-analysis
+source_repo: Hydza/FaceScrap
+---
+
+# Facescrap Instinct Class Naming
+
+## Action
+
+Name the class using PascalCase
+
+## Evidence
+
+- Pattern in namingConventions.classes: PascalCase
+
+---
+id: facescrap-instinct-constant-naming
+trigger: "When declaring a constant"
+confidence: 0.9
+domain: code-style
+source: repo-analysis
+source_repo: Hydza/FaceScrap
+---
+
+# Facescrap Instinct Constant Naming
+
+## Action
+
+Name the constant using SCREAMING_SNAKE_CASE
+
+## Evidence
+
+- Pattern in namingConventions.constants: SCREAMING_SNAKE_CASE
+
+---
+id: facescrap-instinct-import-style
+trigger: "When importing modules"
+confidence: 0.7
+domain: code-style
+source: repo-analysis
+source_repo: Hydza/FaceScrap
+---
+
+# Facescrap Instinct Import Style
+
+## Action
+
+Use either default or named imports as appropriate (mixed style allowed)
+
+## Evidence
+
+- Pattern in importStyle: mixed
+
+---
+id: facescrap-instinct-export-style
+trigger: "When exporting modules or functions"
+confidence: 0.8
+domain: code-style
+source: repo-analysis
+source_repo: Hydza/FaceScrap
+---
+
+# Facescrap Instinct Export Style
+
+## Action
+
+Prefer named exports
+
+## Evidence
+
+- Pattern in exportStyle: named
+
+---
+id: facescrap-instinct-test-file-naming
+trigger: "When creating a new test file"
+confidence: 0.9
+domain: testing
+source: repo-analysis
+source_repo: Hydza/FaceScrap
+---
+
+# Facescrap Instinct Test File Naming
+
+## Action
+
+Name the file with a .test.ts suffix
+
+## Evidence
+
+- Pattern in testing.filePattern: *.test.ts
+
+---
+id: facescrap-instinct-test-type
+trigger: "When writing tests"
+confidence: 0.8
+domain: testing
+source: repo-analysis
+source_repo: Hydza/FaceScrap
+---
+
+# Facescrap Instinct Test Type
+
+## Action
+
+Focus on unit tests
+
+## Evidence
+
+- Pattern in testing.testTypes: unit
+
+---
+id: facescrap-instinct-test-location
+trigger: "When adding or organizing test files"
+confidence: 0.8
+domain: testing
+source: repo-analysis
+source_repo: Hydza/FaceScrap
+---
+
+# Facescrap Instinct Test Location
+
+## Action
+
+Place test files in the separate 'tests' folder
+
+## Evidence
+
+- Pattern in architecture.folderStructure.testLocation: separate
+- Common folder: tests
+
+---
+id: facescrap-instinct-git-commit-prefix
+trigger: "When making a commit related to security"
+confidence: 0.9
+domain: git
+source: repo-analysis
+source_repo: Hydza/FaceScrap
+---
+
+# Facescrap Instinct Git Commit Prefix
+
+## Action
+
+Prefix the commit message with 'security:'
+
+## Evidence
+
+- Seen in commit: security: harden URL and runtime boundaries
+- Pattern in commits.prefixes: security
+
+---
+id: facescrap-instinct-git-commit-length
+trigger: "When writing a commit message"
+confidence: 0.7
+domain: git
+source: repo-analysis
+source_repo: Hydza/FaceScrap
+---
+
+# Facescrap Instinct Git Commit Length
+
+## Action
+
+Keep the commit message concise, around 43 characters on average
+
+## Evidence
+
+- Pattern in commits.averageLength: 43
+
